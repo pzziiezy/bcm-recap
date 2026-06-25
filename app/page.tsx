@@ -14,7 +14,6 @@ import {
   buildStructureLookup,
   parsePlanogramLookup,
   processRows,
-  applyAndDownload,
 } from "@/lib/processor";
 import type { ProcessedRow } from "@/lib/types";
 
@@ -39,7 +38,9 @@ export default function Home() {
   const [spacemanFiles, setSpacemanFiles] = useState<File[]>([]);
 
   const [results, setResults] = useState<ProcessedRow[]>([]);
+  const [isDownloading, setIsDownloading] = useState(false);
   const wbRef = useRef<XLSX.WorkBook | null>(null);
+  const recapBufRef = useRef<ArrayBuffer | null>(null);
 
   const canNext = () => {
     if (step === 1) return recapFiles.length === 1;
@@ -59,6 +60,7 @@ export default function Home() {
       setStatusMsg("อ่านไฟล์ RECAP...");
       setPct(10);
       const recapBuf = await recapFiles[0].arrayBuffer();
+      recapBufRef.current = recapBuf.slice(0); // เก็บ buffer ต้นฉบับไว้ให้ worker
       const wb = XLSX.read(recapBuf, { type: "array" });
       wbRef.current = wb;
       const missing = parseMissingRows(wb);
@@ -93,9 +95,43 @@ export default function Home() {
   };
 
   const handleDownload = () => {
-    if (!wbRef.current) return;
-    applyAndDownload(wbRef.current, results);
-    setStep(5);
+    if (!recapBufRef.current) return;
+    setIsDownloading(true);
+
+    const worker = new Worker(
+      new URL("../lib/download.worker.ts", import.meta.url)
+    );
+
+    worker.onmessage = (e: MessageEvent) => {
+      worker.terminate();
+      const { ok, buffer, error } = e.data;
+      if (!ok) {
+        setIsDownloading(false);
+        alert("เกิดข้อผิดพลาด: " + error);
+        return;
+      }
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "RECAP_filled.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setIsDownloading(false);
+      setStep(5);
+    };
+
+    worker.onerror = (e) => {
+      worker.terminate();
+      setIsDownloading(false);
+      alert("เกิดข้อผิดพลาด: " + e.message);
+    };
+
+    worker.postMessage({ buffer: recapBufRef.current.slice(0), results });
   };
 
   const reset = () => {
@@ -247,9 +283,18 @@ export default function Home() {
                 <ResultsTable rows={results} onChange={setResults} />
 
                 <div className="flex gap-3 pt-4 border-t border-slate-100">
-                  <NavBtn onClick={handleDownload}>
-                    <Download className="w-4 h-4" />
-                    ดาวน์โหลด RECAP_filled.xlsx
+                  <NavBtn onClick={handleDownload} disabled={isDownloading}>
+                    {isDownloading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                        กำลังสร้างไฟล์...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        ดาวน์โหลด RECAP_filled.xlsx
+                      </>
+                    )}
                   </NavBtn>
                 </div>
               </>
