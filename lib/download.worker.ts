@@ -1,66 +1,46 @@
 import * as XLSX from "xlsx";
-import { applyRowsToSheet, type DownloadRow } from "./download";
 
-const workerScope = self as typeof self & {
-  postMessage: (message: unknown, transfer?: Transferable[]) => void;
-};
+interface RowData {
+  rowIndex: number;
+  filled: Record<string, string> | null;
+  override?: Record<string, string>;
+}
 
-type InitMessage = {
-  type: "init";
-  buffer: ArrayBuffer;
-};
-
-type BuildMessage = {
-  type: "build";
-  jobId: number;
-  rows: DownloadRow[];
-};
-
-type WorkerMessage = InitMessage | BuildMessage;
-
-let templateBuffer: ArrayBuffer | null = null;
-
-addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
-  const message = event.data;
-
-  if (message.type === "init") {
-    templateBuffer = message.buffer;
-    workerScope.postMessage({ type: "init", ok: true });
-    return;
-  }
-
-  if (!templateBuffer) {
-    workerScope.postMessage({
-      type: "build",
-      jobId: message.jobId,
-      ok: false,
-      error: "Template workbook is not initialized",
-    });
-    return;
-  }
+addEventListener("message", (e: MessageEvent) => {
+  const { buffer, results } = e.data as {
+    buffer: ArrayBuffer;
+    results: RowData[];
+  };
 
   try {
-    const workbook = XLSX.read(templateBuffer, { type: "array" });
-    const ws = workbook.Sheets["NEW SCM"];
-    if (!ws) throw new Error('Sheet "NEW SCM" not found');
+    const wb = XLSX.read(new Uint8Array(buffer), { type: "array" });
+    const ws = wb.Sheets["NEW SCM"];
 
-    applyRowsToSheet(ws, message.rows);
+    for (const row of results) {
+      const data = row.override
+        ? { ...(row.filled ?? {}), ...row.override }
+        : row.filled;
+      if (!data) continue;
 
-    const output = XLSX.write(workbook, {
-      type: "array",
-      bookType: "xlsx",
-    }) as ArrayBuffer;
+      const write = (c: number, v: string) => {
+        const addr = XLSX.utils.encode_cell({ r: row.rowIndex, c });
+        ws[addr] = { t: "s", v };
+      };
 
-    workerScope.postMessage(
-      { type: "build", jobId: message.jobId, ok: true, buffer: output },
-      [output]
-    );
-  } catch (error) {
-    workerScope.postMessage({
-      type: "build",
-      jobId: message.jobId,
-      ok: false,
-      error: String(error),
-    });
+      write(5, data.division ?? "");
+      write(6, data.dept ?? "");
+      write(7, data.subDept ?? "");
+      write(8, data.cls ?? "");
+      write(9, data.planogram ?? "");
+    }
+
+    // XLSX.write อาจคืนค่าเป็น Array ธรรมดา ไม่ใช่ Uint8Array เสมอไป
+    // ใช้ new Uint8Array() เพื่อให้แน่ใจว่าได้ buffer ที่ถูกต้อง
+    const raw = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+    const uint8 = new Uint8Array(raw as number[]);
+    // ส่งกลับโดย copy (ไม่ใช้ transfer) เพื่อหลีกเลี่ยง DedicatedWorkerGlobalScope error
+    postMessage({ ok: true, buffer: uint8.buffer.slice(0) });
+  } catch (err) {
+    postMessage({ ok: false, error: String(err) });
   }
 });

@@ -1,115 +1,61 @@
 import * as XLSX from "xlsx";
 import type {
-  FilledData,
-  HierarchyNames,
   MissingRow,
-  ProcessedRow,
   SubclassInfo,
+  ProcessedRow,
+  HierarchyNames,
+  FilledData,
 } from "./types";
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
 
 function cellVal(ws: XLSX.WorkSheet, r: number, c: number): string {
   const cell = ws[XLSX.utils.encode_cell({ r, c })];
   if (!cell) return "";
-
-  const value = cell.v;
-  if (value == null) return "";
-
-  const stringValue = String(value);
-  return stringValue.includes(".") && !isNaN(Number(stringValue))
-    ? stringValue.split(".")[0]
-    : stringValue;
+  const v = cell.v;
+  if (v == null) return "";
+  // strip trailing .0 from numbers stored as barcodes
+  const s = String(v);
+  return s.includes(".") && !isNaN(Number(s)) ? s.split(".")[0] : s;
 }
 
-function buildRecapCodes(hierarchy: HierarchyNames): FilledData {
-  const div = hierarchy.divFull.trim().split(" ")[0];
-  const dep = hierarchy.deptFull.trim().split(" ")[0];
-  const sub = hierarchy.subdeptFull.trim().split(" ")[0];
-  const cls = hierarchy.clsFull.trim().split(" ")[0];
+function colLetter(ws: XLSX.WorkSheet): number {
+  const ref = ws["!ref"];
+  if (!ref) return 0;
+  return XLSX.utils.decode_range(ref).e.c;
+}
 
-  const divName = hierarchy.divFull.trim().slice(div.length).trim();
-  const depName = hierarchy.deptFull.trim().slice(dep.length).trim();
-  const subName = hierarchy.subdeptFull.trim().slice(sub.length).trim();
-  const clsName = hierarchy.clsFull.trim().slice(cls.length).trim();
+/** "04 DRY FOOD"  →  "04: DRY FOOD" */
+function formatLevel(full: string): string {
+  if (!full) return "";
+  const parts = full.trim().split(" ");
+  const num = parts[0];
+  const name = parts.slice(1).join(" ");
+  return `${num}: ${name}`;
+}
+
+/** Build hierarchical RECAP-format codes from the 4 level strings */
+function buildRecapCodes(h: HierarchyNames): FilledData {
+  const div = h.divFull.trim().split(" ")[0]; // "04"
+  const dep = h.deptFull.trim().split(" ")[0]; // "20"
+  const sub = h.subdeptFull.trim().split(" ")[0]; // "60"
+  const cls = h.clsFull.trim().split(" ")[0]; // "01"
+
+  const divName = h.divFull.trim().slice(div.length).trim(); // "DRY FOOD"
+  const depName = h.deptFull.trim().slice(dep.length).trim();
+  const subName = h.subdeptFull.trim().slice(sub.length).trim();
+  const clsName = h.clsFull.trim().slice(cls.length).trim();
 
   return {
     division: `${div}: ${divName}`,
     dept: `${div}${dep}: ${depName}`,
     subDept: `${div}${dep}${sub}: ${subName}`,
     cls: `${div}${dep}${sub}${cls}: ${clsName}`,
-    planogram: "",
+    planogram: "", // filled later
   };
 }
 
-function fillBarcodeLookup(
-  ws: XLSX.WorkSheet,
-  sourceFile: string,
-  barcodeMap: Map<string, SubclassInfo>
-): void {
-  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-  let barcodeCol = -1;
-  let subclassCodeCol = -1;
-  let subclassNameCol = -1;
-
-  for (let r = 0; r <= Math.min(range.e.r, 70); r++) {
-    for (let c = 0; c <= Math.min(range.e.c, 250); c++) {
-      const value = cellVal(ws, r, c);
-      if (value.includes("Barcode / PLU")) barcodeCol = c;
-      if (value.includes("Sub-Class") && value.includes("เธฃเธซเธฑเธช")) {
-        subclassCodeCol = c;
-      }
-      if (value === "Sub-Class Name เธเธทเนเธญเนเธเธฃเธเธชเธฃเนเธฒเธเธชเธดเธเธเนเธฒ") {
-        subclassNameCol = c;
-      }
-    }
-
-    if (barcodeCol >= 0 && subclassCodeCol >= 0) break;
-  }
-
-  if (barcodeCol < 0 || subclassCodeCol < 0) return;
-
-  for (let r = 0; r <= range.e.r; r++) {
-    const barcode = cellVal(ws, r, barcodeCol);
-    const subclassCode = cellVal(ws, r, subclassCodeCol);
-
-    if (
-      !barcode ||
-      !subclassCode ||
-      barcode.length < 7 ||
-      subclassCode.length !== 10 ||
-      barcodeMap.has(barcode)
-    ) {
-      continue;
-    }
-
-    barcodeMap.set(barcode, {
-      subclassCode,
-      subclassName:
-        subclassNameCol >= 0 ? cellVal(ws, r, subclassNameCol) : "",
-      sourceFile,
-    });
-  }
-}
-
-function fillStructureLookup(
-  ws: XLSX.WorkSheet,
-  structureMap: Map<string, HierarchyNames>
-): void {
-  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-
-  for (let r = 1; r <= range.e.r; r++) {
-    const code = cellVal(ws, r, 14);
-    if (!code || code.length !== 10 || structureMap.has(code)) continue;
-
-    const divFull = cellVal(ws, r, 9);
-    const deptFull = cellVal(ws, r, 10);
-    const subdeptFull = cellVal(ws, r, 11);
-    const clsFull = cellVal(ws, r, 12);
-
-    if (!divFull || !deptFull || !subdeptFull || !clsFull) continue;
-
-    structureMap.set(code, { divFull, deptFull, subdeptFull, clsFull });
-  }
-}
+// ─── Step 1: Parse RECAP ───────────────────────────────────────────────────
 
 export function parseMissingRows(wb: XLSX.WorkBook): MissingRow[] {
   const ws = wb.Sheets["NEW SCM"];
@@ -119,130 +65,187 @@ export function parseMissingRows(wb: XLSX.WorkBook): MissingRow[] {
   const results: MissingRow[] = [];
 
   for (let r = 4; r <= range.e.r; r++) {
-    const barcode = cellVal(ws, r, 3);
-    const division = cellVal(ws, r, 5);
-
-    if (!barcode || division) continue;
-
-    results.push({
-      rowIndex: r,
-      barcode,
-      name: cellVal(ws, r, 4),
-    });
+    const barcode = cellVal(ws, r, 3); // col D
+    const fVal = cellVal(ws, r, 5); // col F (DIVISION)
+    if (barcode && !fVal) {
+      results.push({
+        rowIndex: r,
+        barcode,
+        name: cellVal(ws, r, 4), // col E
+      });
+    }
   }
-
   return results;
 }
+
+// ─── Step 2: Parse xlsb/xlsx source files ─────────────────────────────────
 
 export async function parseXlsbFiles(
   files: File[]
 ): Promise<Map<string, SubclassInfo>> {
-  return (await buildXlsbLookups(files)).barcodeMap;
-}
-
-export async function buildStructureLookup(
-  files: File[]
-): Promise<Map<string, HierarchyNames>> {
-  return (await buildXlsbLookups(files)).structureMap;
-}
-
-export async function buildXlsbLookups(
-  files: File[]
-): Promise<{
-  barcodeMap: Map<string, SubclassInfo>;
-  structureMap: Map<string, HierarchyNames>;
-}> {
-  const barcodeMap = new Map<string, SubclassInfo>();
-  const structureMap = new Map<string, HierarchyNames>();
+  const map = new Map<string, SubclassInfo>();
 
   for (const file of files) {
-    const buffer = await file.arrayBuffer();
-
-    let workbook: XLSX.WorkBook;
+    const buf = await file.arrayBuffer();
+    let wb: XLSX.WorkBook;
     try {
-      workbook = XLSX.read(buffer, { type: "array" });
+      wb = XLSX.read(buf, { type: "array", bookSheets: true });
+      wb = XLSX.read(buf, { type: "array" });
     } catch {
       continue;
     }
 
+    // Try "Base" sheet first, then "Input"
     for (const sheetName of ["Base", "Input"]) {
-      const ws = workbook.Sheets[sheetName];
-      if (ws) fillBarcodeLookup(ws, file.name, barcodeMap);
-    }
+      const ws = wb.Sheets[sheetName];
+      if (!ws) continue;
 
-    const structureSheet = workbook.Sheets["Sh_ProdStructure"];
-    if (structureSheet) fillStructureLookup(structureSheet, structureMap);
+      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+      let barcodeCol = -1;
+      let subclassCodeCol = -1;
+      let subclassNameCol = -1;
+
+      // Find header row (search first 70 rows)
+      for (let r = 0; r <= Math.min(range.e.r, 70); r++) {
+        for (let c = 0; c <= Math.min(range.e.c, 250); c++) {
+          const v = cellVal(ws, r, c);
+          if (v.includes("Barcode / PLU")) barcodeCol = c;
+          if (v.includes("Sub-Class") && v.includes("รหัส")) subclassCodeCol = c;
+          if (v === "Sub-Class Name ชื่อโครงสร้างสินค้า") subclassNameCol = c;
+        }
+        if (barcodeCol >= 0 && subclassCodeCol >= 0) break;
+      }
+
+      if (barcodeCol < 0 || subclassCodeCol < 0) continue;
+
+      for (let r = 0; r <= range.e.r; r++) {
+        const bc = cellVal(ws, r, barcodeCol);
+        const code = cellVal(ws, r, subclassCodeCol);
+        if (bc && code && bc.length >= 7 && code.length === 10) {
+          if (!map.has(bc)) {
+            map.set(bc, {
+              subclassCode: code,
+              subclassName:
+                subclassNameCol >= 0 ? cellVal(ws, r, subclassNameCol) : "",
+              sourceFile: file.name,
+            });
+          }
+        }
+      }
+    }
   }
 
-  return { barcodeMap, structureMap };
+  return map;
 }
+
+// ─── Step 3: Build ProdStructure lookup (from any xlsb file) ──────────────
+
+export async function buildStructureLookup(
+  files: File[]
+): Promise<Map<string, HierarchyNames>> {
+  const map = new Map<string, HierarchyNames>();
+
+  for (const file of files) {
+    const buf = await file.arrayBuffer();
+    let wb: XLSX.WorkBook;
+    try {
+      wb = XLSX.read(buf, { type: "array" });
+    } catch {
+      continue;
+    }
+
+    const ws = wb.Sheets["Sh_ProdStructure"];
+    if (!ws) continue;
+
+    const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+
+    for (let r = 1; r <= range.e.r; r++) {
+      const code = cellVal(ws, r, 14); // SUB_CLASS_CODE
+      if (!code || code.length !== 10) continue;
+
+      const divFull = cellVal(ws, r, 9);
+      const deptFull = cellVal(ws, r, 10);
+      const subdeptFull = cellVal(ws, r, 11);
+      const clsFull = cellVal(ws, r, 12);
+
+      if (divFull && deptFull && subdeptFull && clsFull && !map.has(code)) {
+        map.set(code, { divFull, deptFull, subdeptFull, clsFull });
+      }
+    }
+  }
+
+  return map;
+}
+
+// ─── Step 4: Parse DATA_SPACEMAN → subdept prefix → planogram ─────────────
 
 export async function parsePlanogramLookup(
   file: File,
   onProgress?: (pct: number) => void
 ): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+  const map = new Map<string, string>(); // key = 6-digit subdept code
 
-  const buffer = await file.arrayBuffer();
+  const buf = await file.arrayBuffer();
   onProgress?.(20);
 
-  let workbook: XLSX.WorkBook;
+  let wb: XLSX.WorkBook;
   try {
-    workbook = XLSX.read(buffer, { type: "array" });
+    wb = XLSX.read(buf, { type: "array" });
   } catch {
     return map;
   }
-
   onProgress?.(60);
 
-  const ws = workbook.Sheets["QRY_Product_by_POG"];
+  const ws = wb.Sheets["QRY_Product_by_POG"];
   if (!ws) return map;
 
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-  let subcategoryCol = -1;
-  let planogramCol = -1;
 
+  // Find SUBCATEGORY and PLANOGRAM columns from header row 0
+  let subcatCol = -1;
+  let plogCol = -1;
   for (let c = 0; c <= range.e.c; c++) {
-    const header = cellVal(ws, 0, c);
-    if (header === "SUBCATEGORY") subcategoryCol = c;
-    if (header === "PLANOGRAM") planogramCol = c;
+    const h = cellVal(ws, 0, c);
+    if (h === "SUBCATEGORY") subcatCol = c;
+    if (h === "PLANOGRAM") plogCol = c;
   }
+  if (subcatCol < 0 || plogCol < 0) return map;
 
-  if (subcategoryCol < 0 || planogramCol < 0) return map;
-
-  const frequencies = new Map<string, Map<string, number>>();
+  const freq = new Map<string, Map<string, number>>();
 
   for (let r = 1; r <= range.e.r; r++) {
-    const subcategory = cellVal(ws, r, subcategoryCol);
-    const planogram = cellVal(ws, r, planogramCol);
-    if (!subcategory || !planogram) continue;
+    const subcat = cellVal(ws, r, subcatCol); // e.g. "0420600103: CRACKERS"
+    const plog = cellVal(ws, r, plogCol); // e.g. "BISCUITS_4B_H180"
+    if (!subcat || !plog) continue;
 
-    const prefix = subcategory.slice(0, 6);
-    const root = planogram.split("_")[0].trim();
+    const prefix = subcat.slice(0, 6); // "042060"
+    // Take only the root name (before first underscore)
+    const root = plog.split("_")[0].trim();
     if (!root) continue;
 
-    if (!frequencies.has(prefix)) frequencies.set(prefix, new Map());
-    const counts = frequencies.get(prefix)!;
-    counts.set(root, (counts.get(root) || 0) + 1);
+    if (!freq.has(prefix)) freq.set(prefix, new Map());
+    const m = freq.get(prefix)!;
+    m.set(root, (m.get(root) || 0) + 1);
   }
 
-  for (const [prefix, counts] of frequencies.entries()) {
-    let bestRoot = "";
+  // Pick most-frequent planogram root per subdept prefix
+  for (const [prefix, counts] of freq.entries()) {
+    let best = "";
     let bestCount = 0;
-
     for (const [root, count] of counts.entries()) {
       if (count > bestCount) {
-        bestRoot = root;
+        best = root;
         bestCount = count;
       }
     }
-
-    map.set(prefix, bestRoot);
+    map.set(prefix, best);
   }
 
   onProgress?.(100);
   return map;
 }
+
+// ─── Step 5: Combine everything ────────────────────────────────────────────
 
 export function processRows(
   missing: MissingRow[],
@@ -258,7 +261,7 @@ export function processRows(
         ...row,
         filled: null,
         confidence: "not_found",
-        note: "ไม่พบบาร์โค้ดในไฟล์ 100 ช่อง กรุณากรอกเอง",
+        note: "ไม่พบบาร์โค้ดในไฟล์ 100 ช่อง — กรุณากรอกเอง",
       };
     }
 
@@ -274,23 +277,27 @@ export function processRows(
     }
 
     const filled = buildRecapCodes(hierarchy);
-    const subdeptPrefix = info.subclassCode.slice(0, 6);
+    const subdeptPrefix = info.subclassCode.slice(0, 6); // e.g. "042060"
     filled.planogram = planogramMap.get(subdeptPrefix) || "";
 
-    const confidence = filled.planogram ? "confirmed" : "inferred";
+    const confidence =
+      filled.planogram
+        ? "confirmed"
+        : "inferred";
 
     return {
       ...row,
       filled,
       confidence,
       subclassCode: info.subclassCode,
-      note:
-        confidence === "confirmed"
-          ? `จาก ${info.sourceFile}`
-          : `จาก ${info.sourceFile} - PLANOGRAM ไม่พบใน DATA_SPACEMAN`,
+      note: confidence === "confirmed"
+        ? `จาก ${info.sourceFile}`
+        : `จาก ${info.sourceFile} — PLANOGRAM ไม่พบใน DATA_SPACEMAN`,
     };
   });
 }
+
+// ─── Step 6: Write back to workbook and download ──────────────────────────
 
 export function applyAndDownload(
   wb: XLSX.WorkBook,
@@ -299,7 +306,9 @@ export function applyAndDownload(
   const ws = wb.Sheets["NEW SCM"];
 
   for (const row of rows) {
-    const data = row.override ? { ...row.filled, ...row.override } : row.filled;
+    const data = row.override
+      ? { ...row.filled, ...row.override }
+      : row.filled;
     if (!data) continue;
 
     const write = (c: number, v: string) => {
