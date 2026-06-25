@@ -1,13 +1,20 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Download, RotateCcw, FileSpreadsheet, Zap, CheckCircle, XCircle } from "lucide-react";
+import {
+  Download,
+  RotateCcw,
+  FileSpreadsheet,
+  Zap,
+  CheckCircle,
+  XCircle,
+} from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
 import ResultsTable from "@/components/ResultsTable";
-
+import { toDownloadRows } from "@/lib/download";
 import {
   parseMissingRows,
   parseXlsbFiles,
@@ -32,6 +39,10 @@ type ModalState =
   | { type: "success" }
   | { type: "error"; message: string };
 
+type WorkerResponse =
+  | { type: "init"; ok: boolean }
+  | { type: "build"; ok: boolean; jobId: number; buffer?: ArrayBuffer; error?: string };
+
 export default function Home() {
   const [step, setStep] = useState(1);
   const [status, setStatus] = useState<Status>("idle");
@@ -45,44 +56,91 @@ export default function Home() {
   const [results, setResults] = useState<ProcessedRow[]>([]);
   const [modal, setModal] = useState<ModalState>({ type: "hidden" });
 
-  const wbRef = useRef<XLSX.WorkBook | null>(null);
   const recapBufRef = useRef<ArrayBuffer | null>(null);
-
-  // Pre-build: worker ทำงานพื้นหลังขณะ user ดูตาราง
   const prebuildRef = useRef<{
     worker: Worker | null;
+    ready: Promise<Worker | null> | null;
     promise: Promise<ArrayBuffer | null>;
-  }>({ worker: null, promise: Promise.resolve(null) });
+    jobId: number;
+    resolveBuild: ((buffer: ArrayBuffer | null) => void) | null;
+  }>({
+    worker: null,
+    ready: null,
+    promise: Promise.resolve(null),
+    jobId: 0,
+    resolveBuild: null,
+  });
 
-  const startPrebuild = (rows: ProcessedRow[]) => {
-    // ยกเลิก worker เก่าถ้ายังทำงานอยู่
+  const disposeWorker = () => {
     prebuildRef.current.worker?.terminate();
     prebuildRef.current.worker = null;
+    prebuildRef.current.ready = null;
+    prebuildRef.current.resolveBuild = null;
+  };
 
+  const ensureWorker = async (): Promise<Worker | null> => {
+    if (prebuildRef.current.ready) return prebuildRef.current.ready;
+    if (!recapBufRef.current) return null;
+
+    const worker = new Worker(
+      new URL("../lib/download.worker.ts", import.meta.url)
+    );
+    prebuildRef.current.worker = worker;
+
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const data = event.data;
+      if (data.type !== "build") return;
+      if (data.jobId !== prebuildRef.current.jobId) return;
+
+      const resolve = prebuildRef.current.resolveBuild;
+      prebuildRef.current.resolveBuild = null;
+      resolve?.(data.ok ? (data.buffer as ArrayBuffer) : null);
+    };
+
+    worker.onerror = () => {
+      const resolve = prebuildRef.current.resolveBuild;
+      disposeWorker();
+      resolve?.(null);
+    };
+
+    const initBuffer = recapBufRef.current.slice(0);
+    prebuildRef.current.ready = new Promise<Worker | null>((resolve) => {
+      const handleInit = (event: MessageEvent<WorkerResponse>) => {
+        if (event.data.type !== "init") return;
+        worker.removeEventListener("message", handleInit as EventListener);
+
+        if (event.data.ok) {
+          resolve(worker);
+          return;
+        }
+
+        disposeWorker();
+        resolve(null);
+      };
+
+      worker.addEventListener("message", handleInit as EventListener);
+      worker.postMessage({ type: "init", buffer: initBuffer }, [initBuffer]);
+    });
+
+    return prebuildRef.current.ready;
+  };
+
+  const startPrebuild = (rows: ProcessedRow[]) => {
     if (!recapBufRef.current) {
       prebuildRef.current.promise = Promise.resolve(null);
       return;
     }
 
-    const buf = recapBufRef.current.slice(0);
-    const plain = JSON.parse(JSON.stringify(rows));
+    const buildRows = toDownloadRows(rows);
+    const jobId = ++prebuildRef.current.jobId;
 
-    prebuildRef.current.promise = new Promise<ArrayBuffer | null>((resolve) => {
-      const w = new Worker(
-        new URL("../lib/download.worker.ts", import.meta.url)
-      );
-      prebuildRef.current.worker = w;
-      w.onmessage = (e: MessageEvent) => {
-        w.terminate();
-        prebuildRef.current.worker = null;
-        resolve(e.data.ok ? (e.data.buffer as ArrayBuffer) : null);
-      };
-      w.onerror = () => {
-        w.terminate();
-        prebuildRef.current.worker = null;
-        resolve(null);
-      };
-      w.postMessage({ buffer: buf, results: plain });
+    prebuildRef.current.promise = ensureWorker().then((worker) => {
+      if (!worker) return null;
+
+      return new Promise<ArrayBuffer | null>((resolve) => {
+        prebuildRef.current.resolveBuild = resolve;
+        worker.postMessage({ type: "build", jobId, rows: buildRows });
+      });
     });
   };
 
@@ -106,10 +164,9 @@ export default function Home() {
       const recapBuf = await recapFiles[0].arrayBuffer();
       recapBufRef.current = recapBuf.slice(0);
       const wb = XLSX.read(recapBuf, { type: "array" });
-      wbRef.current = wb;
       const missing = parseMissingRows(wb);
 
-      setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล — กำลังค้นหาในไฟล์ 100 ช่อง...`);
+      setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล - กำลังค้นหาในไฟล์ 100 ช่อง...`);
       setPct(25);
 
       const [barcodeMap, structureMap] = await Promise.all([
@@ -133,7 +190,6 @@ export default function Home() {
       setStatus("done");
       setStep(4);
 
-      // เริ่ม pre-build ไฟล์ทันทีในพื้นหลัง — ขณะ user ดูตารางผลลัพธ์
       startPrebuild(processed);
     } catch (err) {
       setStatus("error");
@@ -141,7 +197,6 @@ export default function Home() {
     }
   };
 
-  // เมื่อ user แก้ไข cell ใดก็ตาม → rebuild พื้นหลังทันที
   const handleResultsChange = (updated: ProcessedRow[]) => {
     setResults(updated);
     startPrebuild(updated);
@@ -150,7 +205,6 @@ export default function Home() {
   const handleDownload = async () => {
     setModal({ type: "loading" });
     try {
-      // รอ pre-build (อาจเสร็จแล้วหรือกำลังทำอยู่ก็ได้)
       const buffer = await prebuildRef.current.promise;
       if (!buffer) throw new Error("ไม่สามารถสร้างไฟล์ได้ กรุณาลองใหม่");
 
@@ -174,9 +228,9 @@ export default function Home() {
   };
 
   const reset = () => {
-    prebuildRef.current.worker?.terminate();
-    prebuildRef.current.worker = null;
+    disposeWorker();
     prebuildRef.current.promise = Promise.resolve(null);
+    prebuildRef.current.jobId = 0;
     setStep(1);
     setStatus("idle");
     setStatusMsg("");
@@ -186,7 +240,6 @@ export default function Home() {
     setSpacemanFiles([]);
     setResults([]);
     setModal({ type: "hidden" });
-    wbRef.current = null;
     recapBufRef.current = null;
   };
 
@@ -196,7 +249,6 @@ export default function Home() {
 
   return (
     <main className="min-h-screen">
-      {/* Header */}
       <div className="bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] text-white px-6 py-4 shadow-lg">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -234,7 +286,7 @@ export default function Home() {
         <StepIndicator steps={STEPS} current={step} />
 
         {step === 1 && (
-          <Card title="Step 1 — อัปโหลดไฟล์ RECAP">
+          <Card title="Step 1 - อัปโหลดไฟล์ RECAP">
             <DropZone
               label="ไฟล์ RECAP.xlsx"
               accept=".xlsx,.xls"
@@ -249,7 +301,7 @@ export default function Home() {
         )}
 
         {step === 2 && (
-          <Card title="Step 2 — อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
+          <Card title="Step 2 - อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
             <DropZone
               label="ไฟล์ 100 ช่อง (เลือกได้หลายไฟล์)"
               accept=".xlsb,.xlsx,.xls"
@@ -266,13 +318,13 @@ export default function Home() {
         )}
 
         {step === 3 && (
-          <Card title="Step 3 — อัปโหลด DATA_SPACEMAN.xlsx">
+          <Card title="Step 3 - อัปโหลด DATA_SPACEMAN.xlsx">
             <DropZone
               label="DATA_SPACEMAN.xlsx"
               accept=".xlsx,.xls"
               files={spacemanFiles}
               onFiles={setSpacemanFiles}
-              hint="ใช้หา PLANOGRAM — อัปโหลดล่าสุดทุกสัปดาห์"
+              hint="ใช้หา PLANOGRAM - อัปโหลดล่าสุดทุกสัปดาห์"
             />
             <div className="flex gap-3">
               <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
@@ -285,7 +337,7 @@ export default function Home() {
         )}
 
         {step === 4 && (
-          <Card title="Step 4 — ตรวจสอบผลลัพธ์">
+          <Card title="Step 4 - ตรวจสอบผลลัพธ์">
             {status === "processing" && (
               <div className="space-y-4 py-8">
                 <div className="flex items-center justify-center">
@@ -357,8 +409,6 @@ export default function Home() {
   );
 }
 
-// ─── Download Modal ──────────────────────────────────────────────────────────
-
 function DownloadModal({
   state,
   onClose,
@@ -369,12 +419,10 @@ function DownloadModal({
   if (state.type === "hidden") return null;
 
   return (
-    // ไม่มี onClick บน backdrop — บังคับกดปุ่มเท่านั้น
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]" />
         <div className="p-8 text-center space-y-5">
-
           {state.type === "loading" && (
             <>
               <div className="flex justify-center">
@@ -430,14 +478,11 @@ function DownloadModal({
               </button>
             </>
           )}
-
         </div>
       </div>
     </div>
   );
 }
-
-// ─── UI helpers ──────────────────────────────────────────────────────────────
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
