@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import * as XLSX from "xlsx";
-import { Download, Play, RotateCcw, FileSpreadsheet, Zap } from "lucide-react";
+import { Download, RotateCcw, FileSpreadsheet, Zap, CheckCircle, XCircle } from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
@@ -26,6 +26,11 @@ const STEPS = [
 ];
 
 type Status = "idle" | "processing" | "done" | "error";
+type ModalState =
+  | { type: "hidden" }
+  | { type: "loading" }
+  | { type: "success" }
+  | { type: "error"; message: string };
 
 export default function Home() {
   const [step, setStep] = useState(1);
@@ -38,7 +43,7 @@ export default function Home() {
   const [spacemanFiles, setSpacemanFiles] = useState<File[]>([]);
 
   const [results, setResults] = useState<ProcessedRow[]>([]);
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [modal, setModal] = useState<ModalState>({ type: "hidden" });
   const wbRef = useRef<XLSX.WorkBook | null>(null);
   const recapBufRef = useRef<ArrayBuffer | null>(null);
 
@@ -60,7 +65,7 @@ export default function Home() {
       setStatusMsg("อ่านไฟล์ RECAP...");
       setPct(10);
       const recapBuf = await recapFiles[0].arrayBuffer();
-      recapBufRef.current = recapBuf.slice(0); // เก็บ buffer ต้นฉบับไว้ให้ worker
+      recapBufRef.current = recapBuf.slice(0);
       const wb = XLSX.read(recapBuf, { type: "array" });
       wbRef.current = wb;
       const missing = parseMissingRows(wb);
@@ -96,7 +101,7 @@ export default function Home() {
 
   const handleDownload = () => {
     if (!recapBufRef.current) return;
-    setIsDownloading(true);
+    setModal({ type: "loading" });
 
     const worker = new Worker(
       new URL("../lib/download.worker.ts", import.meta.url)
@@ -106,8 +111,7 @@ export default function Home() {
       worker.terminate();
       const { ok, buffer, error } = e.data;
       if (!ok) {
-        setIsDownloading(false);
-        alert("เกิดข้อผิดพลาด: " + error);
+        setModal({ type: "error", message: error ?? "ไม่ทราบสาเหตุ" });
         return;
       }
       const blob = new Blob([buffer], {
@@ -121,17 +125,20 @@ export default function Home() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      setIsDownloading(false);
+      setModal({ type: "success" });
       setStep(5);
     };
 
     worker.onerror = (e) => {
       worker.terminate();
-      setIsDownloading(false);
-      alert("เกิดข้อผิดพลาด: " + e.message);
+      setModal({ type: "error", message: e.message ?? "Worker error" });
     };
 
-    worker.postMessage({ buffer: recapBufRef.current.slice(0), results });
+    // ส่ง results เป็น plain JSON เพื่อให้ structured clone ทำงานได้ถูกต้อง
+    worker.postMessage({
+      buffer: recapBufRef.current.slice(0),
+      results: JSON.parse(JSON.stringify(results)),
+    });
   };
 
   const reset = () => {
@@ -143,6 +150,7 @@ export default function Home() {
     setXlsbFiles([]);
     setSpacemanFiles([]);
     setResults([]);
+    setModal({ type: "hidden" });
     wbRef.current = null;
   };
 
@@ -156,7 +164,6 @@ export default function Home() {
       <div className="bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] text-white px-6 py-4 shadow-lg">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            {/* Mini BigC Logo */}
             <div className="bg-white rounded-xl px-3 py-2 shadow-sm flex items-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -165,7 +172,6 @@ export default function Home() {
                 className="h-9 w-auto object-contain"
               />
             </div>
-            {/* App title */}
             <div className="border-l-2 border-white/40 pl-4">
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-white/90" />
@@ -189,10 +195,8 @@ export default function Home() {
       </div>
 
       <div className="px-6 py-8 space-y-8">
-        {/* Step indicator */}
         <StepIndicator steps={STEPS} current={step} />
 
-        {/* ── Step 1: RECAP ── */}
         {step === 1 && (
           <Card title="Step 1 — อัปโหลดไฟล์ RECAP">
             <DropZone
@@ -208,7 +212,6 @@ export default function Home() {
           </Card>
         )}
 
-        {/* ── Step 2: 100 ช่อง ── */}
         {step === 2 && (
           <Card title="Step 2 — อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
             <DropZone
@@ -226,7 +229,6 @@ export default function Home() {
           </Card>
         )}
 
-        {/* ── Step 3: DATA_SPACEMAN ── */}
         {step === 3 && (
           <Card title="Step 3 — อัปโหลด DATA_SPACEMAN.xlsx">
             <DropZone
@@ -246,7 +248,6 @@ export default function Home() {
           </Card>
         )}
 
-        {/* ── Step 4: Processing / Results ── */}
         {step === 4 && (
           <Card title="Step 4 — ตรวจสอบผลลัพธ์">
             {status === "processing" && (
@@ -273,7 +274,6 @@ export default function Home() {
 
             {status === "done" && (
               <>
-                {/* Mini summary */}
                 <div className="grid grid-cols-3 gap-4 mb-6">
                   <StatCard label="ยืนยันแล้ว" value={confirmed} color="green" />
                   <StatCard label="อนุมาน" value={inferred} color="amber" />
@@ -283,18 +283,9 @@ export default function Home() {
                 <ResultsTable rows={results} onChange={setResults} />
 
                 <div className="flex gap-3 pt-4 border-t border-slate-100">
-                  <NavBtn onClick={handleDownload} disabled={isDownloading}>
-                    {isDownloading ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                        กำลังสร้างไฟล์...
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-4 h-4" />
-                        ดาวน์โหลด RECAP_filled.xlsx
-                      </>
-                    )}
+                  <NavBtn onClick={handleDownload} disabled={modal.type === "loading"}>
+                    <Download className="w-4 h-4" />
+                    ดาวน์โหลด RECAP_filled.xlsx
                   </NavBtn>
                 </div>
               </>
@@ -302,7 +293,6 @@ export default function Home() {
           </Card>
         )}
 
-        {/* ── Step 5: Done ── */}
         {step === 5 && (
           <Card title="เสร็จสิ้น!">
             <div className="text-center py-10 space-y-4">
@@ -311,9 +301,7 @@ export default function Home() {
                 <span className="animate-bounce" style={{ animationDelay: "100ms" }}>✅</span>
                 <span className="animate-bounce" style={{ animationDelay: "200ms" }}>🎊</span>
               </div>
-              <p className="text-xl font-semibold text-slate-700">
-                ดาวน์โหลดไฟล์สำเร็จแล้ว
-              </p>
+              <p className="text-xl font-semibold text-slate-700">ดาวน์โหลดไฟล์สำเร็จแล้ว</p>
               <p className="text-slate-500 text-sm">
                 ไฟล์ <strong>RECAP_filled.xlsx</strong> อยู่ในโฟลเดอร์ Downloads
               </p>
@@ -327,16 +315,103 @@ export default function Home() {
           </Card>
         )}
       </div>
+
+      {/* Download Modal */}
+      <DownloadModal
+        state={modal}
+        onClose={() => setModal({ type: "hidden" })}
+      />
     </main>
   );
 }
 
-// ─── Small UI helpers ───────────────────────────────────────────────────────
+// ─── Download Modal ──────────────────────────────────────────────────────────
+
+function DownloadModal({
+  state,
+  onClose,
+}: {
+  state: ModalState;
+  onClose: () => void;
+}) {
+  if (state.type === "hidden") return null;
+
+  return (
+    // Overlay — ไม่มี onClick ที่ backdrop เพื่อบังคับกดปุ่มปิด
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+        {/* Top accent stripe */}
+        <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]" />
+
+        <div className="p-8 text-center space-y-5">
+          {state.type === "loading" && (
+            <>
+              <div className="flex justify-center">
+                <div className="animate-spin rounded-full h-14 w-14 border-4 border-pink-100 border-t-[#E91E8C]" />
+              </div>
+              <div>
+                <p className="text-lg font-bold text-slate-800">กำลังสร้างไฟล์...</p>
+                <p className="text-sm text-slate-500 mt-1">
+                  โปรดรอสักครู่ อย่าปิดหน้าต่างนี้
+                </p>
+              </div>
+            </>
+          )}
+
+          {state.type === "success" && (
+            <>
+              <div className="flex justify-center">
+                <div className="rounded-full bg-green-100 p-4">
+                  <CheckCircle className="w-12 h-12 text-green-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-lg font-bold text-slate-800">ดาวน์โหลดสำเร็จ!</p>
+                <p className="text-sm text-slate-500 mt-1">
+                  ไฟล์ <strong>RECAP_filled.xlsx</strong> อยู่ในโฟลเดอร์ Downloads
+                </p>
+              </div>
+              <button
+                onClick={onClose}
+                className="w-full py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-[#E91E8C] to-[#d41679] hover:from-[#d41679] hover:to-[#be185d] transition-all shadow-sm hover:shadow-md"
+              >
+                ปิด
+              </button>
+            </>
+          )}
+
+          {state.type === "error" && (
+            <>
+              <div className="flex justify-center">
+                <div className="rounded-full bg-red-100 p-4">
+                  <XCircle className="w-12 h-12 text-red-500" />
+                </div>
+              </div>
+              <div>
+                <p className="text-lg font-bold text-slate-800">เกิดข้อผิดพลาด</p>
+                <p className="text-sm text-red-600 mt-2 bg-red-50 rounded-lg px-3 py-2 text-left break-words">
+                  {state.message}
+                </p>
+              </div>
+              <button
+                onClick={onClose}
+                className="w-full py-3 rounded-xl font-semibold text-white bg-slate-600 hover:bg-slate-700 transition-all"
+              >
+                ปิด
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Small UI helpers ────────────────────────────────────────────────────────
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
-      {/* Mini BigC rainbow accent stripe */}
       <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#00A6E2] via-[#FFD100] via-[#F15A22] to-[#72BF44]" />
       <div className="px-6 py-4 border-b border-pink-50 flex items-center gap-3">
         <div className="w-1 h-5 rounded-full bg-gradient-to-b from-[#E91E8C] to-[#F15A22]" />
