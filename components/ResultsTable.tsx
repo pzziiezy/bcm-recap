@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { CheckCircle, AlertTriangle, XCircle, Pencil, Save, X } from "lucide-react";
 import type { ProcessedRow, FilledData } from "@/lib/types";
 
@@ -41,6 +41,23 @@ export default function ResultsTable({ rows, onChange }: Props) {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState<Partial<FilledData>>({});
 
+  // รวบรวมค่า unique ในแต่ละคอลัมน์จากทุก row สำหรับ autocomplete
+  const suggestions = useMemo(() => {
+    const map = Object.fromEntries(
+      FIELDS.map((f) => [f.key, new Set<string>()])
+    ) as Record<keyof FilledData, Set<string>>;
+
+    for (const row of rows) {
+      const data = { ...(row.filled ?? {}), ...(row.override ?? {}) } as Record<string, string>;
+      for (const { key } of FIELDS) {
+        if (data[key]) map[key].add(data[key]);
+      }
+    }
+    return Object.fromEntries(
+      FIELDS.map((f) => [f.key, [...map[f.key]].sort()])
+    ) as Record<keyof FilledData, string[]>;
+  }, [rows]);
+
   const startEdit = (i: number) => {
     const r = rows[i];
     setDraft({ ...(r.filled ?? {}), ...(r.override ?? {}) });
@@ -65,6 +82,15 @@ export default function ResultsTable({ rows, onChange }: Props) {
 
   return (
     <div className="space-y-6">
+      {/* Datalists — hidden, ใช้โดย input ที่มี list= attribute */}
+      {FIELDS.map(({ key }) => (
+        <datalist key={key} id={`dl-${key}`}>
+          {suggestions[key].map((v) => (
+            <option key={v} value={v} />
+          ))}
+        </datalist>
+      ))}
+
       {/* Summary pills */}
       <div className="flex flex-wrap gap-3">
         {(["confirmed", "inferred", "not_found"] as const).map((c) => (
@@ -122,8 +148,10 @@ export default function ResultsTable({ rows, onChange }: Props) {
                     <td key={key} className="px-3 py-3 min-w-[160px]">
                       {isEditing ? (
                         <input
+                          list={`dl-${key}`}
                           value={draft[key] ?? ""}
                           onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+                          placeholder="พิมพ์หรือเลือก..."
                           className="w-full px-2 py-1.5 text-xs border border-[#E91E8C] rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-200 bg-white"
                         />
                       ) : (
