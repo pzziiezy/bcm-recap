@@ -1,17 +1,23 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { Download, RotateCcw, FileSpreadsheet, Zap, CheckCircle, XCircle } from "lucide-react";
+import {
+  CheckCircle,
+  Download,
+  FileSpreadsheet,
+  RotateCcw,
+  XCircle,
+  Zap,
+} from "lucide-react";
 
-import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
 import ResultsTable from "@/components/ResultsTable";
-
+import StepIndicator from "@/components/StepIndicator";
+import { toDownloadRows } from "@/lib/download";
 import {
+  buildXlsbLookups,
   parseMissingRows,
-  parseXlsbFiles,
-  buildStructureLookup,
   parsePlanogramLookup,
   processRows,
 } from "@/lib/processor";
@@ -32,6 +38,10 @@ type ModalState =
   | { type: "success" }
   | { type: "error"; message: string };
 
+type PrebuildWorkerMessage =
+  | { type: "init"; ok: boolean }
+  | { type: "build"; ok: boolean; jobId: number; buffer?: ArrayBuffer; error?: string };
+
 export default function Home() {
   const [step, setStep] = useState(1);
   const [status, setStatus] = useState<Status>("idle");
@@ -45,44 +55,114 @@ export default function Home() {
   const [results, setResults] = useState<ProcessedRow[]>([]);
   const [modal, setModal] = useState<ModalState>({ type: "hidden" });
 
-  const wbRef = useRef<XLSX.WorkBook | null>(null);
   const recapBufRef = useRef<ArrayBuffer | null>(null);
-
-  // Pre-build: worker ทำงานพื้นหลังขณะ user ดูตาราง
   const prebuildRef = useRef<{
     worker: Worker | null;
-    promise: Promise<ArrayBuffer | null>;
-  }>({ worker: null, promise: Promise.resolve(null) });
+    ready: Promise<Worker | null> | null;
+    promise: Promise<Blob | null>;
+    jobId: number;
+  }>({
+    worker: null,
+    ready: null,
+    promise: Promise.resolve(null),
+    jobId: 0,
+  });
+
+  const ensurePrebuildWorker = async (): Promise<Worker | null> => {
+    if (prebuildRef.current.ready) return prebuildRef.current.ready;
+    if (!recapBufRef.current) return null;
+
+    const worker = new Worker(
+      new URL("../lib/download.worker.ts", import.meta.url)
+    );
+    prebuildRef.current.worker = worker;
+
+    const ready = new Promise<Worker | null>((resolve) => {
+      const handleMessage = (event: MessageEvent<PrebuildWorkerMessage>) => {
+        if (event.data.type !== "init") return;
+
+        worker.removeEventListener("message", handleMessage);
+        worker.removeEventListener("error", handleError);
+
+        if (event.data.ok) {
+          resolve(worker);
+          return;
+        }
+
+        worker.terminate();
+        prebuildRef.current.worker = null;
+        resolve(null);
+      };
+
+      const handleError = () => {
+        worker.removeEventListener("message", handleMessage);
+        worker.removeEventListener("error", handleError);
+        worker.terminate();
+        prebuildRef.current.worker = null;
+        prebuildRef.current.ready = null;
+        resolve(null);
+      };
+
+      worker.addEventListener("message", handleMessage);
+      worker.addEventListener("error", handleError);
+
+      const initBuffer = recapBufRef.current?.slice(0);
+      if (!initBuffer) {
+        handleError();
+        return;
+      }
+
+      worker.postMessage({ type: "init", buffer: initBuffer }, [initBuffer]);
+    });
+
+    prebuildRef.current.ready = ready;
+    return ready;
+  };
 
   const startPrebuild = (rows: ProcessedRow[]) => {
-    // ยกเลิก worker เก่าถ้ายังทำงานอยู่
-    prebuildRef.current.worker?.terminate();
-    prebuildRef.current.worker = null;
-
     if (!recapBufRef.current) {
       prebuildRef.current.promise = Promise.resolve(null);
       return;
     }
 
-    const buf = recapBufRef.current.slice(0);
-    const plain = JSON.parse(JSON.stringify(rows));
+    const jobId = ++prebuildRef.current.jobId;
+    const downloadRows = toDownloadRows(rows);
 
-    prebuildRef.current.promise = new Promise<ArrayBuffer | null>((resolve) => {
-      const w = new Worker(
-        new URL("../lib/download.worker.ts", import.meta.url)
-      );
-      prebuildRef.current.worker = w;
-      w.onmessage = (e: MessageEvent) => {
-        w.terminate();
-        prebuildRef.current.worker = null;
-        resolve(e.data.ok ? (e.data.buffer as ArrayBuffer) : null);
-      };
-      w.onerror = () => {
-        w.terminate();
-        prebuildRef.current.worker = null;
-        resolve(null);
-      };
-      w.postMessage({ buffer: buf, results: plain });
+    prebuildRef.current.promise = ensurePrebuildWorker().then((worker) => {
+      if (!worker) return null;
+
+      return new Promise<Blob | null>((resolve) => {
+        const handleMessage = (event: MessageEvent<PrebuildWorkerMessage>) => {
+          if (event.data.type !== "build" || event.data.jobId !== jobId) return;
+
+          worker.removeEventListener("message", handleMessage);
+          worker.removeEventListener("error", handleError);
+
+          if (!event.data.ok || !event.data.buffer) {
+            resolve(null);
+            return;
+          }
+
+          resolve(
+            new Blob([event.data.buffer], {
+              type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            })
+          );
+        };
+
+        const handleError = () => {
+          worker.removeEventListener("message", handleMessage);
+          worker.removeEventListener("error", handleError);
+          worker.terminate();
+          prebuildRef.current.worker = null;
+          prebuildRef.current.ready = null;
+          resolve(null);
+        };
+
+        worker.addEventListener("message", handleMessage);
+        worker.addEventListener("error", handleError);
+        worker.postMessage({ type: "build", jobId, rows: downloadRows });
+      });
     });
   };
 
@@ -103,45 +183,47 @@ export default function Home() {
     try {
       setStatusMsg("อ่านไฟล์ RECAP...");
       setPct(10);
+
       const recapBuf = await recapFiles[0].arrayBuffer();
       recapBufRef.current = recapBuf.slice(0);
-      const wb = XLSX.read(recapBuf, { type: "array" });
-      wbRef.current = wb;
-      const missing = parseMissingRows(wb);
 
-      setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล — กำลังค้นหาในไฟล์ 100 ช่อง...`);
+      const workbook = XLSX.read(recapBuf, { type: "array" });
+      const missing = parseMissingRows(workbook);
+
+      setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล - กำลังค้นหาในไฟล์ 100 ช่อง...`);
       setPct(25);
 
-      const [barcodeMap, structureMap] = await Promise.all([
-        parseXlsbFiles(xlsbFiles),
-        buildStructureLookup(xlsbFiles),
-      ]);
+      const { barcodeMap, structureMap } = await buildXlsbLookups(xlsbFiles);
 
       setStatusMsg("อ่าน DATA_SPACEMAN เพื่อหา PLANOGRAM...");
       setPct(50);
-      const planogramMap = await parsePlanogramLookup(spacemanFiles[0], (p) =>
-        setPct(50 + p * 0.35)
+      const planogramMap = await parsePlanogramLookup(spacemanFiles[0], (progress) =>
+        setPct(50 + progress * 0.35)
       );
 
       setStatusMsg("ประมวลผลข้อมูล...");
       setPct(90);
-      const processed = processRows(missing, barcodeMap, structureMap, planogramMap);
-      setResults(processed);
 
+      const processed = processRows(
+        missing,
+        barcodeMap,
+        structureMap,
+        planogramMap
+      );
+
+      setResults(processed);
       setPct(100);
       setStatusMsg("เสร็จสิ้น!");
       setStatus("done");
       setStep(4);
 
-      // เริ่ม pre-build ไฟล์ทันทีในพื้นหลัง — ขณะ user ดูตารางผลลัพธ์
       startPrebuild(processed);
-    } catch (err) {
+    } catch (error) {
       setStatus("error");
-      setStatusMsg(String(err));
+      setStatusMsg(String(error));
     }
   };
 
-  // เมื่อ user แก้ไข cell ใดก็ตาม → rebuild พื้นหลังทันที
   const handleResultsChange = (updated: ProcessedRow[]) => {
     setResults(updated);
     startPrebuild(updated);
@@ -149,34 +231,36 @@ export default function Home() {
 
   const handleDownload = async () => {
     setModal({ type: "loading" });
-    try {
-      // รอ pre-build (อาจเสร็จแล้วหรือกำลังทำอยู่ก็ได้)
-      const buffer = await prebuildRef.current.promise;
-      if (!buffer) throw new Error("ไม่สามารถสร้างไฟล์ได้ กรุณาลองใหม่");
 
-      const blob = new Blob([buffer], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      });
+    try {
+      const blob = await prebuildRef.current.promise;
+      if (!blob) {
+        throw new Error("ไม่สามารถสร้างไฟล์ได้ กรุณาลองใหม่");
+      }
+
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "RECAP_filled.xlsx";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "RECAP_filled.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
       URL.revokeObjectURL(url);
 
       setModal({ type: "success" });
       setStep(5);
-    } catch (err) {
-      setModal({ type: "error", message: String(err) });
+    } catch (error) {
+      setModal({ type: "error", message: String(error) });
     }
   };
 
   const reset = () => {
     prebuildRef.current.worker?.terminate();
     prebuildRef.current.worker = null;
+    prebuildRef.current.ready = null;
     prebuildRef.current.promise = Promise.resolve(null);
+    prebuildRef.current.jobId = 0;
+
     setStep(1);
     setStatus("idle");
     setStatusMsg("");
@@ -186,17 +270,16 @@ export default function Home() {
     setSpacemanFiles([]);
     setResults([]);
     setModal({ type: "hidden" });
-    wbRef.current = null;
+
     recapBufRef.current = null;
   };
 
-  const confirmed = results.filter((r) => r.confidence === "confirmed").length;
-  const inferred = results.filter((r) => r.confidence === "inferred").length;
-  const notFound = results.filter((r) => r.confidence === "not_found").length;
+  const confirmed = results.filter((row) => row.confidence === "confirmed").length;
+  const inferred = results.filter((row) => row.confidence === "inferred").length;
+  const notFound = results.filter((row) => row.confidence === "not_found").length;
 
   return (
     <main className="min-h-screen">
-      {/* Header */}
       <div className="bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] text-white px-6 py-4 shadow-lg">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -234,7 +317,7 @@ export default function Home() {
         <StepIndicator steps={STEPS} current={step} />
 
         {step === 1 && (
-          <Card title="Step 1 — อัปโหลดไฟล์ RECAP">
+          <Card title="Step 1 - อัปโหลดไฟล์ RECAP">
             <DropZone
               label="ไฟล์ RECAP.xlsx"
               accept=".xlsx,.xls"
@@ -249,7 +332,7 @@ export default function Home() {
         )}
 
         {step === 2 && (
-          <Card title="Step 2 — อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
+          <Card title="Step 2 - อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
             <DropZone
               label="ไฟล์ 100 ช่อง (เลือกได้หลายไฟล์)"
               accept=".xlsb,.xlsx,.xls"
@@ -259,23 +342,29 @@ export default function Home() {
               hint="7_2_10_SNACKS, 7_2_50_CONFECTIONARY, 7_2_60_BISCUITS, 7_2_60_WINE ฯลฯ"
             />
             <div className="flex gap-3">
-              <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
-              <NavBtn onClick={() => setStep(3)} disabled={!canNext()}>ถัดไป →</NavBtn>
+              <NavBtn variant="outline" onClick={() => setStep(1)}>
+                ← ย้อนกลับ
+              </NavBtn>
+              <NavBtn onClick={() => setStep(3)} disabled={!canNext()}>
+                ถัดไป →
+              </NavBtn>
             </div>
           </Card>
         )}
 
         {step === 3 && (
-          <Card title="Step 3 — อัปโหลด DATA_SPACEMAN.xlsx">
+          <Card title="Step 3 - อัปโหลด DATA_SPACEMAN.xlsx">
             <DropZone
               label="DATA_SPACEMAN.xlsx"
               accept=".xlsx,.xls"
               files={spacemanFiles}
               onFiles={setSpacemanFiles}
-              hint="ใช้หา PLANOGRAM — อัปโหลดล่าสุดทุกสัปดาห์"
+              hint="ใช้หา PLANOGRAM - อัปโหลดใหม่ทุกสัปดาห์"
             />
             <div className="flex gap-3">
-              <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
+              <NavBtn variant="outline" onClick={() => setStep(2)}>
+                ← ย้อนกลับ
+              </NavBtn>
               <NavBtn onClick={handleProcess} disabled={!canNext()}>
                 <Zap className="w-4 h-4" />
                 ประมวลผลทันที
@@ -285,7 +374,7 @@ export default function Home() {
         )}
 
         {step === 4 && (
-          <Card title="Step 4 — ตรวจสอบผลลัพธ์">
+          <Card title="Step 4 - ตรวจสอบผลลัพธ์">
             {status === "processing" && (
               <div className="space-y-4 py-8">
                 <div className="flex items-center justify-center">
@@ -304,7 +393,7 @@ export default function Home() {
 
             {status === "error" && (
               <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-red-700">
-                ❌ เกิดข้อผิดพลาด: {statusMsg}
+                ผิดพลาด: {statusMsg}
               </div>
             )}
 
@@ -333,11 +422,19 @@ export default function Home() {
           <Card title="เสร็จสิ้น!">
             <div className="text-center py-10 space-y-4">
               <div className="flex justify-center gap-2 text-5xl">
-                <span className="animate-bounce" style={{ animationDelay: "0ms" }}>🎉</span>
-                <span className="animate-bounce" style={{ animationDelay: "100ms" }}>✅</span>
-                <span className="animate-bounce" style={{ animationDelay: "200ms" }}>🎊</span>
+                <span className="animate-bounce" style={{ animationDelay: "0ms" }}>
+                  🎉
+                </span>
+                <span className="animate-bounce" style={{ animationDelay: "100ms" }}>
+                  ✅
+                </span>
+                <span className="animate-bounce" style={{ animationDelay: "200ms" }}>
+                  🎊
+                </span>
               </div>
-              <p className="text-xl font-semibold text-slate-700">ดาวน์โหลดไฟล์สำเร็จแล้ว</p>
+              <p className="text-xl font-semibold text-slate-700">
+                ดาวน์โหลดไฟล์สำเร็จแล้ว
+              </p>
               <p className="text-slate-500 text-sm">
                 ไฟล์ <strong>RECAP_filled.xlsx</strong> อยู่ในโฟลเดอร์ Downloads
               </p>
@@ -357,8 +454,6 @@ export default function Home() {
   );
 }
 
-// ─── Download Modal ──────────────────────────────────────────────────────────
-
 function DownloadModal({
   state,
   onClose,
@@ -369,12 +464,10 @@ function DownloadModal({
   if (state.type === "hidden") return null;
 
   return (
-    // ไม่มี onClick บน backdrop — บังคับกดปุ่มเท่านั้น
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]" />
         <div className="p-8 text-center space-y-5">
-
           {state.type === "loading" && (
             <>
               <div className="flex justify-center">
@@ -382,7 +475,9 @@ function DownloadModal({
               </div>
               <div>
                 <p className="text-lg font-bold text-slate-800">กำลังสร้างไฟล์...</p>
-                <p className="text-sm text-slate-500 mt-1">โปรดรอสักครู่ อย่าปิดหน้าต่างนี้</p>
+                <p className="text-sm text-slate-500 mt-1">
+                  โปรดรอสักครู่ อย่าปิดหน้าต่างนี้
+                </p>
               </div>
             </>
           )}
@@ -430,14 +525,11 @@ function DownloadModal({
               </button>
             </>
           )}
-
         </div>
       </div>
     </div>
   );
 }
-
-// ─── UI helpers ──────────────────────────────────────────────────────────────
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -470,9 +562,10 @@ function NavBtn({
       className={`
         flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm
         transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed
-        ${variant === "primary"
-          ? "bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white shadow-sm hover:shadow-md hover:from-[#d41679] hover:to-[#be185d]"
-          : "border border-pink-200 text-[#d41679] hover:bg-pink-50"
+        ${
+          variant === "primary"
+            ? "bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white shadow-sm hover:shadow-md hover:from-[#d41679] hover:to-[#be185d]"
+            : "border border-pink-200 text-[#d41679] hover:bg-pink-50"
         }
       `}
     >
@@ -495,6 +588,7 @@ function StatCard({
     amber: "bg-amber-50 border-amber-200 text-amber-700",
     red: "bg-red-50 border-red-200 text-red-700",
   };
+
   return (
     <div className={`${colors[color]} border rounded-xl p-4 text-center`}>
       <div className="text-3xl font-bold">{value}</div>
