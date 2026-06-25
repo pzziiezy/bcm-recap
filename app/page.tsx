@@ -118,7 +118,7 @@ export default function Home() {
     <main className="min-h-screen">
       {/* Header */}
       <div className="bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] text-white px-6 py-4 shadow-lg">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             {/* Mini BigC Logo */}
             <div className="bg-white rounded-xl px-3 py-2 shadow-sm flex items-center">
@@ -152,7 +152,7 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+      <div className="px-6 py-8 space-y-8">
         {/* Step indicator */}
         <StepIndicator steps={STEPS} current={step} />
 
