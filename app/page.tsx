@@ -44,8 +44,47 @@ export default function Home() {
 
   const [results, setResults] = useState<ProcessedRow[]>([]);
   const [modal, setModal] = useState<ModalState>({ type: "hidden" });
+
   const wbRef = useRef<XLSX.WorkBook | null>(null);
   const recapBufRef = useRef<ArrayBuffer | null>(null);
+
+  // Pre-build: worker ทำงานพื้นหลังขณะ user ดูตาราง
+  const prebuildRef = useRef<{
+    worker: Worker | null;
+    promise: Promise<ArrayBuffer | null>;
+  }>({ worker: null, promise: Promise.resolve(null) });
+
+  const startPrebuild = (rows: ProcessedRow[]) => {
+    // ยกเลิก worker เก่าถ้ายังทำงานอยู่
+    prebuildRef.current.worker?.terminate();
+    prebuildRef.current.worker = null;
+
+    if (!recapBufRef.current) {
+      prebuildRef.current.promise = Promise.resolve(null);
+      return;
+    }
+
+    const buf = recapBufRef.current.slice(0);
+    const plain = JSON.parse(JSON.stringify(rows));
+
+    prebuildRef.current.promise = new Promise<ArrayBuffer | null>((resolve) => {
+      const w = new Worker(
+        new URL("../lib/download.worker.ts", import.meta.url)
+      );
+      prebuildRef.current.worker = w;
+      w.onmessage = (e: MessageEvent) => {
+        w.terminate();
+        prebuildRef.current.worker = null;
+        resolve(e.data.ok ? (e.data.buffer as ArrayBuffer) : null);
+      };
+      w.onerror = () => {
+        w.terminate();
+        prebuildRef.current.worker = null;
+        resolve(null);
+      };
+      w.postMessage({ buffer: buf, results: plain });
+    });
+  };
 
   const canNext = () => {
     if (step === 1) return recapFiles.length === 1;
@@ -93,27 +132,28 @@ export default function Home() {
       setStatusMsg("เสร็จสิ้น!");
       setStatus("done");
       setStep(4);
+
+      // เริ่ม pre-build ไฟล์ทันทีในพื้นหลัง — ขณะ user ดูตารางผลลัพธ์
+      startPrebuild(processed);
     } catch (err) {
       setStatus("error");
       setStatusMsg(String(err));
     }
   };
 
-  const handleDownload = () => {
-    if (!recapBufRef.current) return;
+  // เมื่อ user แก้ไข cell ใดก็ตาม → rebuild พื้นหลังทันที
+  const handleResultsChange = (updated: ProcessedRow[]) => {
+    setResults(updated);
+    startPrebuild(updated);
+  };
+
+  const handleDownload = async () => {
     setModal({ type: "loading" });
+    try {
+      // รอ pre-build (อาจเสร็จแล้วหรือกำลังทำอยู่ก็ได้)
+      const buffer = await prebuildRef.current.promise;
+      if (!buffer) throw new Error("ไม่สามารถสร้างไฟล์ได้ กรุณาลองใหม่");
 
-    const worker = new Worker(
-      new URL("../lib/download.worker.ts", import.meta.url)
-    );
-
-    worker.onmessage = (e: MessageEvent) => {
-      worker.terminate();
-      const { ok, buffer, error } = e.data;
-      if (!ok) {
-        setModal({ type: "error", message: error ?? "ไม่ทราบสาเหตุ" });
-        return;
-      }
       const blob = new Blob([buffer], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
@@ -125,23 +165,18 @@ export default function Home() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
       setModal({ type: "success" });
       setStep(5);
-    };
-
-    worker.onerror = (e) => {
-      worker.terminate();
-      setModal({ type: "error", message: e.message ?? "Worker error" });
-    };
-
-    // ส่ง results เป็น plain JSON เพื่อให้ structured clone ทำงานได้ถูกต้อง
-    worker.postMessage({
-      buffer: recapBufRef.current.slice(0),
-      results: JSON.parse(JSON.stringify(results)),
-    });
+    } catch (err) {
+      setModal({ type: "error", message: String(err) });
+    }
   };
 
   const reset = () => {
+    prebuildRef.current.worker?.terminate();
+    prebuildRef.current.worker = null;
+    prebuildRef.current.promise = Promise.resolve(null);
     setStep(1);
     setStatus("idle");
     setStatusMsg("");
@@ -152,6 +187,7 @@ export default function Home() {
     setResults([]);
     setModal({ type: "hidden" });
     wbRef.current = null;
+    recapBufRef.current = null;
   };
 
   const confirmed = results.filter((r) => r.confidence === "confirmed").length;
@@ -280,7 +316,7 @@ export default function Home() {
                   <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
                 </div>
 
-                <ResultsTable rows={results} onChange={setResults} />
+                <ResultsTable rows={results} onChange={handleResultsChange} />
 
                 <div className="flex gap-3 pt-4 border-t border-slate-100">
                   <NavBtn onClick={handleDownload} disabled={modal.type === "loading"}>
@@ -316,11 +352,7 @@ export default function Home() {
         )}
       </div>
 
-      {/* Download Modal */}
-      <DownloadModal
-        state={modal}
-        onClose={() => setModal({ type: "hidden" })}
-      />
+      <DownloadModal state={modal} onClose={() => setModal({ type: "hidden" })} />
     </main>
   );
 }
@@ -337,13 +369,12 @@ function DownloadModal({
   if (state.type === "hidden") return null;
 
   return (
-    // Overlay — ไม่มี onClick ที่ backdrop เพื่อบังคับกดปุ่มปิด
+    // ไม่มี onClick บน backdrop — บังคับกดปุ่มเท่านั้น
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
-        {/* Top accent stripe */}
         <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]" />
-
         <div className="p-8 text-center space-y-5">
+
           {state.type === "loading" && (
             <>
               <div className="flex justify-center">
@@ -351,9 +382,7 @@ function DownloadModal({
               </div>
               <div>
                 <p className="text-lg font-bold text-slate-800">กำลังสร้างไฟล์...</p>
-                <p className="text-sm text-slate-500 mt-1">
-                  โปรดรอสักครู่ อย่าปิดหน้าต่างนี้
-                </p>
+                <p className="text-sm text-slate-500 mt-1">โปรดรอสักครู่ อย่าปิดหน้าต่างนี้</p>
               </div>
             </>
           )}
@@ -401,13 +430,14 @@ function DownloadModal({
               </button>
             </>
           )}
+
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Small UI helpers ────────────────────────────────────────────────────────
+// ─── UI helpers ──────────────────────────────────────────────────────────────
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
