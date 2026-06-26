@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import * as XLSX from "xlsx";
 import {
   Download,
@@ -9,11 +9,18 @@ import {
   Zap,
   CheckCircle,
   XCircle,
+  Cloud,
+  Clock,
+  CloudOff,
 } from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
 import ResultsTable from "@/components/ResultsTable";
+import SpacemanManager, {
+  DriveFileInfo,
+  formatDateTime,
+} from "@/components/SpacemanManager";
 import { toDownloadRows } from "@/lib/download";
 import {
   parseMissingRows,
@@ -33,6 +40,7 @@ const STEPS = [
 ];
 
 type Status = "idle" | "processing" | "done" | "error";
+type AppView = "main" | "spaceman";
 type ModalState =
   | { type: "hidden" }
   | { type: "loading" }
@@ -44,6 +52,7 @@ type WorkerResponse =
   | { type: "build"; ok: boolean; jobId: number; buffer?: ArrayBuffer; error?: string };
 
 export default function Home() {
+  const [view, setView] = useState<AppView>("main");
   const [step, setStep] = useState(1);
   const [status, setStatus] = useState<Status>("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -52,6 +61,9 @@ export default function Home() {
   const [recapFiles, setRecapFiles] = useState<File[]>([]);
   const [xlsbFiles, setXlsbFiles] = useState<File[]>([]);
   const [spacemanFiles, setSpacemanFiles] = useState<File[]>([]);
+
+  const [driveFileInfo, setDriveFileInfo] = useState<DriveFileInfo | null>(null);
+  const [driveLoading, setDriveLoading] = useState(true);
 
   const [results, setResults] = useState<ProcessedRow[]>([]);
   const [modal, setModal] = useState<ModalState>({ type: "hidden" });
@@ -70,6 +82,15 @@ export default function Home() {
     jobId: 0,
     resolveBuild: null,
   });
+
+  // Fetch latest GDrive file on mount
+  useEffect(() => {
+    fetch("/api/spaceman/latest")
+      .then((r) => r.json())
+      .then((data) => setDriveFileInfo(data.file ?? null))
+      .catch(() => setDriveFileInfo(null))
+      .finally(() => setDriveLoading(false));
+  }, []);
 
   const disposeWorker = () => {
     prebuildRef.current.worker?.terminate();
@@ -147,12 +168,13 @@ export default function Home() {
   const canNext = () => {
     if (step === 1) return recapFiles.length === 1;
     if (step === 2) return xlsbFiles.length > 0;
-    if (step === 3) return spacemanFiles.length === 1;
+    if (step === 3) return driveFileInfo !== null || spacemanFiles.length === 1;
     return true;
   };
 
   const handleProcess = async () => {
-    if (!recapFiles[0] || xlsbFiles.length === 0 || !spacemanFiles[0]) return;
+    if (!recapFiles[0] || xlsbFiles.length === 0) return;
+    if (!spacemanFiles[0] && !driveFileInfo) return;
 
     setStatus("processing");
     setStep(4);
@@ -174,9 +196,24 @@ export default function Home() {
         buildStructureLookup(xlsbFiles),
       ]);
 
+      // Resolve DATA_SPACEMAN: local override OR GDrive
+      let spacemanFile: File;
+      if (spacemanFiles.length > 0) {
+        spacemanFile = spacemanFiles[0];
+      } else {
+        setStatusMsg("กำลังดาวน์โหลด DATA_SPACEMAN จาก Google Drive...");
+        setPct(45);
+        const res = await fetch(`/api/spaceman/file?id=${driveFileInfo!.id}`);
+        if (!res.ok) throw new Error("ไม่สามารถดาวน์โหลดไฟล์จาก Google Drive ได้");
+        const buf = await res.arrayBuffer();
+        spacemanFile = new File([buf], driveFileInfo!.name, {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        });
+      }
+
       setStatusMsg("อ่าน DATA_SPACEMAN เพื่อหา PLANOGRAM...");
       setPct(50);
-      const planogramMap = await parsePlanogramLookup(spacemanFiles[0], (p) =>
+      const planogramMap = await parsePlanogramLookup(spacemanFile, (p) =>
         setPct(50 + p * 0.35)
       );
 
@@ -249,6 +286,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen">
+      {/* Header */}
       <div className="bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] text-white px-6 py-4 shadow-lg">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -270,137 +308,226 @@ export default function Home() {
               </p>
             </div>
           </div>
-          {step > 1 && (
+
+          <div className="flex items-center gap-2">
+            {/* DATA_SPACEMAN manager button */}
             <button
-              onClick={reset}
-              className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-medium transition-colors border border-white/30"
+              onClick={() => setView(view === "spaceman" ? "main" : "spaceman")}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
+                view === "spaceman"
+                  ? "bg-white text-[#E91E8C] border-white shadow-sm"
+                  : "bg-white/20 hover:bg-white/30 border-white/30"
+              }`}
             >
-              <RotateCcw className="w-4 h-4" />
-              เริ่มใหม่
+              <Cloud className="w-4 h-4" />
+              DATA_SPACEMAN
             </button>
-          )}
+
+            {view === "main" && step > 1 && (
+              <button
+                onClick={reset}
+                className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-medium transition-colors border border-white/30"
+              >
+                <RotateCcw className="w-4 h-4" />
+                เริ่มใหม่
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="px-6 py-8 space-y-8">
-        <StepIndicator steps={STEPS} current={step} />
-
-        {step === 1 && (
-          <Card title="Step 1 - อัปโหลดไฟล์ RECAP">
-            <DropZone
-              label="ไฟล์ RECAP.xlsx"
-              accept=".xlsx,.xls"
-              files={recapFiles}
-              onFiles={setRecapFiles}
-              hint="ไฟล์ที่ต้องการเติมข้อมูลในคอลัมน์ F-J ของ Sheet 'NEW SCM'"
-            />
-            <NavBtn onClick={() => setStep(2)} disabled={!canNext()}>
-              ถัดไป →
-            </NavBtn>
-          </Card>
+        {/* DATA_SPACEMAN Manager view */}
+        {view === "spaceman" && (
+          <SpacemanManager
+            onBack={() => setView("main")}
+            onFileInfoChange={(info) => {
+              setDriveFileInfo(info);
+              setDriveLoading(false);
+            }}
+          />
         )}
 
-        {step === 2 && (
-          <Card title="Step 2 - อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
-            <DropZone
-              label="ไฟล์ 100 ช่อง (เลือกได้หลายไฟล์)"
-              accept=".xlsb,.xlsx,.xls"
-              multiple
-              files={xlsbFiles}
-              onFiles={setXlsbFiles}
-              hint="7_2_10_SNACKS, 7_2_50_CONFECTIONARY, 7_2_60_BISCUITS, 7_2_60_WINE ฯลฯ"
-            />
-            <div className="flex gap-3">
-              <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
-              <NavBtn onClick={() => setStep(3)} disabled={!canNext()}>ถัดไป →</NavBtn>
-            </div>
-          </Card>
-        )}
+        {/* Main upload flow */}
+        {view === "main" && (
+          <>
+            <StepIndicator steps={STEPS} current={step} />
 
-        {step === 3 && (
-          <Card title="Step 3 - อัปโหลด DATA_SPACEMAN.xlsx">
-            <DropZone
-              label="DATA_SPACEMAN.xlsx"
-              accept=".xlsx,.xls"
-              files={spacemanFiles}
-              onFiles={setSpacemanFiles}
-              hint="ใช้หา PLANOGRAM - อัปโหลดล่าสุดทุกสัปดาห์"
-            />
-            <div className="flex gap-3">
-              <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
-              <NavBtn onClick={handleProcess} disabled={!canNext()}>
-                <Zap className="w-4 h-4" />
-                ประมวลผลทันที
-              </NavBtn>
-            </div>
-          </Card>
-        )}
-
-        {step === 4 && (
-          <Card title="Step 4 - ตรวจสอบผลลัพธ์">
-            {status === "processing" && (
-              <div className="space-y-4 py-8">
-                <div className="flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-10 w-10 border-4 border-pink-200 border-t-[#E91E8C]" />
-                </div>
-                <p className="text-center text-slate-600 font-medium">{statusMsg}</p>
-                <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
-                  <div
-                    className="h-3 rounded-full transition-all duration-500 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
-                    style={{ width: `${pct}%` }}
-                  />
-                </div>
-                <p className="text-center text-sm text-slate-400">{pct}%</p>
-              </div>
+            {step === 1 && (
+              <Card title="Step 1 - อัปโหลดไฟล์ RECAP">
+                <DropZone
+                  label="ไฟล์ RECAP.xlsx"
+                  accept=".xlsx,.xls"
+                  files={recapFiles}
+                  onFiles={setRecapFiles}
+                  hint="ไฟล์ที่ต้องการเติมข้อมูลในคอลัมน์ F-J ของ Sheet 'NEW SCM'"
+                />
+                <NavBtn onClick={() => setStep(2)} disabled={!canNext()}>
+                  ถัดไป →
+                </NavBtn>
+              </Card>
             )}
 
-            {status === "error" && (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-red-700">
-                ❌ เกิดข้อผิดพลาด: {statusMsg}
-              </div>
+            {step === 2 && (
+              <Card title="Step 2 - อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
+                <DropZone
+                  label="ไฟล์ 100 ช่อง (เลือกได้หลายไฟล์)"
+                  accept=".xlsb,.xlsx,.xls"
+                  multiple
+                  files={xlsbFiles}
+                  onFiles={setXlsbFiles}
+                  hint="7_2_10_SNACKS, 7_2_50_CONFECTIONARY, 7_2_60_BISCUITS, 7_2_60_WINE ฯลฯ"
+                />
+                <div className="flex gap-3">
+                  <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
+                  <NavBtn onClick={() => setStep(3)} disabled={!canNext()}>ถัดไป →</NavBtn>
+                </div>
+              </Card>
             )}
 
-            {status === "done" && (
-              <>
-                <div className="grid grid-cols-3 gap-4 mb-6">
-                  <StatCard label="ยืนยันแล้ว" value={confirmed} color="green" />
-                  <StatCard label="อนุมาน" value={inferred} color="amber" />
-                  <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
+            {step === 3 && (
+              <Card title="Step 3 - DATA_SPACEMAN">
+                {/* GDrive file status */}
+                <div
+                  className={`rounded-xl border p-4 flex items-start gap-4 ${
+                    driveLoading
+                      ? "bg-slate-50 border-slate-200"
+                      : driveFileInfo
+                        ? "bg-green-50 border-green-200"
+                        : "bg-amber-50 border-amber-200"
+                  }`}
+                >
+                  {driveLoading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-5 w-5 border-2 border-slate-300 border-t-slate-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-slate-600">กำลังตรวจสอบไฟล์ใน Google Drive...</p>
+                    </>
+                  ) : driveFileInfo ? (
+                    <>
+                      <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-green-800 text-sm">{driveFileInfo.name}</p>
+                        <div className="flex items-center gap-1.5 mt-1 text-xs text-green-700">
+                          <Clock className="w-3 h-3" />
+                          อัปโหลดล่าสุด:{" "}
+                          <strong>{formatDateTime(driveFileInfo.createdTime)}</strong>
+                        </div>
+                        <p className="text-xs text-green-600 mt-0.5">
+                          จะใช้ไฟล์นี้จาก Google Drive อัตโนมัติ
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <CloudOff className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-semibold text-amber-800 text-sm">
+                          ยังไม่มีไฟล์ DATA_SPACEMAN ใน Google Drive
+                        </p>
+                        <p className="text-xs text-amber-700 mt-0.5">
+                          กรุณาอัปโหลดผ่านเมนู DATA_SPACEMAN ด้านบน หรืออัปโหลดไฟล์ชั่วคราวด้านล่าง
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                <ResultsTable rows={results} onChange={handleResultsChange} />
+                {/* Optional local file override */}
+                <details className="group">
+                  <summary className="cursor-pointer text-sm text-slate-500 hover:text-[#E91E8C] transition-colors list-none flex items-center gap-1.5 select-none">
+                    <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
+                    {driveFileInfo
+                      ? "ใช้ไฟล์อื่นแทน (ไม่บันทึกไปยัง Google Drive)"
+                      : "อัปโหลดไฟล์ชั่วคราว (ใช้ครั้งนี้เท่านั้น)"}
+                  </summary>
+                  <div className="mt-3">
+                    <DropZone
+                      label="DATA_SPACEMAN.xlsx"
+                      accept=".xlsx,.xls"
+                      files={spacemanFiles}
+                      onFiles={setSpacemanFiles}
+                      hint="ใช้หา PLANOGRAM — ไฟล์นี้จะแทนที่ไฟล์จาก Google Drive สำหรับการประมวลผลครั้งนี้"
+                    />
+                  </div>
+                </details>
 
-                <div className="flex gap-3 pt-4 border-t border-slate-100">
-                  <NavBtn onClick={handleDownload} disabled={modal.type === "loading"}>
-                    <Download className="w-4 h-4" />
-                    ดาวน์โหลด RECAP_filled.xlsx
+                <div className="flex gap-3">
+                  <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
+                  <NavBtn onClick={handleProcess} disabled={!canNext()}>
+                    <Zap className="w-4 h-4" />
+                    ประมวลผลทันที
                   </NavBtn>
                 </div>
-              </>
+              </Card>
             )}
-          </Card>
-        )}
 
-        {step === 5 && (
-          <Card title="เสร็จสิ้น!">
-            <div className="text-center py-10 space-y-4">
-              <div className="flex justify-center gap-2 text-5xl">
-                <span className="animate-bounce" style={{ animationDelay: "0ms" }}>🎉</span>
-                <span className="animate-bounce" style={{ animationDelay: "100ms" }}>✅</span>
-                <span className="animate-bounce" style={{ animationDelay: "200ms" }}>🎊</span>
-              </div>
-              <p className="text-xl font-semibold text-slate-700">ดาวน์โหลดไฟล์สำเร็จแล้ว</p>
-              <p className="text-slate-500 text-sm">
-                ไฟล์ <strong>RECAP_filled.xlsx</strong> อยู่ในโฟลเดอร์ Downloads
-              </p>
-              <button
-                onClick={reset}
-                className="mt-4 px-6 py-3 text-white rounded-xl font-semibold transition-all shadow-md hover:shadow-lg hover:scale-[1.02] bg-gradient-to-r from-[#E91E8C] to-[#F15A22]"
-              >
-                เริ่มใหม่อีกครั้ง
-              </button>
-            </div>
-          </Card>
+            {step === 4 && (
+              <Card title="Step 4 - ตรวจสอบผลลัพธ์">
+                {status === "processing" && (
+                  <div className="space-y-4 py-8">
+                    <div className="flex items-center justify-center">
+                      <div className="animate-spin rounded-full h-10 w-10 border-4 border-pink-200 border-t-[#E91E8C]" />
+                    </div>
+                    <p className="text-center text-slate-600 font-medium">{statusMsg}</p>
+                    <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
+                      <div
+                        className="h-3 rounded-full transition-all duration-500 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <p className="text-center text-sm text-slate-400">{pct}%</p>
+                  </div>
+                )}
+
+                {status === "error" && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-red-700">
+                    ❌ เกิดข้อผิดพลาด: {statusMsg}
+                  </div>
+                )}
+
+                {status === "done" && (
+                  <>
+                    <div className="grid grid-cols-3 gap-4 mb-6">
+                      <StatCard label="ยืนยันแล้ว" value={confirmed} color="green" />
+                      <StatCard label="อนุมาน" value={inferred} color="amber" />
+                      <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
+                    </div>
+
+                    <ResultsTable rows={results} onChange={handleResultsChange} />
+
+                    <div className="flex gap-3 pt-4 border-t border-slate-100">
+                      <NavBtn onClick={handleDownload} disabled={modal.type === "loading"}>
+                        <Download className="w-4 h-4" />
+                        ดาวน์โหลด RECAP_filled.xlsx
+                      </NavBtn>
+                    </div>
+                  </>
+                )}
+              </Card>
+            )}
+
+            {step === 5 && (
+              <Card title="เสร็จสิ้น!">
+                <div className="text-center py-10 space-y-4">
+                  <div className="flex justify-center gap-2 text-5xl">
+                    <span className="animate-bounce" style={{ animationDelay: "0ms" }}>🎉</span>
+                    <span className="animate-bounce" style={{ animationDelay: "100ms" }}>✅</span>
+                    <span className="animate-bounce" style={{ animationDelay: "200ms" }}>🎊</span>
+                  </div>
+                  <p className="text-xl font-semibold text-slate-700">ดาวน์โหลดไฟล์สำเร็จแล้ว</p>
+                  <p className="text-slate-500 text-sm">
+                    ไฟล์ <strong>RECAP_filled.xlsx</strong> อยู่ในโฟลเดอร์ Downloads
+                  </p>
+                  <button
+                    onClick={reset}
+                    className="mt-4 px-6 py-3 text-white rounded-xl font-semibold transition-all shadow-md hover:shadow-lg hover:scale-[1.02] bg-gradient-to-r from-[#E91E8C] to-[#F15A22]"
+                  >
+                    เริ่มใหม่อีกครั้ง
+                  </button>
+                </div>
+              </Card>
+            )}
+          </>
         )}
       </div>
 
