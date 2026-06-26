@@ -9,7 +9,6 @@ import {
   Zap,
   CheckCircle,
   XCircle,
-  Cloud,
   Clock,
   CloudOff,
 } from "lucide-react";
@@ -17,10 +16,10 @@ import {
 import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
 import ResultsTable from "@/components/ResultsTable";
-import SpacemanManager, {
+import SpacemanMaster, {
   DriveFileInfo,
   formatDateTime,
-} from "@/components/SpacemanManager";
+} from "@/components/SpacemanMaster";
 import { toDownloadRows } from "@/lib/download";
 import {
   parseMissingRows,
@@ -34,9 +33,8 @@ import type { ProcessedRow } from "@/lib/types";
 const STEPS = [
   { id: 1, label: "RECAP" },
   { id: 2, label: "100 ช่อง" },
-  { id: 3, label: "DATA_SPACEMAN" },
-  { id: 4, label: "ตรวจสอบ" },
-  { id: 5, label: "ดาวน์โหลด" },
+  { id: 3, label: "ตรวจสอบ" },
+  { id: 4, label: "ดาวน์โหลด" },
 ];
 
 type Status = "idle" | "processing" | "done" | "error";
@@ -60,7 +58,6 @@ export default function Home() {
 
   const [recapFiles, setRecapFiles] = useState<File[]>([]);
   const [xlsbFiles, setXlsbFiles] = useState<File[]>([]);
-  const [spacemanFiles, setSpacemanFiles] = useState<File[]>([]);
 
   const [driveFileInfo, setDriveFileInfo] = useState<DriveFileInfo | null>(null);
   const [driveLoading, setDriveLoading] = useState(true);
@@ -112,7 +109,6 @@ export default function Home() {
       const data = event.data;
       if (data.type !== "build") return;
       if (data.jobId !== prebuildRef.current.jobId) return;
-
       const resolve = prebuildRef.current.resolveBuild;
       prebuildRef.current.resolveBuild = null;
       resolve?.(data.ok ? (data.buffer as ArrayBuffer) : null);
@@ -129,16 +125,10 @@ export default function Home() {
       const handleInit = (event: MessageEvent<WorkerResponse>) => {
         if (event.data.type !== "init") return;
         worker.removeEventListener("message", handleInit as EventListener);
-
-        if (event.data.ok) {
-          resolve(worker);
-          return;
-        }
-
+        if (event.data.ok) { resolve(worker); return; }
         disposeWorker();
         resolve(null);
       };
-
       worker.addEventListener("message", handleInit as EventListener);
       worker.postMessage({ type: "init", buffer: initBuffer }, [initBuffer]);
     });
@@ -151,13 +141,10 @@ export default function Home() {
       prebuildRef.current.promise = Promise.resolve(null);
       return;
     }
-
     const buildRows = toDownloadRows(rows);
     const jobId = ++prebuildRef.current.jobId;
-
     prebuildRef.current.promise = ensureWorker().then((worker) => {
       if (!worker) return null;
-
       return new Promise<ArrayBuffer | null>((resolve) => {
         prebuildRef.current.resolveBuild = resolve;
         worker.postMessage({ type: "build", jobId, rows: buildRows });
@@ -165,19 +152,13 @@ export default function Home() {
     });
   };
 
-  const canNext = () => {
-    if (step === 1) return recapFiles.length === 1;
-    if (step === 2) return xlsbFiles.length > 0;
-    if (step === 3) return driveFileInfo !== null || spacemanFiles.length === 1;
-    return true;
-  };
+  const canProcess = () => recapFiles.length === 1 && xlsbFiles.length > 0 && driveFileInfo !== null;
 
   const handleProcess = async () => {
-    if (!recapFiles[0] || xlsbFiles.length === 0) return;
-    if (!spacemanFiles[0] && !driveFileInfo) return;
+    if (!recapFiles[0] || xlsbFiles.length === 0 || !driveFileInfo) return;
 
     setStatus("processing");
-    setStep(4);
+    setStep(3);
     setPct(0);
 
     try {
@@ -196,20 +177,14 @@ export default function Home() {
         buildStructureLookup(xlsbFiles),
       ]);
 
-      // Resolve DATA_SPACEMAN: local override OR GDrive
-      let spacemanFile: File;
-      if (spacemanFiles.length > 0) {
-        spacemanFile = spacemanFiles[0];
-      } else {
-        setStatusMsg("กำลังดาวน์โหลด DATA_SPACEMAN จาก Google Drive...");
-        setPct(45);
-        const res = await fetch(`/api/spaceman/file?id=${driveFileInfo!.id}`);
-        if (!res.ok) throw new Error("ไม่สามารถดาวน์โหลดไฟล์จาก Google Drive ได้");
-        const buf = await res.arrayBuffer();
-        spacemanFile = new File([buf], driveFileInfo!.name, {
-          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        });
-      }
+      setStatusMsg("กำลังดาวน์โหลด DATA_SPACEMAN จาก Google Drive...");
+      setPct(45);
+      const res = await fetch(`/api/spaceman/file?id=${driveFileInfo.id}`);
+      if (!res.ok) throw new Error("ไม่สามารถดาวน์โหลดไฟล์ DATA_SPACEMAN จาก Google Drive ได้");
+      const buf = await res.arrayBuffer();
+      const spacemanFile = new File([buf], driveFileInfo.name, {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
 
       setStatusMsg("อ่าน DATA_SPACEMAN เพื่อหา PLANOGRAM...");
       setPct(50);
@@ -225,7 +200,7 @@ export default function Home() {
       setPct(100);
       setStatusMsg("เสร็จสิ้น!");
       setStatus("done");
-      setStep(4);
+      setStep(3);
 
       startPrebuild(processed);
     } catch (err) {
@@ -258,7 +233,7 @@ export default function Home() {
       URL.revokeObjectURL(url);
 
       setModal({ type: "success" });
-      setStep(5);
+      setStep(4);
     } catch (err) {
       setModal({ type: "error", message: String(err) });
     }
@@ -274,7 +249,6 @@ export default function Home() {
     setPct(0);
     setRecapFiles([]);
     setXlsbFiles([]);
-    setSpacemanFiles([]);
     setResults([]);
     setModal({ type: "hidden" });
     recapBufRef.current = null;
@@ -285,18 +259,14 @@ export default function Home() {
   const notFound = results.filter((r) => r.confidence === "not_found").length;
 
   return (
-    <main className="min-h-screen">
+    <main className="min-h-screen bg-slate-50">
       {/* Header */}
       <div className="bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] text-white px-6 py-4 shadow-lg">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="bg-white rounded-xl px-3 py-2 shadow-sm flex items-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/mini-bigc-logo.png"
-                alt="Mini BigC"
-                className="h-9 w-auto object-contain"
-              />
+              <img src="/mini-bigc-logo.png" alt="Mini BigC" className="h-9 w-auto object-contain" />
             </div>
             <div className="border-l-2 border-white/40 pl-4">
               <div className="flex items-center gap-2">
@@ -309,38 +279,40 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* DATA_SPACEMAN manager button */}
+          {view === "main" && step > 1 && (
             <button
-              onClick={() => setView(view === "spaceman" ? "main" : "spaceman")}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all border ${
-                view === "spaceman"
-                  ? "bg-white text-[#E91E8C] border-white shadow-sm"
-                  : "bg-white/20 hover:bg-white/30 border-white/30"
-              }`}
+              onClick={reset}
+              className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-medium transition-colors border border-white/30"
             >
-              <Cloud className="w-4 h-4" />
-              DATA_SPACEMAN
+              <RotateCcw className="w-4 h-4" />
+              เริ่มใหม่
             </button>
+          )}
+        </div>
+      </div>
 
-            {view === "main" && step > 1 && (
-              <button
-                onClick={reset}
-                className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-medium transition-colors border border-white/30"
-              >
-                <RotateCcw className="w-4 h-4" />
-                เริ่มใหม่
-              </button>
-            )}
-          </div>
+      {/* Tab Navigation */}
+      <div className="bg-white border-b border-slate-200 shadow-sm px-6">
+        <div className="flex gap-0">
+          <TabBtn active={view === "main"} onClick={() => setView("main")}>
+            <FileSpreadsheet className="w-4 h-4" />
+            อัปโหลดข้อมูล
+          </TabBtn>
+          <TabBtn active={view === "spaceman"} onClick={() => setView("spaceman")}>
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <ellipse cx="12" cy="5" rx="9" ry="3" />
+              <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
+              <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" />
+            </svg>
+            DATA_SPACEMAN
+          </TabBtn>
         </div>
       </div>
 
       <div className="px-6 py-8 space-y-8">
-        {/* DATA_SPACEMAN Manager view */}
+        {/* DATA_SPACEMAN master view */}
         {view === "spaceman" && (
-          <SpacemanManager
-            onBack={() => setView("main")}
+          <SpacemanMaster
             onFileInfoChange={(info) => {
               setDriveFileInfo(info);
               setDriveLoading(false);
@@ -353,6 +325,7 @@ export default function Home() {
           <>
             <StepIndicator steps={STEPS} current={step} />
 
+            {/* Step 1 */}
             {step === 1 && (
               <Card title="Step 1 - อัปโหลดไฟล์ RECAP">
                 <DropZone
@@ -362,12 +335,13 @@ export default function Home() {
                   onFiles={setRecapFiles}
                   hint="ไฟล์ที่ต้องการเติมข้อมูลในคอลัมน์ F-J ของ Sheet 'NEW SCM'"
                 />
-                <NavBtn onClick={() => setStep(2)} disabled={!canNext()}>
+                <NavBtn onClick={() => setStep(2)} disabled={recapFiles.length !== 1}>
                   ถัดไป →
                 </NavBtn>
               </Card>
             )}
 
+            {/* Step 2 */}
             {step === 2 && (
               <Card title="Step 2 - อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
                 <DropZone
@@ -378,82 +352,50 @@ export default function Home() {
                   onFiles={setXlsbFiles}
                   hint="7_2_10_SNACKS, 7_2_50_CONFECTIONARY, 7_2_60_BISCUITS, 7_2_60_WINE ฯลฯ"
                 />
-                <div className="flex gap-3">
-                  <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
-                  <NavBtn onClick={() => setStep(3)} disabled={!canNext()}>ถัดไป →</NavBtn>
-                </div>
-              </Card>
-            )}
 
-            {step === 3 && (
-              <Card title="Step 3 - DATA_SPACEMAN">
-                {/* GDrive file status */}
+                {/* DATA_SPACEMAN GDrive status */}
                 <div
-                  className={`rounded-xl border p-4 flex items-start gap-4 ${
+                  className={`rounded-xl border px-4 py-3 flex items-center gap-3 text-sm ${
                     driveLoading
-                      ? "bg-slate-50 border-slate-200"
+                      ? "bg-slate-50 border-slate-200 text-slate-500"
                       : driveFileInfo
-                        ? "bg-green-50 border-green-200"
-                        : "bg-amber-50 border-amber-200"
+                        ? "bg-green-50 border-green-200 text-green-800"
+                        : "bg-amber-50 border-amber-200 text-amber-800"
                   }`}
                 >
                   {driveLoading ? (
                     <>
-                      <div className="animate-spin rounded-full h-5 w-5 border-2 border-slate-300 border-t-slate-600 mt-0.5 flex-shrink-0" />
-                      <p className="text-sm text-slate-600">กำลังตรวจสอบไฟล์ใน Google Drive...</p>
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-slate-300 border-t-slate-500 flex-shrink-0" />
+                      <span>กำลังตรวจสอบ DATA_SPACEMAN ใน Google Drive...</span>
                     </>
                   ) : driveFileInfo ? (
                     <>
-                      <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0 mt-0.5" />
+                      <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
                       <div>
-                        <p className="font-semibold text-green-800 text-sm">{driveFileInfo.name}</p>
-                        <div className="flex items-center gap-1.5 mt-1 text-xs text-green-700">
+                        <span className="font-medium">DATA_SPACEMAN พร้อมใช้งาน</span>
+                        <span className="text-green-600 ml-2">—</span>
+                        <span className="text-green-700 ml-2 flex items-center gap-1 inline-flex">
                           <Clock className="w-3 h-3" />
-                          อัปโหลดล่าสุด:{" "}
-                          <strong>{formatDateTime(driveFileInfo.createdTime)}</strong>
-                        </div>
-                        <p className="text-xs text-green-600 mt-0.5">
-                          จะใช้ไฟล์นี้จาก Google Drive อัตโนมัติ
-                        </p>
+                          อัปโหลดล่าสุด: <strong>{formatDateTime(driveFileInfo.createdTime)}</strong>
+                        </span>
                       </div>
                     </>
                   ) : (
                     <>
-                      <CloudOff className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                      <CloudOff className="w-4 h-4 text-amber-500 flex-shrink-0" />
                       <div>
-                        <p className="font-semibold text-amber-800 text-sm">
-                          ยังไม่มีไฟล์ DATA_SPACEMAN ใน Google Drive
-                        </p>
-                        <p className="text-xs text-amber-700 mt-0.5">
-                          กรุณาอัปโหลดผ่านเมนู DATA_SPACEMAN ด้านบน หรืออัปโหลดไฟล์ชั่วคราวด้านล่าง
-                        </p>
+                        <span className="font-medium">ไม่พบไฟล์ DATA_SPACEMAN ใน Google Drive</span>
+                        <span className="text-amber-600 ml-2 text-xs">
+                          — กรุณาไปที่แท็บ "DATA_SPACEMAN" เพื่ออัปโหลดไฟล์ก่อน
+                        </span>
                       </div>
                     </>
                   )}
                 </div>
 
-                {/* Optional local file override */}
-                <details className="group">
-                  <summary className="cursor-pointer text-sm text-slate-500 hover:text-[#E91E8C] transition-colors list-none flex items-center gap-1.5 select-none">
-                    <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
-                    {driveFileInfo
-                      ? "ใช้ไฟล์อื่นแทน (ไม่บันทึกไปยัง Google Drive)"
-                      : "อัปโหลดไฟล์ชั่วคราว (ใช้ครั้งนี้เท่านั้น)"}
-                  </summary>
-                  <div className="mt-3">
-                    <DropZone
-                      label="DATA_SPACEMAN.xlsx"
-                      accept=".xlsx,.xls"
-                      files={spacemanFiles}
-                      onFiles={setSpacemanFiles}
-                      hint="ใช้หา PLANOGRAM — ไฟล์นี้จะแทนที่ไฟล์จาก Google Drive สำหรับการประมวลผลครั้งนี้"
-                    />
-                  </div>
-                </details>
-
                 <div className="flex gap-3">
-                  <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
-                  <NavBtn onClick={handleProcess} disabled={!canNext()}>
+                  <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
+                  <NavBtn onClick={handleProcess} disabled={!canProcess()}>
                     <Zap className="w-4 h-4" />
                     ประมวลผลทันที
                   </NavBtn>
@@ -461,8 +403,9 @@ export default function Home() {
               </Card>
             )}
 
-            {step === 4 && (
-              <Card title="Step 4 - ตรวจสอบผลลัพธ์">
+            {/* Step 3 — Review */}
+            {step === 3 && (
+              <Card title="Step 3 - ตรวจสอบผลลัพธ์">
                 {status === "processing" && (
                   <div className="space-y-4 py-8">
                     <div className="flex items-center justify-center">
@@ -492,9 +435,7 @@ export default function Home() {
                       <StatCard label="อนุมาน" value={inferred} color="amber" />
                       <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
                     </div>
-
                     <ResultsTable rows={results} onChange={handleResultsChange} />
-
                     <div className="flex gap-3 pt-4 border-t border-slate-100">
                       <NavBtn onClick={handleDownload} disabled={modal.type === "loading"}>
                         <Download className="w-4 h-4" />
@@ -506,7 +447,8 @@ export default function Home() {
               </Card>
             )}
 
-            {step === 5 && (
+            {/* Step 4 — Done */}
+            {step === 4 && (
               <Card title="เสร็จสิ้น!">
                 <div className="text-center py-10 space-y-4">
                   <div className="flex justify-center gap-2 text-5xl">
@@ -536,15 +478,35 @@ export default function Home() {
   );
 }
 
-function DownloadModal({
-  state,
-  onClose,
-}: {
-  state: ModalState;
-  onClose: () => void;
-}) {
-  if (state.type === "hidden") return null;
+/* ─── Sub-components ─────────────────────────────────────────────────────── */
 
+function TabBtn({
+  children,
+  active,
+  onClick,
+}: {
+  children: React.ReactNode;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        flex items-center gap-2 px-5 py-3.5 text-sm font-semibold border-b-2 transition-all
+        ${active
+          ? "border-[#E91E8C] text-[#E91E8C]"
+          : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
+        }
+      `}
+    >
+      {children}
+    </button>
+  );
+}
+
+function DownloadModal({ state, onClose }: { state: ModalState; onClose: () => void }) {
+  if (state.type === "hidden") return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
@@ -561,7 +523,6 @@ function DownloadModal({
               </div>
             </>
           )}
-
           {state.type === "success" && (
             <>
               <div className="flex justify-center">
@@ -583,7 +544,6 @@ function DownloadModal({
               </button>
             </>
           )}
-
           {state.type === "error" && (
             <>
               <div className="flex justify-center">
@@ -625,10 +585,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function NavBtn({
-  children,
-  onClick,
-  disabled,
-  variant = "primary",
+  children, onClick, disabled, variant = "primary",
 }: {
   children: React.ReactNode;
   onClick: () => void;
@@ -653,15 +610,7 @@ function NavBtn({
   );
 }
 
-function StatCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: "green" | "amber" | "red";
-}) {
+function StatCard({ label, value, color }: { label: string; value: number; color: "green" | "amber" | "red" }) {
   const colors = {
     green: "bg-green-50 border-green-200 text-green-700",
     amber: "bg-amber-50 border-amber-200 text-amber-700",
