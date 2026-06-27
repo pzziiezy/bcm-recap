@@ -578,7 +578,7 @@ export default function Home() {
       </div>
 
       {/* Fixed queue panel — overlays content, doesn't affect layout */}
-      {view === "main" && jobs.length > 0 && (
+      {jobs.length > 0 && (
         <FixedQueuePanel
           jobs={jobs}
           open={queuePanelOpen}
