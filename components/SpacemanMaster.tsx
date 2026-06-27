@@ -28,10 +28,10 @@ const PAGE_SIZE = 100;
 const TREE_COLS = ["PLANOFOLDER02", "PLANOFOLDER03", "PLANOFOLDER04", "PLANOGRAM"] as const;
 
 const LEVEL_COLORS = [
-  "text-slate-800 font-semibold text-xs",
-  "text-slate-700 font-medium text-xs",
-  "text-slate-600 text-xs",
-  "text-slate-500 text-xs",
+  "text-[#be185d] font-semibold text-xs",
+  "text-[#0369a1] font-medium text-xs",
+  "text-[#c2410c] text-xs",
+  "text-[#15803d] text-xs",
 ];
 const LEVEL_INDENT = ["pl-2", "pl-5", "pl-8", "pl-11"];
 const LEVEL_DOT = ["bg-[#E91E8C]", "bg-[#00A6E2]", "bg-[#F15A22]", "bg-[#72BF44]"];
