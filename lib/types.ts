@@ -8,16 +8,19 @@ export interface SubclassInfo {
   subclassCode: string;
   subclassName: string;
   sourceFile: string;
+  colDF: string;       // col DF from 100 ช่อง → RECAP col N (index 13)
 }
 
 export type ConfidenceLevel = "confirmed" | "inferred" | "not_found";
 
 export interface FilledData {
-  division: string;    // F
-  dept: string;        // G
-  subDept: string;     // H
-  cls: string;         // I
-  planogram: string;   // J
+  division: string;    // F  (index 5)
+  dept: string;        // G  (index 6)
+  subDept: string;     // H  (index 7)
+  cls: string;         // I  (index 8)
+  planogram: string;   // J  (index 9)  ← DATA_SPACEMAN col D
+  colN: string;        // N  (index 13) ← 100 ช่อง col DF
+  colO: string;        // O  (index 14) ← DATA_SPACEMAN col AL
 }
 
 export interface ProcessedRow extends MissingRow {

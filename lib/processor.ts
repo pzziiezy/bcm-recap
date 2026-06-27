@@ -51,7 +51,9 @@ function buildRecapCodes(h: HierarchyNames): FilledData {
     dept: `${div}${dep}: ${depName}`,
     subDept: `${div}${dep}${sub}: ${subName}`,
     cls: `${div}${dep}${sub}${cls}: ${clsName}`,
-    planogram: "", // filled later
+    planogram: "", // filled later by parsePlanogramLookup col D
+    colN: "",      // filled later by parseXlsbFiles col DF
+    colO: "",      // filled later by parsePlanogramLookup col AL
   };
 }
 
@@ -128,6 +130,7 @@ export async function parseXlsbFiles(
               subclassName:
                 subclassNameCol >= 0 ? cellVal(ws, r, subclassNameCol) : "",
               sourceFile: file.name,
+              colDF: cellVal(ws, r, 109), // col DF (0-based index 109) → RECAP col N
             });
           }
         }
@@ -177,13 +180,18 @@ export async function buildStructureLookup(
   return map;
 }
 
-// ─── Step 4: Parse DATA_SPACEMAN → subdept prefix → planogram ─────────────
+export interface PlanogramEntry {
+  planogram: string; // most-frequent value from col D (index 3)
+  colAL: string;     // most-frequent value from col AL (index 37)
+}
+
+// ─── Step 4: Parse DATA_SPACEMAN → subdept prefix → planogram + colAL ────
 
 export async function parsePlanogramLookup(
   file: File,
   onProgress?: (pct: number) => void
-): Promise<Map<string, string>> {
-  const map = new Map<string, string>(); // key = 6-digit subdept code
+): Promise<Map<string, PlanogramEntry>> {
+  const map = new Map<string, PlanogramEntry>(); // key = 6-digit subdept code
 
   const buf = await file.arrayBuffer();
   onProgress?.(20);
@@ -201,44 +209,56 @@ export async function parsePlanogramLookup(
 
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
 
-  // Find SUBCATEGORY and PLANOGRAM columns from header row 0
+  // Find SUBCATEGORY column by header name (position may vary)
   let subcatCol = -1;
-  let plogCol = -1;
   for (let c = 0; c <= range.e.c; c++) {
-    const h = cellVal(ws, 0, c);
-    if (h === "SUBCATEGORY") subcatCol = c;
-    if (h === "PLANOGRAM") plogCol = c;
+    if (cellVal(ws, 0, c) === "SUBCATEGORY") { subcatCol = c; break; }
   }
-  if (subcatCol < 0 || plogCol < 0) return map;
+  if (subcatCol < 0) return map;
 
-  const freq = new Map<string, Map<string, number>>();
+  // Planogram: col D (fixed index 3) — new format
+  // ColAL: col AL (fixed index 37)
+  const COL_D = 3;
+  const COL_AL = 37;
+
+  const freqPlog = new Map<string, Map<string, number>>();
+  const freqAL   = new Map<string, Map<string, number>>();
 
   for (let r = 1; r <= range.e.r; r++) {
     const subcat = cellVal(ws, r, subcatCol); // e.g. "0420600103: CRACKERS"
-    const plog = cellVal(ws, r, plogCol); // e.g. "BISCUITS_4B_H180"
-    if (!subcat || !plog) continue;
+    if (!subcat) continue;
 
     const prefix = subcat.slice(0, 6); // "042060"
-    // Take only the root name (before first underscore)
-    const root = plog.split("_")[0].trim();
-    if (!root) continue;
 
-    if (!freq.has(prefix)) freq.set(prefix, new Map());
-    const m = freq.get(prefix)!;
-    m.set(root, (m.get(root) || 0) + 1);
+    const plog = cellVal(ws, r, COL_D);
+    if (plog) {
+      if (!freqPlog.has(prefix)) freqPlog.set(prefix, new Map());
+      const m = freqPlog.get(prefix)!;
+      m.set(plog, (m.get(plog) || 0) + 1);
+    }
+
+    const al = cellVal(ws, r, COL_AL);
+    if (al) {
+      if (!freqAL.has(prefix)) freqAL.set(prefix, new Map());
+      const m = freqAL.get(prefix)!;
+      m.set(al, (m.get(al) || 0) + 1);
+    }
   }
 
-  // Pick most-frequent planogram root per subdept prefix
-  for (const [prefix, counts] of freq.entries()) {
-    let best = "";
-    let bestCount = 0;
-    for (const [root, count] of counts.entries()) {
-      if (count > bestCount) {
-        best = root;
-        bestCount = count;
-      }
+  const mostFrequent = (freq: Map<string, number>): string => {
+    let best = ""; let bestCount = 0;
+    for (const [val, count] of freq.entries()) {
+      if (count > bestCount) { best = val; bestCount = count; }
     }
-    map.set(prefix, best);
+    return best;
+  };
+
+  const allPrefixes = new Set([...freqPlog.keys(), ...freqAL.keys()]);
+  for (const prefix of allPrefixes) {
+    map.set(prefix, {
+      planogram: freqPlog.has(prefix) ? mostFrequent(freqPlog.get(prefix)!) : "",
+      colAL:     freqAL.has(prefix)   ? mostFrequent(freqAL.get(prefix)!)   : "",
+    });
   }
 
   onProgress?.(100);
@@ -251,7 +271,7 @@ export function processRows(
   missing: MissingRow[],
   barcodeMap: Map<string, SubclassInfo>,
   structureMap: Map<string, HierarchyNames>,
-  planogramMap: Map<string, string>
+  planogramMap: Map<string, PlanogramEntry>
 ): ProcessedRow[] {
   return missing.map((row) => {
     const info = barcodeMap.get(row.barcode);
@@ -278,12 +298,12 @@ export function processRows(
 
     const filled = buildRecapCodes(hierarchy);
     const subdeptPrefix = info.subclassCode.slice(0, 6); // e.g. "042060"
-    filled.planogram = planogramMap.get(subdeptPrefix) || "";
+    const entry = planogramMap.get(subdeptPrefix);
+    filled.planogram = entry?.planogram || "";
+    filled.colN      = info.colDF || "";        // 100 ช่อง col DF → RECAP col N
+    filled.colO      = entry?.colAL || "";      // DATA_SPACEMAN col AL → RECAP col O
 
-    const confidence =
-      filled.planogram
-        ? "confirmed"
-        : "inferred";
+    const confidence = filled.planogram ? "confirmed" : "inferred";
 
     return {
       ...row,
@@ -316,11 +336,13 @@ export function applyAndDownload(
       ws[addr] = { t: "s", v };
     };
 
-    write(5, data.division || "");
-    write(6, data.dept || "");
-    write(7, data.subDept || "");
-    write(8, data.cls || "");
-    write(9, data.planogram || "");
+    write(5,  data.division  || "");
+    write(6,  data.dept      || "");
+    write(7,  data.subDept   || "");
+    write(8,  data.cls       || "");
+    write(9,  data.planogram || ""); // J ← DATA_SPACEMAN col D
+    write(13, data.colN      || ""); // N ← 100 ช่อง col DF
+    write(14, data.colO      || ""); // O ← DATA_SPACEMAN col AL
   }
 
   XLSX.writeFile(wb, "RECAP_filled.xlsx");

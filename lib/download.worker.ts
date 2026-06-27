@@ -50,6 +50,14 @@ function applyRows(
       t: "s",
       v: data.planogram ?? "",
     };
+    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 13 })] = {
+      t: "s",
+      v: data.colN ?? "",
+    };
+    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 14 })] = {
+      t: "s",
+      v: data.colO ?? "",
+    };
   }
 }
 
