@@ -544,8 +544,8 @@ export default function Home() {
             )}
           </div>
 
-          {/* ── Queue panel (sticky, right side) ─────────────────────── */}
-          {jobs.length > 0 && (
+          {/* ── Queue panel (sticky, right side) — main tab only ────── */}
+          {view === "main" && jobs.length > 0 && (
             <div className="w-72 flex-shrink-0 sticky top-4">
               <JobQueuePanel
                 jobs={jobs}
