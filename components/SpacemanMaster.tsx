@@ -18,7 +18,11 @@ export function formatDateTime(isoString: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-interface Props { onFileInfoChange: (info: DriveFileInfo | null) => void; }
+interface Props {
+  onFileInfoChange: (info: DriveFileInfo | null) => void;
+  /** True when this tab is visible — needed to measure frozen-column offsets */
+  isVisible?: boolean;
+}
 
 type DataRow = Record<string, string>;
 type TreeNode = { count: number; children: Map<string, TreeNode> };
@@ -36,7 +40,7 @@ const LEVEL_COLORS = [
 const LEVEL_INDENT = ["pl-2", "pl-5", "pl-8", "pl-11"];
 const LEVEL_DOT = ["bg-[#E91E8C]", "bg-[#00A6E2]", "bg-[#F15A22]", "bg-[#72BF44]"];
 
-export default function SpacemanMaster({ onFileInfoChange }: Props) {
+export default function SpacemanMaster({ onFileInfoChange, isVisible = false }: Props) {
   // File meta & table data
   const [latestFile, setLatestFile] = useState<DriveFileInfo | null>(null);
   const [loadingMeta, setLoadingMeta] = useState(true);
@@ -404,9 +408,11 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
 
   const clearTreeSel = () => { setTreeSel({}); setPage(0); };
 
-  // Measure frozen column widths to compute cumulative sticky left offsets
+  // Measure frozen column widths to compute cumulative sticky left offsets.
+  // Must depend on isVisible: offsetWidth returns 0 when display:none, so we
+  // re-measure the moment the tab becomes visible.
   useLayoutEffect(() => {
-    if (frozenHeaders.length === 0) {
+    if (!isVisible || frozenHeaders.length === 0) {
       setFrozenLeftOffsets({});
       return;
     }
@@ -418,7 +424,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     }
     setFrozenLeftOffsets(offsets);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frozenHeaders, page]);
+  }, [frozenHeaders, page, isVisible]);
 
   const toggleExpand = (pathKey: string) => {
     setExpanded((prev) => {
