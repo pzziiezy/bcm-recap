@@ -279,6 +279,40 @@ export async function parsePlanogramLookup(
   return map;
 }
 
+// ─── Extract existing non-empty values from RECAP cols F-J, N, O ──────────
+
+export function extractExistingValues(
+  wb: XLSX.WorkBook
+): Partial<Record<string, string[]>> {
+  const ws = wb.Sheets["NEW SCM"];
+  if (!ws) return {};
+
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+  const colMap: Record<string, number> = {
+    division: 5,
+    dept: 6,
+    subDept: 7,
+    cls: 8,
+    planogram: 9,
+    colN: 13,
+    colO: 14,
+  };
+
+  const sets: Record<string, Set<string>> = {};
+  for (const key of Object.keys(colMap)) sets[key] = new Set();
+
+  for (let r = 4; r <= range.e.r; r++) {
+    for (const [key, c] of Object.entries(colMap)) {
+      const v = cellVal(ws, r, c);
+      if (v) sets[key].add(v);
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(sets).map(([k, s]) => [k, [...s].sort()])
+  );
+}
+
 // ─── Step 5: Combine everything ────────────────────────────────────────────
 
 export function processRows(

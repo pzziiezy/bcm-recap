@@ -6,6 +6,8 @@ import type { ProcessedRow, FilledData } from "@/lib/types";
 interface Props {
   rows: ProcessedRow[];
   onChange: (updated: ProcessedRow[]) => void;
+  /** Pre-populated unique values from the full RECAP file for each column */
+  externalSuggestions?: Partial<Record<string, string[]>>;
 }
 
 const CONFIDENCE_META = {
@@ -30,21 +32,23 @@ const CONFIDENCE_META = {
 };
 
 const FIELDS: { key: keyof FilledData; col: string }[] = [
-  { key: "division", col: "F — DIVISION" },
-  { key: "dept", col: "G — DEPT" },
-  { key: "subDept", col: "H — SUB-DEPT" },
-  { key: "cls", col: "I — Class" },
+  { key: "division",  col: "F — DIVISION"  },
+  { key: "dept",      col: "G — DEPT"      },
+  { key: "subDept",   col: "H — SUB-DEPT"  },
+  { key: "cls",       col: "I — Class"     },
   { key: "planogram", col: "J — PLANOGRAM" },
+  { key: "colN",      col: "N"             },
+  { key: "colO",      col: "O"             },
 ];
 
-export default function ResultsTable({ rows, onChange }: Props) {
+export default function ResultsTable({ rows, onChange, externalSuggestions }: Props) {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState<Partial<FilledData>>({});
 
-  // รวบรวมค่า unique ในแต่ละคอลัมน์จากทุก row สำหรับ autocomplete
+  // Merge suggestions: external (full RECAP file) + values from current rows
   const suggestions = useMemo(() => {
     const map = Object.fromEntries(
-      FIELDS.map((f) => [f.key, new Set<string>()])
+      FIELDS.map((f) => [f.key, new Set<string>(externalSuggestions?.[f.key] ?? [])])
     ) as Record<keyof FilledData, Set<string>>;
 
     for (const row of rows) {
@@ -56,7 +60,7 @@ export default function ResultsTable({ rows, onChange }: Props) {
     return Object.fromEntries(
       FIELDS.map((f) => [f.key, [...map[f.key]].sort()])
     ) as Record<keyof FilledData, string[]>;
-  }, [rows]);
+  }, [rows, externalSuggestions]);
 
   const startEdit = (i: number) => {
     const r = rows[i];
@@ -76,13 +80,13 @@ export default function ResultsTable({ rows, onChange }: Props) {
 
   const summary = {
     confirmed: rows.filter((r) => r.confidence === "confirmed").length,
-    inferred: rows.filter((r) => r.confidence === "inferred").length,
+    inferred:  rows.filter((r) => r.confidence === "inferred").length,
     not_found: rows.filter((r) => r.confidence === "not_found").length,
   };
 
   return (
     <div className="space-y-6">
-      {/* Datalists — hidden, ใช้โดย input ที่มี list= attribute */}
+      {/* Datalists for autocomplete */}
       {FIELDS.map(({ key }) => (
         <datalist key={key} id={`dl-${key}`}>
           {suggestions[key].map((v) => (
@@ -109,15 +113,15 @@ export default function ResultsTable({ rows, onChange }: Props) {
         <table className="min-w-full text-sm">
           <thead>
             <tr className="bg-gradient-to-r from-pink-50 to-orange-50 text-slate-700">
-              <th className="px-3 py-3 text-left font-semibold">สถานะ</th>
-              <th className="px-3 py-3 text-left font-semibold">Barcode</th>
-              <th className="px-3 py-3 text-left font-semibold">ชื่อสินค้า</th>
-              <th className="px-3 py-3 text-left font-semibold">F — DIVISION</th>
-              <th className="px-3 py-3 text-left font-semibold">G — DEPT</th>
-              <th className="px-3 py-3 text-left font-semibold">H — SUB-DEPT</th>
-              <th className="px-3 py-3 text-left font-semibold">I — Class</th>
-              <th className="px-3 py-3 text-left font-semibold">J — PLANOGRAM</th>
-              <th className="px-3 py-3 text-center font-semibold">แก้ไข</th>
+              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">สถานะ</th>
+              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">Barcode</th>
+              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">ชื่อสินค้า</th>
+              {FIELDS.map(({ col }) => (
+                <th key={col} className="px-3 py-3 text-left font-semibold whitespace-nowrap">
+                  {col}
+                </th>
+              ))}
+              <th className="px-3 py-3 text-center font-semibold whitespace-nowrap">แก้ไข</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">

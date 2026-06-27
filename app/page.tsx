@@ -33,6 +33,7 @@ import {
   buildStructureLookup,
   parsePlanogramLookup,
   processRows,
+  extractExistingValues,
 } from "@/lib/processor";
 import type { ProcessedRow } from "@/lib/types";
 
@@ -77,6 +78,7 @@ export default function Home() {
   const [driveFileInfo, setDriveFileInfo] = useState<DriveFileInfo | null>(null);
   const [driveLoading, setDriveLoading] = useState(true);
   const [results, setResults] = useState<ProcessedRow[]>([]);
+  const [recapSuggestions, setRecapSuggestions] = useState<Partial<Record<string, string[]>>>({});
 
   // Queue state (display only — heavy data lives in refs)
   const [jobs, setJobs] = useState<BuildJob[]>([]);
@@ -252,6 +254,7 @@ export default function Home() {
       recapBufRef.current = recapBuf.slice(0);
       const wb = XLSX.read(recapBuf, { type: "array" });
       const missing = parseMissingRows(wb);
+      setRecapSuggestions(extractExistingValues(wb));
 
       setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล — กำลังค้นหาในไฟล์ 100 ช่อง...`);
       setPct(25);
@@ -261,7 +264,7 @@ export default function Home() {
         buildStructureLookup(xlsbFiles),
       ]);
 
-      setStatusMsg("กำลังดาวน์โหลด DATA_SPACEMAN จาก Google Drive...");
+      setStatusMsg("กำลังตรวจสอบข้อมูลจาก DATA_SPACEMAN...");
       setPct(45);
       const res = await fetch(`/api/spaceman/file?id=${driveFileInfo.id}`);
       if (!res.ok) throw new Error("ไม่สามารถดาวน์โหลดไฟล์ DATA_SPACEMAN จาก Google Drive ได้");
@@ -304,6 +307,7 @@ export default function Home() {
     setRecapFiles([]);
     setXlsbFiles([]);
     setResults([]);
+    setRecapSuggestions({});
   };
 
   const confirmed = results.filter((r) => r.confidence === "confirmed").length;
@@ -495,7 +499,7 @@ export default function Home() {
                           <StatCard label="อนุมาน" value={inferred} color="amber" />
                           <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
                         </div>
-                        <ResultsTable rows={results} onChange={handleResultsChange} />
+                        <ResultsTable rows={results} onChange={handleResultsChange} externalSuggestions={recapSuggestions} />
                         <div className="flex gap-3 pt-4 border-t border-slate-100">
                           <NavBtn onClick={enqueueJob}>
                             <Plus className="w-4 h-4" />
