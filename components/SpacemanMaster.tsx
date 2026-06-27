@@ -51,6 +51,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const [page, setPage] = useState(0);
 
   const [showUpload, setShowUpload] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
   const [uploadError, setUploadError] = useState("");
@@ -88,6 +89,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
               throw new Error(data.error || "อัปโหลดล้มเหลว");
             }
             setUploadStatus("success");
+            setSelectedFile(null);
             const newFile = await fetchLatest();
             if (newFile) loadData(newFile);
           } catch (err) {
@@ -183,7 +185,17 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleUpload = (file: File) => {
+  // Step 1: user picks a file — just store it, don't trigger OAuth yet
+  const handleFiles = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setSelectedFile(files[0]);
+    setUploadStatus("idle");
+    setUploadError("");
+  };
+
+  // Step 2: user clicks the upload button — trigger OAuth popup (direct user gesture)
+  const handleUpload = () => {
+    if (!selectedFile) return;
     if (!gisReady || !tokenClientRef.current) {
       setUploadStatus("error");
       setUploadError("Google Identity Services ยังไม่พร้อม กรุณารีเฟรชหน้าแล้วลองใหม่");
@@ -192,13 +204,8 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     setUploading(true);
     setUploadStatus("idle");
     setUploadError("");
-    pendingFileRef.current = file;
+    pendingFileRef.current = selectedFile;
     tokenClientRef.current.requestAccessToken({ prompt: "" });
-  };
-
-  const handleFiles = (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    handleUpload(files[0]);
   };
 
   const onDrop = (e: DragEvent) => {
@@ -278,6 +285,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
         {/* Upload panel (collapsible) */}
         {showUpload && (
           <div className="px-6 pb-6 space-y-3 border-t border-pink-50 pt-4">
+            {/* Step 1: File picker drop zone */}
             <div
               onClick={() => !uploading && inputRef.current?.click()}
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -287,6 +295,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                 flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 transition-all duration-200
                 ${uploading ? "opacity-60 cursor-not-allowed border-pink-200 bg-pink-50/30"
                   : dragging ? "border-[#E91E8C] bg-pink-50 scale-[1.01] cursor-pointer"
+                  : selectedFile ? "border-green-300 bg-green-50/40 cursor-pointer"
                   : "border-pink-200 bg-pink-50/30 hover:border-[#E91E8C] hover:bg-pink-50 cursor-pointer"}
               `}
             >
@@ -295,20 +304,42 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                 type="file"
                 accept=".xlsx,.xls"
                 className="hidden"
-                onChange={(e) => handleFiles(e.target.files)}
+                onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
               />
               {uploading ? (
                 <div className="animate-spin rounded-full h-8 w-8 border-4 border-pink-200 border-t-[#E91E8C]" />
+              ) : selectedFile ? (
+                <CheckCircle className="w-8 h-8 text-green-500" />
               ) : (
                 <CloudUpload className={`w-8 h-8 ${dragging ? "text-[#E91E8C]" : "text-pink-300"}`} />
               )}
               <div className="text-center">
-                <p className="font-semibold text-slate-700 text-sm">DATA_SPACEMAN.xlsx</p>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  {uploading ? "กำลังอัปโหลดไปยัง Google Drive..." : "คลิกหรือลากไฟล์มาวางที่นี่"}
-                </p>
+                {uploading ? (
+                  <p className="text-sm text-slate-500">กำลังอัปโหลดไปยัง Google Drive...</p>
+                ) : selectedFile ? (
+                  <>
+                    <p className="font-semibold text-green-700 text-sm">{selectedFile.name}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">คลิกเพื่อเลือกไฟล์ใหม่</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold text-slate-700 text-sm">เลือกไฟล์ DATA_SPACEMAN</p>
+                    <p className="text-xs text-slate-400 mt-0.5">คลิกหรือลากไฟล์ .xlsx มาวางที่นี่</p>
+                  </>
+                )}
               </div>
             </div>
+
+            {/* Step 2: Confirm upload button (only shows after file selected) */}
+            {selectedFile && !uploading && uploadStatus !== "success" && (
+              <button
+                onClick={handleUpload}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] transition-all shadow-sm"
+              >
+                <CloudUpload className="w-4 h-4" />
+                อัปโหลดขึ้น Google Drive
+              </button>
+            )}
 
             {uploadStatus === "success" && (
               <div className="flex items-center gap-2 px-4 py-2.5 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm">
