@@ -37,8 +37,8 @@ const FIELDS: { key: keyof FilledData; col: string }[] = [
   { key: "subDept",   col: "H — SUB-DEPT"  },
   { key: "cls",       col: "I — Class"     },
   { key: "planogram", col: "J — PLANOGRAM" },
-  { key: "colN",      col: "N"             },
-  { key: "colO",      col: "O"             },
+  { key: "colN",      col: "N — MBC Forecast sale"              },
+  { key: "colO",      col: "O — Shelf stock ON POG (Piece) 100%" },
 ];
 
 export default function ResultsTable({ rows, onChange, externalSuggestions }: Props) {
