@@ -1,107 +1,65 @@
 import * as XLSX from "xlsx";
 import type { DownloadRow } from "./download";
 
-const workerScope = self as typeof self & {
-  postMessage: (message: unknown, transfer?: Transferable[]) => void;
+const ctx = self as unknown as {
+  postMessage(msg: unknown, transfer?: Transferable[]): void;
 };
 
-type InitMessage = {
-  type: "init";
-  buffer: ArrayBuffer;
-};
+type InMsg =
+  | { type: "init"; buffer: ArrayBuffer }
+  | { type: "build"; rows: DownloadRow[] };
 
-type BuildMessage = {
-  type: "build";
-  jobId: number;
-  rows: DownloadRow[];
-};
+let template: ArrayBuffer | null = null;
 
-type WorkerMessage = InitMessage | BuildMessage;
-
-let templateBuffer: ArrayBuffer | null = null;
-
-function applyRows(
-  ws: XLSX.WorkSheet,
-  rows: DownloadRow[]
-): void {
+function applyRows(ws: XLSX.WorkSheet, rows: DownloadRow[]): void {
   for (const row of rows) {
     const data = row.override
       ? { ...(row.filled ?? {}), ...row.override }
       : row.filled;
     if (!data) continue;
-
-    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 5 })] = {
-      t: "s",
-      v: data.division ?? "",
-    };
-    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 6 })] = {
-      t: "s",
-      v: data.dept ?? "",
-    };
-    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 7 })] = {
-      t: "s",
-      v: data.subDept ?? "",
-    };
-    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 8 })] = {
-      t: "s",
-      v: data.cls ?? "",
-    };
-    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 9 })] = {
-      t: "s",
-      v: data.planogram ?? "",
-    };
-    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 13 })] = {
-      t: "s",
-      v: data.colN ?? "",
-    };
-    ws[XLSX.utils.encode_cell({ r: row.rowIndex, c: 14 })] = {
-      t: "s",
-      v: data.colO ?? "",
-    };
+    const w = (c: number, v: string) =>
+      (ws[XLSX.utils.encode_cell({ r: row.rowIndex, c })] = { t: "s", v });
+    w(5,  data.division  ?? "");
+    w(6,  data.dept      ?? "");
+    w(7,  data.subDept   ?? "");
+    w(8,  data.cls       ?? "");
+    w(9,  data.planogram ?? "");
+    w(13, data.colN      ?? "");
+    w(14, data.colO      ?? "");
   }
 }
 
-addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
-  const message = event.data;
+addEventListener("message", (e: MessageEvent<InMsg>) => {
+  const msg = e.data;
 
-  if (message.type === "init") {
-    templateBuffer = message.buffer;
-    workerScope.postMessage({ type: "init", ok: true });
+  if (msg.type === "init") {
+    template = msg.buffer;
+    ctx.postMessage({ type: "init_ok" });
     return;
   }
 
-  if (!templateBuffer) {
-    workerScope.postMessage({
-      type: "build",
-      jobId: message.jobId,
-      ok: false,
-      error: "Template workbook is not initialized",
-    });
-    return;
-  }
+  if (msg.type === "build") {
+    if (!template) {
+      ctx.postMessage({ type: "error", message: "Template not initialized" });
+      return;
+    }
+    try {
+      ctx.postMessage({ type: "progress", pct: 10 });
 
-  try {
-    const wb = XLSX.read(templateBuffer, { type: "array" });
-    const ws = wb.Sheets["NEW SCM"];
-    if (!ws) throw new Error('Sheet "NEW SCM" not found');
+      const wb = XLSX.read(template, { type: "array" });
+      const ws = wb.Sheets["NEW SCM"];
+      if (!ws) throw new Error('Sheet "NEW SCM" not found');
 
-    applyRows(ws, message.rows);
+      ctx.postMessage({ type: "progress", pct: 35 });
+      applyRows(ws, msg.rows);
 
-    const output = XLSX.write(wb, {
-      type: "array",
-      bookType: "xlsx",
-    }) as ArrayBuffer;
+      ctx.postMessage({ type: "progress", pct: 70 });
+      const out = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
 
-    workerScope.postMessage(
-      { type: "build", jobId: message.jobId, ok: true, buffer: output },
-      [output]
-    );
-  } catch (error) {
-    workerScope.postMessage({
-      type: "build",
-      jobId: message.jobId,
-      ok: false,
-      error: String(error),
-    });
+      ctx.postMessage({ type: "progress", pct: 95 });
+      ctx.postMessage({ type: "done", buffer: out }, [out]);
+    } catch (err) {
+      ctx.postMessage({ type: "error", message: String(err) });
+    }
   }
 });
