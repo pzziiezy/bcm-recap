@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useState, useEffect, useMemo, DragEvent } from "react";
+import { useRef, useState, useEffect, useLayoutEffect, useMemo, DragEvent } from "react";
 import {
   CloudUpload, CheckCircle, XCircle, Clock, RefreshCw, Search,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Database,
   ArrowUpDown, ArrowUp, ArrowDown, Filter, LayoutList, Network, X,
-  Eye, Save,
+  Eye, Save, Pin,
 } from "lucide-react";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
@@ -66,6 +66,15 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const [colPickerSearch, setColPickerSearch] = useState("");
   const [savedMsg, setSavedMsg] = useState(false);
   const colPickerRef = useRef<HTMLDivElement>(null);
+
+  // Freeze columns
+  const [frozenCols, setFrozenCols] = useState<Set<string>>(new Set());
+  const [showFreezePicker, setShowFreezePicker] = useState(false);
+  const [freezePickerSearch, setFreezePickerSearch] = useState("");
+  const [freezeSavedMsg, setFreezeSavedMsg] = useState(false);
+  const [frozenLeftOffsets, setFrozenLeftOffsets] = useState<Record<string, number>>({});
+  const freezePickerRef = useRef<HTMLDivElement>(null);
+  const thRefs = useRef<Map<string, HTMLTableCellElement>>(new Map());
 
   // Upload
   const [showUpload, setShowUpload] = useState(false);
@@ -219,10 +228,15 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   useEffect(() => {
     if (headers.length === 0) return;
     try {
-      const saved = localStorage.getItem("spaceman_hidden_cols");
-      if (saved) {
-        const arr: string[] = JSON.parse(saved);
+      const savedHidden = localStorage.getItem("spaceman_hidden_cols");
+      if (savedHidden) {
+        const arr: string[] = JSON.parse(savedHidden);
         setHiddenCols(new Set(arr.filter((h) => headers.includes(h))));
+      }
+      const savedFrozen = localStorage.getItem("spaceman_frozen_cols");
+      if (savedFrozen) {
+        const arr: string[] = JSON.parse(savedFrozen);
+        setFrozenCols(new Set(arr.filter((h) => headers.includes(h))));
       }
     } catch {}
   }, [headers]);
@@ -237,6 +251,16 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showColPicker]);
+
+  useEffect(() => {
+    if (!showFreezePicker) return;
+    const handler = (e: MouseEvent) => {
+      if (freezePickerRef.current && !freezePickerRef.current.contains(e.target as Node))
+        setShowFreezePicker(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showFreezePicker]);
 
   // ── Upload handlers ───────────────────────────────────────────────────────
   const handleFiles = (files: FileList | null) => {
@@ -332,6 +356,19 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
 
   const visibleHeaders = useMemo(() => headers.filter((h) => !hiddenCols.has(h)), [headers, hiddenCols]);
 
+  const frozenHeaders = useMemo(
+    () => visibleHeaders.filter((h) => frozenCols.has(h)),
+    [visibleHeaders, frozenCols]
+  );
+  const scrollableHeaders = useMemo(
+    () => visibleHeaders.filter((h) => !frozenCols.has(h)),
+    [visibleHeaders, frozenCols]
+  );
+  const allDisplayHeaders = useMemo(
+    () => [...frozenHeaders, ...scrollableHeaders],
+    [frozenHeaders, scrollableHeaders]
+  );
+
   const toggleCol = (col: string) =>
     setHiddenCols((prev) => { const n = new Set(prev); n.has(col) ? n.delete(col) : n.add(col); return n; });
 
@@ -339,6 +376,18 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     localStorage.setItem("spaceman_hidden_cols", JSON.stringify([...hiddenCols]));
     setSavedMsg(true);
     setTimeout(() => setSavedMsg(false), 2000);
+  };
+
+  const toggleFrozenCol = (col: string) =>
+    setFrozenCols((prev) => { const n = new Set(prev); n.has(col) ? n.delete(col) : n.add(col); return n; });
+
+  const unfreezeCol = (col: string) =>
+    setFrozenCols((prev) => { const n = new Set(prev); n.delete(col); return n; });
+
+  const saveFreezePrefs = () => {
+    localStorage.setItem("spaceman_frozen_cols", JSON.stringify([...frozenCols]));
+    setFreezeSavedMsg(true);
+    setTimeout(() => setFreezeSavedMsg(false), 2000);
   };
 
   // ── Tree handlers ─────────────────────────────────────────────────────────
@@ -354,6 +403,22 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   };
 
   const clearTreeSel = () => { setTreeSel({}); setPage(0); };
+
+  // Measure frozen column widths to compute cumulative sticky left offsets
+  useLayoutEffect(() => {
+    if (frozenHeaders.length === 0) {
+      setFrozenLeftOffsets({});
+      return;
+    }
+    const offsets: Record<string, number> = {};
+    let cumLeft = 0;
+    for (const h of frozenHeaders) {
+      offsets[h] = cumLeft;
+      cumLeft += thRefs.current.get(h)?.offsetWidth ?? 120;
+    }
+    setFrozenLeftOffsets(offsets);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frozenHeaders, page]);
 
   const toggleExpand = (pathKey: string) => {
     setExpanded((prev) => {
@@ -423,51 +488,90 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
         );
       });
 
+  // ── Sticky style helper for frozen columns ────────────────────────────────
+  const getStickyStyle = (h: string, zIndex: number): React.CSSProperties | undefined => {
+    if (!frozenCols.has(h)) return undefined;
+    const isLastFrozen = h === frozenHeaders[frozenHeaders.length - 1];
+    return {
+      position: "sticky",
+      left: frozenLeftOffsets[h] ?? 0,
+      zIndex,
+      ...(isLastFrozen ? { boxShadow: "2px 0 6px -2px rgba(0,0,0,0.10)" } : {}),
+    };
+  };
+
   // ── Shared table content ──────────────────────────────────────────────────
   const tableContent = (
     <>
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-slate-50 border-b border-slate-200">
-            {visibleHeaders.map((h) => (
-              <th
-                key={h}
-                onClick={() => handleSort(h)}
-                className="px-4 py-2.5 text-left text-xs font-semibold text-slate-600 whitespace-nowrap cursor-pointer select-none hover:bg-slate-100 transition-colors group"
-              >
-                <div className="flex items-center gap-1">
-                  {h}
-                  {sortCol === h
-                    ? sortDir === "asc" ? <ArrowUp className="w-3 h-3 text-[#E91E8C]" /> : <ArrowDown className="w-3 h-3 text-[#E91E8C]" />
-                    : <ArrowUpDown className="w-3 h-3 text-slate-300 group-hover:text-slate-400" />}
-                </div>
-              </th>
-            ))}
+            {allDisplayHeaders.map((h) => {
+              const isFrozen = frozenCols.has(h);
+              return (
+                <th
+                  key={h}
+                  ref={(el) => { if (el) thRefs.current.set(h, el); else thRefs.current.delete(h); }}
+                  onClick={() => handleSort(h)}
+                  style={getStickyStyle(h, 20)}
+                  className={`px-4 py-2.5 text-left text-xs font-semibold text-slate-600 whitespace-nowrap cursor-pointer select-none transition-colors group
+                    ${isFrozen ? "bg-pink-50 hover:bg-pink-100" : "bg-slate-50 hover:bg-slate-100"}`}
+                >
+                  <div className="flex items-center gap-1">
+                    {isFrozen && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); unfreezeCol(h); }}
+                        className="text-[#E91E8C] hover:text-red-500 transition-colors flex-shrink-0"
+                        title="ยกเลิก Freeze"
+                      >
+                        <Pin className="w-3 h-3" />
+                      </button>
+                    )}
+                    {h}
+                    {sortCol === h
+                      ? sortDir === "asc" ? <ArrowUp className="w-3 h-3 text-[#E91E8C]" /> : <ArrowDown className="w-3 h-3 text-[#E91E8C]" />
+                      : <ArrowUpDown className="w-3 h-3 text-slate-300 group-hover:text-slate-400" />}
+                  </div>
+                </th>
+              );
+            })}
           </tr>
           {showColFilters && (
             <tr className="bg-white border-b border-slate-200">
-              {visibleHeaders.map((h) => (
-                <th key={h} className="px-2 py-1.5">
-                  <input
-                    type="text"
-                    value={colFilters[h] || ""}
-                    onChange={(e) => handleColFilter(h, e.target.value)}
-                    placeholder="filter..."
-                    className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C] font-normal min-w-[80px]"
-                  />
-                </th>
-              ))}
+              {allDisplayHeaders.map((h) => {
+                const isFrozen = frozenCols.has(h);
+                return (
+                  <th key={h}
+                    style={isFrozen ? getStickyStyle(h, 10) : undefined}
+                    className={`px-2 py-1.5 ${isFrozen ? "bg-white" : ""}`}
+                  >
+                    <input
+                      type="text"
+                      value={colFilters[h] || ""}
+                      onChange={(e) => handleColFilter(h, e.target.value)}
+                      placeholder="filter..."
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C] font-normal min-w-[80px]"
+                    />
+                  </th>
+                );
+              })}
             </tr>
           )}
         </thead>
         <tbody className="divide-y divide-slate-100">
           {pageData.map((row, i) => (
-            <tr key={i} className="hover:bg-pink-50/40 transition-colors">
-              {visibleHeaders.map((h) => (
-                <td key={h} className="px-4 py-2 text-slate-700 whitespace-nowrap max-w-xs truncate">
-                  {search.trim() ? highlightMatch(row[h] || "", search) : (row[h] || "")}
-                </td>
-              ))}
+            <tr key={i} className="group hover:bg-pink-50/40 transition-colors">
+              {allDisplayHeaders.map((h) => {
+                const isFrozen = frozenCols.has(h);
+                return (
+                  <td key={h}
+                    style={isFrozen ? getStickyStyle(h, 1) : undefined}
+                    className={`px-4 py-2 text-slate-700 whitespace-nowrap max-w-xs truncate ${isFrozen ? "bg-white group-hover:bg-pink-50/40" : ""}`}
+                  >
+                    {search.trim() ? highlightMatch(row[h] || "", search) : (row[h] || "")}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
@@ -760,6 +864,88 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                       >
                         {savedMsg ? <CheckCircle className="w-3 h-3" /> : <Save className="w-3 h-3" />}
                         {savedMsg ? "บันทึกแล้ว!" : "บันทึกค่าเริ่มต้น"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Freeze columns picker */}
+              <div className="relative" ref={freezePickerRef}>
+                <button
+                  onClick={() => setShowFreezePicker((v) => !v)}
+                  className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                    showFreezePicker || frozenCols.size > 0
+                      ? "bg-pink-50 border-[#E91E8C] text-[#E91E8C]"
+                      : "border-slate-200 text-slate-500 hover:border-slate-300"
+                  }`}
+                >
+                  <Pin className="w-3.5 h-3.5" />
+                  Freeze
+                  {frozenCols.size > 0 && (
+                    <span className="bg-[#E91E8C] text-white rounded-full px-1.5 text-[10px] font-bold">
+                      {frozenCols.size}
+                    </span>
+                  )}
+                </button>
+
+                {showFreezePicker && (
+                  <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-xl border border-slate-200 shadow-xl w-72 overflow-hidden">
+                    {/* Picker header */}
+                    <div className="px-3 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-700">Freeze คอลัมน์</span>
+                      <button onClick={() => setFrozenCols(new Set())} className="text-[10px] text-slate-500 hover:text-red-500">ล้าง Freeze ทั้งหมด</button>
+                    </div>
+
+                    {/* Picker search */}
+                    <div className="px-3 py-2 border-b border-slate-100">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="ค้นหาชื่อคอลัมน์..."
+                          value={freezePickerSearch}
+                          onChange={(e) => setFreezePickerSearch(e.target.value)}
+                          className="w-full pl-7 pr-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Column list */}
+                    <div className="max-h-64 overflow-y-auto p-2 space-y-0.5">
+                      {visibleHeaders
+                        .filter((h) => !freezePickerSearch || h.toLowerCase().includes(freezePickerSearch.toLowerCase()))
+                        .map((h) => (
+                          <label key={h} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={frozenCols.has(h)}
+                              onChange={() => toggleFrozenCol(h)}
+                              className="accent-[#E91E8C] w-3.5 h-3.5 flex-shrink-0"
+                            />
+                            <span className={`text-xs flex-1 truncate ${frozenCols.has(h) ? "text-[#E91E8C] font-medium" : "text-slate-700"}`}>
+                              {h}
+                            </span>
+                            {frozenCols.has(h) && <Pin className="w-3 h-3 text-[#E91E8C] flex-shrink-0" />}
+                          </label>
+                        ))}
+                    </div>
+
+                    {/* Picker footer */}
+                    <div className="px-3 py-2.5 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
+                      <span className="text-[10px] text-slate-400">
+                        {frozenCols.size > 0 ? `${frozenCols.size} คอลัมน์ถูก Freeze` : "ยังไม่มีคอลัมน์ถูก Freeze"}
+                      </span>
+                      <button
+                        onClick={saveFreezePrefs}
+                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all font-medium ${
+                          freezeSavedMsg
+                            ? "bg-green-100 text-green-700 border border-green-200"
+                            : "bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] shadow-sm"
+                        }`}
+                      >
+                        {freezeSavedMsg ? <CheckCircle className="w-3 h-3" /> : <Save className="w-3 h-3" />}
+                        {freezeSavedMsg ? "บันทึกแล้ว!" : "บันทึกค่าเริ่มต้น"}
                       </button>
                     </div>
                   </div>

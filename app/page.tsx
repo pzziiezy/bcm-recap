@@ -36,8 +36,9 @@ import {
   parsePlanogramLookup,
   processRows,
   extractExistingValues,
+  extractHierarchy,
 } from "@/lib/processor";
-import type { ProcessedRow } from "@/lib/types";
+import type { ProcessedRow, HierarchyMap } from "@/lib/types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -83,6 +84,7 @@ export default function Home() {
   const [driveLoading, setDriveLoading] = useState(true);
   const [results, setResults] = useState<ProcessedRow[]>([]);
   const [recapSuggestions, setRecapSuggestions] = useState<Partial<Record<string, string[]>>>({});
+  const [recapHierarchy, setRecapHierarchy] = useState<HierarchyMap | null>(null);
 
   // Queue state (display only — heavy data lives in refs)
   const [jobs, setJobs] = useState<BuildJob[]>([]);
@@ -261,6 +263,7 @@ export default function Home() {
       const wb = XLSX.read(recapBuf, { type: "array" });
       const missing = parseMissingRows(wb);
       setRecapSuggestions(extractExistingValues(wb));
+      setRecapHierarchy(extractHierarchy(wb));
 
       setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล — กำลังค้นหาในไฟล์ 100 ช่อง...`);
       setPct(25);
@@ -314,6 +317,7 @@ export default function Home() {
     setXlsbFiles([]);
     setResults([]);
     setRecapSuggestions({});
+    setRecapHierarchy(null);
   };
 
   const confirmed = results.filter((r) => r.confidence === "confirmed").length;
@@ -507,7 +511,12 @@ export default function Home() {
                           <StatCard label="อนุมาน" value={inferred} color="amber" />
                           <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
                         </div>
-                        <ResultsTable rows={results} onChange={handleResultsChange} externalSuggestions={recapSuggestions} />
+                        <ResultsTable
+                          rows={results}
+                          onChange={handleResultsChange}
+                          externalSuggestions={recapSuggestions}
+                          hierarchyMap={recapHierarchy ?? undefined}
+                        />
                         <div className="flex gap-3 pt-4 border-t border-slate-100">
                           <NavBtn onClick={enqueueJob}>
                             <Plus className="w-4 h-4" />

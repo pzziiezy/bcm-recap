@@ -1,13 +1,16 @@
 "use client";
 import { useState, useMemo } from "react";
 import { CheckCircle, AlertTriangle, XCircle, Pencil, Save, X } from "lucide-react";
-import type { ProcessedRow, FilledData } from "@/lib/types";
+import type { ProcessedRow, FilledData, HierarchyMap } from "@/lib/types";
+import { getHierarchyOptions, isHierarchyKey } from "@/lib/hierarchy";
 
 interface Props {
   rows: ProcessedRow[];
   onChange: (updated: ProcessedRow[]) => void;
   /** Pre-populated unique values from the full RECAP file for each column */
   externalSuggestions?: Partial<Record<string, string[]>>;
+  /** Parent→child relationship map extracted from the RECAP file for cascading filters */
+  hierarchyMap?: HierarchyMap;
 }
 
 const CONFIDENCE_META = {
@@ -41,11 +44,11 @@ const FIELDS: { key: keyof FilledData; col: string }[] = [
   { key: "colO",      col: "O — Shelf stock ON POG (Piece) 100%" },
 ];
 
-export default function ResultsTable({ rows, onChange, externalSuggestions }: Props) {
+export default function ResultsTable({ rows, onChange, externalSuggestions, hierarchyMap }: Props) {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState<Partial<FilledData>>({});
 
-  // Merge suggestions: external (full RECAP file) + values from current rows
+  // Base suggestions: merge external (full RECAP scan) + values already in rows
   const suggestions = useMemo(() => {
     const map = Object.fromEntries(
       FIELDS.map((f) => [f.key, new Set<string>(externalSuggestions?.[f.key] ?? [])])
@@ -61,6 +64,26 @@ export default function ResultsTable({ rows, onChange, externalSuggestions }: Pr
       FIELDS.map((f) => [f.key, [...map[f.key]].sort()])
     ) as Record<keyof FilledData, string[]>;
   }, [rows, externalSuggestions]);
+
+  // Cascade-filtered options for hierarchy columns (live while editing)
+  const hierarchyOptions = useMemo(() => {
+    if (!hierarchyMap) return null;
+    return getHierarchyOptions(draft, hierarchyMap, suggestions);
+  }, [draft, hierarchyMap, suggestions]);
+
+  // Final datalist options: hierarchy-filtered for F/G/H/I, flat for the rest
+  const datalistOptions = useMemo(
+    () =>
+      Object.fromEntries(
+        FIELDS.map(({ key }) => [
+          key,
+          hierarchyOptions && isHierarchyKey(key)
+            ? hierarchyOptions[key]
+            : suggestions[key],
+        ])
+      ) as Record<keyof FilledData, string[]>,
+    [hierarchyOptions, suggestions]
+  );
 
   const startEdit = (i: number) => {
     const r = rows[i];
@@ -86,10 +109,10 @@ export default function ResultsTable({ rows, onChange, externalSuggestions }: Pr
 
   return (
     <div className="space-y-6">
-      {/* Datalists for autocomplete */}
+      {/* Datalists — hierarchy ones update live as the draft changes */}
       {FIELDS.map(({ key }) => (
         <datalist key={key} id={`dl-${key}`}>
-          {suggestions[key].map((v) => (
+          {datalistOptions[key].map((v) => (
             <option key={v} value={v} />
           ))}
         </datalist>

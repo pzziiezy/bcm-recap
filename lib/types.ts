@@ -38,3 +38,10 @@ export interface HierarchyNames {
   subdeptFull: string; // "60 BISCUITS"
   clsFull: string;     // "01 BISCUITS/ WAFERS"
 }
+
+/** Cascading parent→children relationships extracted from an existing RECAP file */
+export interface HierarchyMap {
+  divToDept: Record<string, string[]>; // DIVISION value → sorted DEPT values
+  deptToSub: Record<string, string[]>; // DEPT value → sorted SUB-DEPT values
+  subToCls:  Record<string, string[]>; // SUB-DEPT value → sorted CLASS values
+}

@@ -4,6 +4,7 @@ import type {
   SubclassInfo,
   ProcessedRow,
   HierarchyNames,
+  HierarchyMap,
   FilledData,
 } from "./types";
 
@@ -277,6 +278,48 @@ export async function parsePlanogramLookup(
 
   onProgress?.(100);
   return map;
+}
+
+// ─── Extract cascading hierarchy from RECAP cols F-I ──────────────────────
+
+export function extractHierarchy(wb: XLSX.WorkBook): HierarchyMap {
+  const ws = wb.Sheets["NEW SCM"];
+  if (!ws) return { divToDept: {}, deptToSub: {}, subToCls: {} };
+
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+
+  const divToDept = new Map<string, Set<string>>();
+  const deptToSub = new Map<string, Set<string>>();
+  const subToCls  = new Map<string, Set<string>>();
+
+  for (let r = 4; r <= range.e.r; r++) {
+    const div    = cellVal(ws, r, 5); // col F — DIVISION
+    const dept   = cellVal(ws, r, 6); // col G — DEPT
+    const subDpt = cellVal(ws, r, 7); // col H — SUB-DEPT
+    const cls    = cellVal(ws, r, 8); // col I — Class
+
+    if (div && dept) {
+      if (!divToDept.has(div)) divToDept.set(div, new Set());
+      divToDept.get(div)!.add(dept);
+    }
+    if (dept && subDpt) {
+      if (!deptToSub.has(dept)) deptToSub.set(dept, new Set());
+      deptToSub.get(dept)!.add(subDpt);
+    }
+    if (subDpt && cls) {
+      if (!subToCls.has(subDpt)) subToCls.set(subDpt, new Set());
+      subToCls.get(subDpt)!.add(cls);
+    }
+  }
+
+  const toSortedRecord = (m: Map<string, Set<string>>): Record<string, string[]> =>
+    Object.fromEntries([...m.entries()].map(([k, s]) => [k, [...s].sort()]));
+
+  return {
+    divToDept: toSortedRecord(divToDept),
+    deptToSub: toSortedRecord(deptToSub),
+    subToCls:  toSortedRecord(subToCls),
+  };
 }
 
 // ─── Extract existing non-empty values from RECAP cols F-J, N, O ──────────
