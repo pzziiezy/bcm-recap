@@ -524,7 +524,7 @@ export default function Home() {
                       <>
                         <div className="grid grid-cols-3 gap-4 mb-6">
                           <StatCard label="ยืนยันแล้ว" value={confirmed} color="green" />
-                          <StatCard label="อนุมาน" value={inferred} color="amber" />
+                          <StatCard label="ไม่มี Planogram" value={inferred} color="amber" />
                           <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
                         </div>
                         <ResultsTable

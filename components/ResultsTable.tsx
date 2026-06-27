@@ -22,7 +22,7 @@ const CONFIDENCE_META = {
   },
   inferred: {
     icon: <AlertTriangle className="w-4 h-4 text-amber-500" />,
-    label: "อนุมาน",
+    label: "ไม่มี Planogram",
     bg: "bg-amber-50",
     badge: "bg-amber-100 text-amber-700",
   },
