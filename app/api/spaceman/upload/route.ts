@@ -1,20 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { google } from "googleapis";
-import { Readable } from "stream";
+import { put } from "@vercel/blob";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
-
-const FOLDER_ID = "1jWxdKanbMCpf7pShHWdw1GdRzPDqID6S";
-
-function getAuth() {
-  const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!json) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not configured");
-  return new google.auth.GoogleAuth({
-    credentials: JSON.parse(json),
-    scopes: ["https://www.googleapis.com/auth/drive"],
-  });
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -22,28 +9,15 @@ export async function POST(request: NextRequest) {
     const file = formData.get("file") as File | null;
     if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 });
 
-    const auth = getAuth();
-    const drive = google.drive({ version: "v3", auth });
-
-    const buffer = await file.arrayBuffer();
-    const stream = Readable.from(Buffer.from(buffer));
-
-    const response = await drive.files.create({
-      requestBody: {
-        name: file.name,
-        parents: [FOLDER_ID],
-      },
-      media: {
-        mimeType:
-          file.type ||
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        body: stream,
-      },
-      supportsAllDrives: true,
-      fields: "id,name,createdTime",
+    const blob = await put(`spaceman/${file.name}`, file, {
+      access: "public",
     });
 
-    return NextResponse.json(response.data);
+    return NextResponse.json({
+      id: blob.url,
+      name: file.name,
+      createdTime: new Date().toISOString(),
+    });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
