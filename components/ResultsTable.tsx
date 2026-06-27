@@ -2,7 +2,7 @@
 import { useState, useMemo } from "react";
 import { CheckCircle, AlertTriangle, XCircle, Pencil, Save, X } from "lucide-react";
 import type { ProcessedRow, FilledData, HierarchyMap } from "@/lib/types";
-import { getHierarchyOptions, isHierarchyKey } from "@/lib/hierarchy";
+import { getHierarchyOptions, isHierarchyKey, buildHierarchyFromRows, mergeHierarchies } from "@/lib/hierarchy";
 
 interface Props {
   rows: ProcessedRow[];
@@ -65,11 +65,21 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
     ) as Record<keyof FilledData, string[]>;
   }, [rows, externalSuggestions]);
 
+  // Hierarchy derived from the result rows themselves (covers values the RECAP file didn't have)
+  const rowsHierarchy = useMemo(() => buildHierarchyFromRows(rows), [rows]);
+
+  // Effective hierarchy = RECAP file hierarchy ∪ result-rows hierarchy
+  // This ensures newly-matched dept/subDept/cls values appear in the cascade dropdowns
+  const effectiveHierarchy = useMemo(
+    () => hierarchyMap ? mergeHierarchies(hierarchyMap, rowsHierarchy) : rowsHierarchy,
+    [hierarchyMap, rowsHierarchy]
+  );
+
   // Cascade-filtered options for hierarchy columns (live while editing)
   const hierarchyOptions = useMemo(() => {
-    if (!hierarchyMap) return null;
-    return getHierarchyOptions(draft, hierarchyMap, suggestions);
-  }, [draft, hierarchyMap, suggestions]);
+    if (Object.keys(effectiveHierarchy.divToDept).length === 0) return null;
+    return getHierarchyOptions(draft, effectiveHierarchy, suggestions);
+  }, [draft, effectiveHierarchy, suggestions]);
 
   // Final datalist options: hierarchy-filtered for F/G/H/I, flat for the rest
   const datalistOptions = useMemo(
