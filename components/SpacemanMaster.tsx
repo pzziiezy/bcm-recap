@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState, useEffect, useMemo, DragEvent } from "react";
-import * as XLSX from "xlsx";
 import {
   CloudUpload, CheckCircle, XCircle, Clock, RefreshCw, Search,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Database,
@@ -44,7 +43,9 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const [headers, setHeaders] = useState<string[]>([]);
   const [tableData, setTableData] = useState<DataRow[]>([]);
   const [loadingData, setLoadingData] = useState(false);
+  const [parseProgress, setParseProgress] = useState(0);
   const [dataError, setDataError] = useState("");
+  const parseWorkerRef = useRef<Worker | null>(null);
 
   // Table controls
   const [search, setSearch] = useState("");
@@ -145,7 +146,12 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   };
 
   const loadData = async (file: DriveFileInfo) => {
+    // Terminate any in-progress parse
+    parseWorkerRef.current?.terminate();
+    parseWorkerRef.current = null;
+
     setLoadingData(true);
+    setParseProgress(0);
     setDataError("");
     setTableData([]);
     setHeaders([]);
@@ -156,42 +162,56 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     setSearch("");
     setTreeSel({});
     setExpanded(new Set());
+
     try {
       const res = await fetch(`/api/spaceman/file?id=${file.id}`);
       if (!res.ok) throw new Error("ดาวน์โหลดไฟล์ไม่สำเร็จ");
       const buffer = await res.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: "array" });
-      const ws = wb.Sheets["QRY_Product_by_POG"];
-      if (!ws) throw new Error('ไม่พบ Sheet "QRY_Product_by_POG" ในไฟล์');
-      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-      const hdrs: string[] = [];
-      for (let c = 0; c <= range.e.c; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
-        hdrs.push(cell?.v != null ? String(cell.v).trim() : `คอลัมน์ ${c + 1}`);
-      }
-      const rows: DataRow[] = [];
-      for (let r = 1; r <= range.e.r; r++) {
-        const row: DataRow = {};
-        let hasValue = false;
-        for (let c = 0; c <= range.e.c; c++) {
-          const cell = ws[XLSX.utils.encode_cell({ r, c })];
-          const val = cell?.v != null ? String(cell.v) : "";
-          row[hdrs[c]] = val;
-          if (val) hasValue = true;
+
+      // Parse in a Web Worker so the main thread stays responsive
+      const worker = new Worker(
+        new URL("../lib/spaceman.worker.ts", import.meta.url)
+      );
+      parseWorkerRef.current = worker;
+
+      worker.onmessage = (e: MessageEvent) => {
+        const msg = e.data as
+          | { type: "progress"; pct: number }
+          | { type: "done"; headers: string[]; rows: DataRow[] }
+          | { type: "error"; message: string };
+
+        if (msg.type === "progress") {
+          setParseProgress(msg.pct);
+        } else if (msg.type === "done") {
+          parseWorkerRef.current = null;
+          setHeaders(msg.headers);
+          setTableData(msg.rows);
+          setParseProgress(100);
+          setLoadingData(false);
+        } else if (msg.type === "error") {
+          parseWorkerRef.current = null;
+          setDataError(msg.message);
+          setLoadingData(false);
         }
-        if (hasValue) rows.push(row);
-      }
-      setHeaders(hdrs);
-      setTableData(rows);
+      };
+
+      worker.onerror = (e: ErrorEvent) => {
+        parseWorkerRef.current = null;
+        setDataError(e.message ?? "Parse error in worker");
+        setLoadingData(false);
+      };
+
+      // Transfer ownership of buffer to worker (zero-copy, frees main-thread memory)
+      worker.postMessage({ type: "parse", buffer }, [buffer]);
     } catch (err) {
       setDataError(String(err));
-    } finally {
       setLoadingData(false);
     }
   };
 
   useEffect(() => {
     fetchLatest().then((file) => { if (file) loadData(file); });
+    return () => { parseWorkerRef.current?.terminate(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -560,7 +580,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
             {selectedFile && !uploading && uploadStatus !== "success" && (
               <button onClick={handleUpload}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] transition-all shadow-sm">
-                <CloudUpload className="w-4 h-4" />อัปโหลดขึ้น Google Drive
+                <CloudUpload className="w-4 h-4" />อัปเดตเป็นไฟล์ล่าสุด
               </button>
             )}
             {uploadStatus === "success" && (
@@ -751,9 +771,19 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
 
         {/* Loading / error / empty states */}
         {loadingData && (
-          <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-500">
+          <div className="flex flex-col items-center justify-center py-16 gap-4 text-slate-500">
             <div className="animate-spin rounded-full h-8 w-8 border-4 border-pink-200 border-t-[#E91E8C]" />
-            <p className="text-sm">กำลังโหลดข้อมูลจาก Google Drive...</p>
+            <p className="text-sm font-medium">
+              {parseProgress < 20
+                ? "กำลังดาวน์โหลดไฟล์..."
+                : `กำลังประมวลผลข้อมูล... (${parseProgress}%)`}
+            </p>
+            <div className="w-64 bg-slate-200 rounded-full h-2 overflow-hidden">
+              <div
+                className="h-2 rounded-full transition-all duration-300 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
+                style={{ width: `${parseProgress}%` }}
+              />
+            </div>
           </div>
         )}
         {!loadingData && dataError && (

@@ -68,6 +68,8 @@ interface BuildJob {
 
 export default function Home() {
   const [view, setView] = useState<AppView>("main");
+  // Lazy-mount flag: SpacemanMaster is only added to the DOM on first visit
+  const [spacemanMounted, setSpacemanMounted] = useState(false);
   const [step, setStep] = useState(1);
   const [status, setStatus] = useState<Status>("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -356,7 +358,7 @@ export default function Home() {
             <FileSpreadsheet className="w-4 h-4" />
             อัปโหลดข้อมูล
           </TabBtn>
-          <TabBtn active={view === "spaceman"} onClick={() => setView("spaceman")}>
+          <TabBtn active={view === "spaceman"} onClick={() => { setView("spaceman"); setSpacemanMounted(true); }}>
             <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
               <ellipse cx="12" cy="5" rx="9" ry="3" />
               <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
@@ -374,15 +376,17 @@ export default function Home() {
           {/* ── Content area ─────────────────────────────────────────── */}
           <div className="flex-1 min-w-0 space-y-8">
 
-            {/* DATA_SPACEMAN — always mounted to preserve parsed data */}
-            <div className={view === "spaceman" ? "" : "hidden"}>
-              <SpacemanMaster
-                onFileInfoChange={(info) => {
-                  setDriveFileInfo(info);
-                  setDriveLoading(false);
-                }}
-              />
-            </div>
+            {/* DATA_SPACEMAN — lazy-mount on first visit, then kept in DOM (hidden) to preserve parsed data */}
+            {spacemanMounted && (
+              <div className={view === "spaceman" ? "" : "hidden"}>
+                <SpacemanMaster
+                  onFileInfoChange={(info) => {
+                    setDriveFileInfo(info);
+                    setDriveLoading(false);
+                  }}
+                />
+              </div>
+            )}
 
             {/* Main upload flow */}
             {view === "main" && (
