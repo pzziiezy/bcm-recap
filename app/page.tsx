@@ -67,6 +67,22 @@ interface BuildJob {
   buffer?: ArrayBuffer;
 }
 
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+function triggerBrowserDownload(label: string, buffer: ArrayBuffer) {
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = label;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ─── Home ──────────────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -95,6 +111,7 @@ export default function Home() {
   const workersRef = useRef<Map<string, Worker>>(new Map());
   const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[] }>>(new Map());
   const jobCounterRef = useRef(0);
+  const autoDownloadedRef = useRef<Set<string>>(new Set());
 
   // Terminate all workers on unmount
   useEffect(() => {
@@ -226,22 +243,22 @@ export default function Home() {
   };
 
   const downloadJob = (id: string, label: string, buffer: ArrayBuffer) => {
-    const blob = new Blob([buffer], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = label;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    // Clear buffer to free memory; mark as downloaded
-    setJobs((prev) =>
-      prev.map((j) => (j.id === id ? { ...j, status: "downloaded", buffer: undefined } : j))
-    );
+    triggerBrowserDownload(label, buffer);
+    // Buffer is kept so the user can re-download; status stays as-is
   };
+
+  // Auto-download each job the moment it completes
+  useEffect(() => {
+    for (const job of jobs) {
+      if (job.status === "done" && job.buffer && !autoDownloadedRef.current.has(job.id)) {
+        autoDownloadedRef.current.add(job.id);
+        triggerBrowserDownload(job.label, job.buffer);
+        setJobs((prev) =>
+          prev.map((j) => (j.id === job.id ? { ...j, status: "downloaded" } : j))
+        );
+      }
+    }
+  }, [jobs]);
 
   // ── Main processing flow ────────────────────────────────────────────────
 
@@ -739,8 +756,8 @@ function JobItem({
         </div>
 
         <div className="flex gap-1 flex-shrink-0">
-          {/* Download — only when done and buffer exists */}
-          {job.status === "done" && job.buffer && (
+          {/* Download — available after build completes; buffer kept for re-download */}
+          {(job.status === "done" || job.status === "downloaded") && job.buffer && (
             <button
               onClick={() => onDownload(job.id, job.label, job.buffer!)}
               className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium bg-green-600 text-white hover:bg-green-700 transition-colors"
