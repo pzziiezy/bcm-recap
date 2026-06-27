@@ -310,15 +310,15 @@ export default function Home() {
       </div>
 
       <div className="px-6 py-8 space-y-8">
-        {/* DATA_SPACEMAN master view */}
-        {view === "spaceman" && (
+        {/* DATA_SPACEMAN master view — always mounted to preserve parsed data across tab switches */}
+        <div className={view === "spaceman" ? "" : "hidden"}>
           <SpacemanMaster
             onFileInfoChange={(info) => {
               setDriveFileInfo(info);
               setDriveLoading(false);
             }}
           />
-        )}
+        </div>
 
         {/* Main upload flow */}
         {view === "main" && (
