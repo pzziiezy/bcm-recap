@@ -17,8 +17,12 @@ function applyRows(ws: XLSX.WorkSheet, rows: DownloadRow[]): void {
       ? { ...(row.filled ?? {}), ...row.override }
       : row.filled;
     if (!data) continue;
-    const w = (c: number, v: string) =>
-      (ws[XLSX.utils.encode_cell({ r: row.rowIndex, c })] = { t: "s", v });
+    const w = (c: number, v: string) => {
+      const addr = XLSX.utils.encode_cell({ r: row.rowIndex, c });
+      const existing = ws[addr];
+      // Preserve original cell style (fill color, borders, etc.) if present
+      ws[addr] = { ...(existing?.s != null ? { s: existing.s } : {}), t: "s", v };
+    };
     w(5,  data.division  ?? "");
     w(6,  data.dept      ?? "");
     w(7,  data.subDept   ?? "");
@@ -46,7 +50,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     try {
       ctx.postMessage({ type: "progress", pct: 10 });
 
-      const wb = XLSX.read(template, { type: "array" });
+      // cellStyles: parse fill/font/border so they survive round-trip
+      // sheetStubs: create stubs for styled-but-empty cells so their styles are preserved when we write values into them
+      const wb = XLSX.read(template, { type: "array", cellStyles: true, sheetStubs: true });
       const ws = wb.Sheets["NEW SCM"];
       if (!ws) throw new Error('Sheet "NEW SCM" not found');
 
