@@ -589,73 +589,65 @@ function FixedQueuePanel({
   const doneCount = jobs.filter((j) => j.status === "done").length;
 
   return (
-    <div className="fixed right-0 top-28 z-50 flex items-start pointer-events-none">
-      {/* Collapsed tab — always visible when panel is closed */}
-      <button
-        onClick={() => onOpenChange(true)}
-        className={`
-          pointer-events-auto flex flex-col items-center gap-1.5 px-2 py-3
-          bg-white border border-pink-200 border-r-0 rounded-l-xl shadow-lg
-          text-[#E91E8C] transition-all duration-200 hover:bg-pink-50
-          ${open ? "opacity-0 pointer-events-none w-0 px-0 overflow-hidden" : "opacity-100"}
-        `}
-        title="เปิดคิว Build ไฟล์"
-      >
-        <ListOrdered className="w-4 h-4" />
-        {(activeCount > 0 || doneCount > 0) && (
+    <div className="fixed right-0 top-1/3 z-50 -translate-y-1/2">
+      {!open ? (
+        /* ── Collapsed tab: flush against right edge, no hidden sibling taking space ── */
+        <button
+          onClick={() => onOpenChange(true)}
+          title="เปิดคิว Build ไฟล์"
+          className="flex flex-col items-center gap-1.5 px-2 py-3
+            bg-white border border-r-0 border-pink-200 rounded-l-xl shadow-lg
+            text-[#E91E8C] hover:bg-pink-50 transition-colors"
+        >
+          <ListOrdered className="w-4 h-4" />
           <span className="text-xs font-bold leading-none">
-            {activeCount > 0 ? activeCount : doneCount}
+            {activeCount > 0 ? activeCount : jobs.length}
           </span>
-        )}
-        {doneCount > 0 && activeCount === 0 && (
-          <div className="w-2 h-2 rounded-full bg-green-400" />
-        )}
-        {activeCount > 0 && (
-          <div className="w-2 h-2 rounded-full bg-[#E91E8C] animate-pulse" />
-        )}
-      </button>
-
-      {/* Expanded panel */}
-      <div
-        className={`
-          pointer-events-auto w-72 bg-white rounded-l-2xl shadow-2xl
-          border border-pink-100 border-r-0 overflow-hidden
-          flex flex-col transition-all duration-200 origin-right
-          ${open ? "opacity-100 translate-x-0" : "opacity-0 translate-x-full pointer-events-none"}
-        `}
-        style={{ maxHeight: "calc(100vh - 120px)" }}
-      >
-        <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] flex-shrink-0" />
-        <div className="px-4 py-3 border-b border-pink-50 flex items-center justify-between flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <ListOrdered className="w-4 h-4 text-[#E91E8C]" />
-            <h3 className="font-bold text-slate-800 text-sm">คิว Build ไฟล์</h3>
-            {activeCount > 0 && (
-              <span className="bg-pink-100 text-[#E91E8C] text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
-                {activeCount}
-              </span>
-            )}
+          {activeCount > 0 ? (
+            <div className="w-2 h-2 rounded-full bg-[#E91E8C] animate-pulse" />
+          ) : doneCount > 0 ? (
+            <div className="w-2 h-2 rounded-full bg-green-400" />
+          ) : null}
+        </button>
+      ) : (
+        /* ── Expanded panel: flush against right edge ── */
+        <div
+          className="w-72 bg-white rounded-l-2xl shadow-2xl border border-r-0 border-pink-100
+            overflow-hidden flex flex-col"
+          style={{ maxHeight: "calc(100vh - 120px)" }}
+        >
+          <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] flex-shrink-0" />
+          <div className="px-4 py-3 border-b border-pink-50 flex items-center justify-between flex-shrink-0">
+            <div className="flex items-center gap-2">
+              <ListOrdered className="w-4 h-4 text-[#E91E8C]" />
+              <h3 className="font-bold text-slate-800 text-sm">คิว Build ไฟล์</h3>
+              {activeCount > 0 && (
+                <span className="bg-pink-100 text-[#E91E8C] text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
+                  {activeCount}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => onOpenChange(false)}
+              className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors"
+              title="ซ่อนแผง"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
           </div>
-          <button
-            onClick={() => onOpenChange(false)}
-            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors"
-            title="ซ่อนแผง"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
+          <div className="overflow-y-auto flex-1 divide-y divide-slate-100">
+            {jobs.map((job) => (
+              <JobItem
+                key={job.id}
+                job={job}
+                onTerminate={onTerminate}
+                onRemove={onRemove}
+                onDownload={onDownload}
+              />
+            ))}
+          </div>
         </div>
-        <div className="overflow-y-auto flex-1 divide-y divide-slate-100">
-          {jobs.map((job) => (
-            <JobItem
-              key={job.id}
-              job={job}
-              onTerminate={onTerminate}
-              onRemove={onRemove}
-              onDownload={onDownload}
-            />
-          ))}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
