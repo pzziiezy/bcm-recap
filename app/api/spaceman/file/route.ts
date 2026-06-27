@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     const drive = google.drive({ version: "v3", auth });
 
     const response = await drive.files.get(
-      { fileId, alt: "media" },
+      { fileId, alt: "media", supportsAllDrives: true },
       { responseType: "arraybuffer" }
     );
 

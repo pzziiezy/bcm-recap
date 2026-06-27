@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         body: stream,
       },
+      supportsAllDrives: true,
       fields: "id,name,createdTime",
     });
 

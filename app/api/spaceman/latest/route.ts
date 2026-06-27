@@ -24,6 +24,8 @@ export async function GET() {
       orderBy: "createdTime desc",
       pageSize: 1,
       fields: "files(id,name,createdTime)",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
 
     const files = response.data.files;
