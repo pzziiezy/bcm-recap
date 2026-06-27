@@ -6,6 +6,7 @@ import {
   CloudUpload, CheckCircle, XCircle, Clock, RefreshCw, Search,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Database,
   ArrowUpDown, ArrowUp, ArrowDown, Filter, LayoutList, Network, X,
+  Eye, Save,
 } from "lucide-react";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
@@ -57,6 +58,13 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const [viewMode, setViewMode] = useState<"table" | "tree">("table");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [treeSel, setTreeSel] = useState<TreeSel>({});
+
+  // Column visibility
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
+  const [showColPicker, setShowColPicker] = useState(false);
+  const [colPickerSearch, setColPickerSearch] = useState("");
+  const [savedMsg, setSavedMsg] = useState(false);
+  const colPickerRef = useRef<HTMLDivElement>(null);
 
   // Upload
   const [showUpload, setShowUpload] = useState(false);
@@ -187,6 +195,29 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load saved column prefs once headers are known
+  useEffect(() => {
+    if (headers.length === 0) return;
+    try {
+      const saved = localStorage.getItem("spaceman_hidden_cols");
+      if (saved) {
+        const arr: string[] = JSON.parse(saved);
+        setHiddenCols(new Set(arr.filter((h) => headers.includes(h))));
+      }
+    } catch {}
+  }, [headers]);
+
+  // Close picker on outside click
+  useEffect(() => {
+    if (!showColPicker) return;
+    const handler = (e: MouseEvent) => {
+      if (colPickerRef.current && !colPickerRef.current.contains(e.target as Node))
+        setShowColPicker(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showColPicker]);
+
   // ── Upload handlers ───────────────────────────────────────────────────────
   const handleFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -279,6 +310,17 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const clearAllFilters = () => { setColFilters({}); setSearch(""); setSortCol(null); setSortDir("asc"); setPage(0); };
   const activeFilterCount = Object.values(colFilters).filter((v) => v.trim()).length + (search.trim() ? 1 : 0);
 
+  const visibleHeaders = useMemo(() => headers.filter((h) => !hiddenCols.has(h)), [headers, hiddenCols]);
+
+  const toggleCol = (col: string) =>
+    setHiddenCols((prev) => { const n = new Set(prev); n.has(col) ? n.delete(col) : n.add(col); return n; });
+
+  const saveColPrefs = () => {
+    localStorage.setItem("spaceman_hidden_cols", JSON.stringify([...hiddenCols]));
+    setSavedMsg(true);
+    setTimeout(() => setSavedMsg(false), 2000);
+  };
+
   // ── Tree handlers ─────────────────────────────────────────────────────────
   const handleTreeSelect = (level: number, pathParts: string[], label: string) => {
     const parts = [...pathParts, label];
@@ -367,7 +409,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-slate-50 border-b border-slate-200">
-            {headers.map((h) => (
+            {visibleHeaders.map((h) => (
               <th
                 key={h}
                 onClick={() => handleSort(h)}
@@ -384,7 +426,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
           </tr>
           {showColFilters && (
             <tr className="bg-white border-b border-slate-200">
-              {headers.map((h) => (
+              {visibleHeaders.map((h) => (
                 <th key={h} className="px-2 py-1.5">
                   <input
                     type="text"
@@ -401,7 +443,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
         <tbody className="divide-y divide-slate-100">
           {pageData.map((row, i) => (
             <tr key={i} className="hover:bg-pink-50/40 transition-colors">
-              {headers.map((h) => (
+              {visibleHeaders.map((h) => (
                 <td key={h} className="px-4 py-2 text-slate-700 whitespace-nowrap max-w-xs truncate">
                   {search.trim() ? highlightMatch(row[h] || "", search) : (row[h] || "")}
                 </td>
@@ -618,6 +660,91 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                   ล้างทั้งหมด
                 </button>
               )}
+
+              {/* Column visibility picker */}
+              <div className="relative" ref={colPickerRef}>
+                <button
+                  onClick={() => setShowColPicker((v) => !v)}
+                  className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                    showColPicker || hiddenCols.size > 0
+                      ? "bg-pink-50 border-[#E91E8C] text-[#E91E8C]"
+                      : "border-slate-200 text-slate-500 hover:border-slate-300"
+                  }`}
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  คอลัมน์
+                  {hiddenCols.size > 0 && (
+                    <span className="bg-[#E91E8C] text-white rounded-full px-1.5 text-[10px] font-bold">
+                      -{hiddenCols.size}
+                    </span>
+                  )}
+                </button>
+
+                {showColPicker && (
+                  <div className="absolute right-0 top-full mt-1 z-50 bg-white rounded-xl border border-slate-200 shadow-xl w-72 overflow-hidden">
+                    {/* Picker header */}
+                    <div className="px-3 py-2.5 border-b border-slate-100 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-700">แสดง / ซ่อนคอลัมน์</span>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => setHiddenCols(new Set())} className="text-[10px] text-blue-500 hover:text-blue-700">แสดงทั้งหมด</button>
+                        <span className="text-slate-300">|</span>
+                        <button onClick={() => setHiddenCols(new Set(headers))} className="text-[10px] text-slate-500 hover:text-slate-700">ซ่อนทั้งหมด</button>
+                      </div>
+                    </div>
+
+                    {/* Picker search */}
+                    <div className="px-3 py-2 border-b border-slate-100">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="ค้นหาชื่อคอลัมน์..."
+                          value={colPickerSearch}
+                          onChange={(e) => setColPickerSearch(e.target.value)}
+                          className="w-full pl-7 pr-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Column list */}
+                    <div className="max-h-64 overflow-y-auto p-2 space-y-0.5">
+                      {headers
+                        .filter((h) => !colPickerSearch || h.toLowerCase().includes(colPickerSearch.toLowerCase()))
+                        .map((h) => (
+                          <label key={h} className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={!hiddenCols.has(h)}
+                              onChange={() => toggleCol(h)}
+                              className="accent-[#E91E8C] w-3.5 h-3.5 flex-shrink-0"
+                            />
+                            <span className={`text-xs flex-1 truncate ${hiddenCols.has(h) ? "text-slate-400 line-through" : "text-slate-700"}`}>
+                              {h}
+                            </span>
+                          </label>
+                        ))}
+                    </div>
+
+                    {/* Picker footer */}
+                    <div className="px-3 py-2.5 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
+                      <span className="text-[10px] text-slate-400">
+                        แสดง {headers.length - hiddenCols.size} / {headers.length} คอลัมน์
+                      </span>
+                      <button
+                        onClick={saveColPrefs}
+                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all font-medium ${
+                          savedMsg
+                            ? "bg-green-100 text-green-700 border border-green-200"
+                            : "bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] shadow-sm"
+                        }`}
+                      >
+                        {savedMsg ? <CheckCircle className="w-3 h-3" /> : <Save className="w-3 h-3" />}
+                        {savedMsg ? "บันทึกแล้ว!" : "บันทึกค่าเริ่มต้น"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
