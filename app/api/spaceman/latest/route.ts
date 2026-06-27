@@ -1,25 +1,39 @@
 import { NextResponse } from "next/server";
-import { list } from "@vercel/blob";
+import { google } from "googleapis";
 
 export const runtime = "nodejs";
 
+const FOLDER_ID = "1jWxdKanbMCpf7pShHWdw1GdRzPDqID6S";
+
+function getAuth() {
+  const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!json) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not configured");
+  return new google.auth.GoogleAuth({
+    credentials: JSON.parse(json),
+    scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+  });
+}
+
 export async function GET() {
   try {
-    const { blobs } = await list({ prefix: "spaceman/" });
+    const auth = getAuth();
+    const drive = google.drive({ version: "v3", auth });
 
-    if (blobs.length === 0) return NextResponse.json({ file: null });
-
-    const latest = blobs.sort(
-      (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
-    )[0];
-
-    return NextResponse.json({
-      file: {
-        id: latest.url,
-        name: latest.pathname.replace("spaceman/", "").replace(/-[a-z0-9]+(\.\w+)$/, "$1"),
-        createdTime: latest.uploadedAt,
-      },
+    const response = await drive.files.list({
+      q: `'${FOLDER_ID}' in parents and trashed=false`,
+      orderBy: "createdTime desc",
+      pageSize: 1,
+      fields: "files(id,name,createdTime)",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
+
+    const files = response.data.files;
+    if (!files || files.length === 0) {
+      return NextResponse.json({ file: null });
+    }
+
+    return NextResponse.json({ file: files[0] });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

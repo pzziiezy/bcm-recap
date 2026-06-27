@@ -16,6 +16,8 @@ import {
   Database,
 } from "lucide-react";
 
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+
 export interface DriveFileInfo {
   id: string;
   name: string;
@@ -54,6 +56,23 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const [uploadError, setUploadError] = useState("");
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const tokenClientRef = useRef<{ requestAccessToken: (o?: object) => void } | null>(null);
+
+  // Load Google Identity Services script
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = () => {
+      tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: "https://www.googleapis.com/auth/drive",
+        callback: () => {},
+      });
+    };
+    document.head.appendChild(script);
+  }, []);
 
   const fetchLatest = async () => {
     setLoadingMeta(true);
@@ -126,29 +145,45 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   }, []);
 
   const handleUpload = async (file: File) => {
+    if (!tokenClientRef.current) {
+      setUploadStatus("error");
+      setUploadError("Google Identity Services ยังไม่พร้อม กรุณารอสักครู่แล้วลองใหม่");
+      return;
+    }
+
     setUploading(true);
     setUploadStatus("idle");
     setUploadError("");
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch("/api/spaceman/upload", {
-        method: "POST",
-        body: formData,
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "อัปโหลดล้มเหลว");
+
+    tokenClientRef.current.requestAccessToken({ prompt: "" });
+
+    // Override callback to handle the actual upload
+    (tokenClientRef.current as any).callback = async (resp: { access_token?: string; error?: string }) => {
+      if (resp.error || !resp.access_token) {
+        setUploadStatus("error");
+        setUploadError(resp.error || "ไม่สามารถรับ token ได้");
+        setUploading(false);
+        return;
       }
-      setUploadStatus("success");
-      const newFile = await fetchLatest();
-      if (newFile) loadData(newFile);
-    } catch (err) {
-      setUploadStatus("error");
-      setUploadError(String(err));
-    } finally {
-      setUploading(false);
-    }
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("accessToken", resp.access_token);
+        const res = await fetch("/api/spaceman/upload", { method: "POST", body: formData });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || "อัปโหลดล้มเหลว");
+        }
+        setUploadStatus("success");
+        const newFile = await fetchLatest();
+        if (newFile) loadData(newFile);
+      } catch (err) {
+        setUploadStatus("error");
+        setUploadError(String(err));
+      } finally {
+        setUploading(false);
+      }
+    };
   };
 
   const handleFiles = (files: FileList | null) => {
