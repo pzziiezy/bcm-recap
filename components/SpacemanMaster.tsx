@@ -55,23 +55,62 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
   const [uploadError, setUploadError] = useState("");
   const [dragging, setDragging] = useState(false);
+  const [gisReady, setGisReady] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const tokenClientRef = useRef<{ requestAccessToken: (o?: object) => void } | null>(null);
+  const tokenClientRef = useRef<any>(null);
+  const pendingFileRef = useRef<File | null>(null);
 
-  // Load Google Identity Services script
+  // Load Google Identity Services script and init token client with persistent callback
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID) return;
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.onload = () => {
+
+    const initClient = () => {
       tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
         scope: "https://www.googleapis.com/auth/drive",
-        callback: () => {},
+        callback: async (resp: { access_token?: string; error?: string }) => {
+          const file = pendingFileRef.current;
+          pendingFileRef.current = null;
+
+          if (resp.error || !resp.access_token || !file) {
+            setUploadStatus("error");
+            setUploadError(resp.error || "ไม่สามารถรับ access token ได้");
+            setUploading(false);
+            return;
+          }
+          try {
+            const formData = new FormData();
+            formData.append("file", file);
+            formData.append("accessToken", resp.access_token);
+            const res = await fetch("/api/spaceman/upload", { method: "POST", body: formData });
+            if (!res.ok) {
+              const data = await res.json();
+              throw new Error(data.error || "อัปโหลดล้มเหลว");
+            }
+            setUploadStatus("success");
+            const newFile = await fetchLatest();
+            if (newFile) loadData(newFile);
+          } catch (err) {
+            setUploadStatus("error");
+            setUploadError(String(err));
+          } finally {
+            setUploading(false);
+          }
+        },
       });
+      setGisReady(true);
     };
-    document.head.appendChild(script);
+
+    if ((window as any).google?.accounts?.oauth2) {
+      initClient();
+    } else {
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.onload = initClient;
+      document.head.appendChild(script);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchLatest = async () => {
@@ -144,46 +183,17 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleUpload = async (file: File) => {
-    if (!tokenClientRef.current) {
+  const handleUpload = (file: File) => {
+    if (!gisReady || !tokenClientRef.current) {
       setUploadStatus("error");
-      setUploadError("Google Identity Services ยังไม่พร้อม กรุณารอสักครู่แล้วลองใหม่");
+      setUploadError("Google Identity Services ยังไม่พร้อม กรุณารีเฟรชหน้าแล้วลองใหม่");
       return;
     }
-
     setUploading(true);
     setUploadStatus("idle");
     setUploadError("");
-
+    pendingFileRef.current = file;
     tokenClientRef.current.requestAccessToken({ prompt: "" });
-
-    // Override callback to handle the actual upload
-    (tokenClientRef.current as any).callback = async (resp: { access_token?: string; error?: string }) => {
-      if (resp.error || !resp.access_token) {
-        setUploadStatus("error");
-        setUploadError(resp.error || "ไม่สามารถรับ token ได้");
-        setUploading(false);
-        return;
-      }
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
-        formData.append("accessToken", resp.access_token);
-        const res = await fetch("/api/spaceman/upload", { method: "POST", body: formData });
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || "อัปโหลดล้มเหลว");
-        }
-        setUploadStatus("success");
-        const newFile = await fetchLatest();
-        if (newFile) loadData(newFile);
-      } catch (err) {
-        setUploadStatus("error");
-        setUploadError(String(err));
-      } finally {
-        setUploading(false);
-      }
-    };
   };
 
   const handleFiles = (files: FileList | null) => {
