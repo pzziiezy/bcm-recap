@@ -17,6 +17,8 @@ import {
   ListOrdered,
   Plus,
   MinusCircle,
+  X,
+  ChevronRight,
 } from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
@@ -84,6 +86,7 @@ export default function Home() {
 
   // Queue state (display only — heavy data lives in refs)
   const [jobs, setJobs] = useState<BuildJob[]>([]);
+  const [queuePanelOpen, setQueuePanelOpen] = useState(false);
 
   // Refs — not in React state to avoid re-render overhead and serialization issues
   const recapBufRef = useRef<ArrayBuffer | null>(null);
@@ -197,6 +200,7 @@ export default function Home() {
       ...prev,
       { id, label: `${baseName}_filled_#${num}.xlsx`, status: "queued", createdAt: new Date(), progress: 0 },
     ]);
+    setQueuePanelOpen(true);
     setStep(4);
   };
 
@@ -544,32 +548,37 @@ export default function Home() {
             )}
           </div>
 
-          {/* ── Queue panel (sticky, right side) — main tab only ────── */}
-          {view === "main" && jobs.length > 0 && (
-            <div className="w-72 flex-shrink-0 sticky top-4">
-              <JobQueuePanel
-                jobs={jobs}
-                onTerminate={terminateJob}
-                onRemove={removeJob}
-                onDownload={downloadJob}
-              />
-            </div>
-          )}
         </div>
       </div>
+
+      {/* Fixed queue panel — overlays content, doesn't affect layout */}
+      {view === "main" && jobs.length > 0 && (
+        <FixedQueuePanel
+          jobs={jobs}
+          open={queuePanelOpen}
+          onOpenChange={setQueuePanelOpen}
+          onTerminate={terminateJob}
+          onRemove={removeJob}
+          onDownload={downloadJob}
+        />
+      )}
     </main>
   );
 }
 
-// ─── Job Queue Panel ───────────────────────────────────────────────────────
+// ─── Fixed Queue Panel (overlays, no layout impact) ───────────────────────
 
-function JobQueuePanel({
+function FixedQueuePanel({
   jobs,
+  open,
+  onOpenChange,
   onTerminate,
   onRemove,
   onDownload,
 }: {
   jobs: BuildJob[];
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
   onTerminate: (id: string) => void;
   onRemove: (id: string) => void;
   onDownload: (id: string, label: string, buffer: ArrayBuffer) => void;
@@ -577,31 +586,75 @@ function JobQueuePanel({
   const activeCount = jobs.filter(
     (j) => j.status === "queued" || j.status === "processing"
   ).length;
+  const doneCount = jobs.filter((j) => j.status === "done").length;
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
-      <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]" />
-      <div className="px-4 py-3 border-b border-pink-50 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <ListOrdered className="w-4 h-4 text-[#E91E8C]" />
-          <h3 className="font-bold text-slate-800 text-sm">คิว Build ไฟล์</h3>
-        </div>
-        {activeCount > 0 && (
-          <span className="bg-pink-100 text-[#E91E8C] text-xs font-bold px-2 py-0.5 rounded-full">
-            {activeCount} รายการ
+    <div className="fixed right-0 top-28 z-50 flex items-start pointer-events-none">
+      {/* Collapsed tab — always visible when panel is closed */}
+      <button
+        onClick={() => onOpenChange(true)}
+        className={`
+          pointer-events-auto flex flex-col items-center gap-1.5 px-2 py-3
+          bg-white border border-pink-200 border-r-0 rounded-l-xl shadow-lg
+          text-[#E91E8C] transition-all duration-200 hover:bg-pink-50
+          ${open ? "opacity-0 pointer-events-none w-0 px-0 overflow-hidden" : "opacity-100"}
+        `}
+        title="เปิดคิว Build ไฟล์"
+      >
+        <ListOrdered className="w-4 h-4" />
+        {(activeCount > 0 || doneCount > 0) && (
+          <span className="text-xs font-bold leading-none">
+            {activeCount > 0 ? activeCount : doneCount}
           </span>
         )}
-      </div>
-      <div className="divide-y divide-slate-100 max-h-[70vh] overflow-y-auto">
-        {jobs.map((job) => (
-          <JobItem
-            key={job.id}
-            job={job}
-            onTerminate={onTerminate}
-            onRemove={onRemove}
-            onDownload={onDownload}
-          />
-        ))}
+        {doneCount > 0 && activeCount === 0 && (
+          <div className="w-2 h-2 rounded-full bg-green-400" />
+        )}
+        {activeCount > 0 && (
+          <div className="w-2 h-2 rounded-full bg-[#E91E8C] animate-pulse" />
+        )}
+      </button>
+
+      {/* Expanded panel */}
+      <div
+        className={`
+          pointer-events-auto w-72 bg-white rounded-l-2xl shadow-2xl
+          border border-pink-100 border-r-0 overflow-hidden
+          flex flex-col transition-all duration-200 origin-right
+          ${open ? "opacity-100 translate-x-0" : "opacity-0 translate-x-full pointer-events-none"}
+        `}
+        style={{ maxHeight: "calc(100vh - 120px)" }}
+      >
+        <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] flex-shrink-0" />
+        <div className="px-4 py-3 border-b border-pink-50 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <ListOrdered className="w-4 h-4 text-[#E91E8C]" />
+            <h3 className="font-bold text-slate-800 text-sm">คิว Build ไฟล์</h3>
+            {activeCount > 0 && (
+              <span className="bg-pink-100 text-[#E91E8C] text-xs font-bold px-2 py-0.5 rounded-full animate-pulse">
+                {activeCount}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => onOpenChange(false)}
+            className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors"
+            title="ซ่อนแผง"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="overflow-y-auto flex-1 divide-y divide-slate-100">
+          {jobs.map((job) => (
+            <JobItem
+              key={job.id}
+              job={job}
+              onTerminate={onTerminate}
+              onRemove={onRemove}
+              onDownload={onDownload}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
