@@ -566,7 +566,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                 return (
                   <td key={h}
                     style={isFrozen ? getStickyStyle(h, 1) : undefined}
-                    className={`px-4 py-2 text-slate-700 whitespace-nowrap max-w-xs truncate ${isFrozen ? "bg-white group-hover:bg-pink-50/40" : ""}`}
+                    className={`px-4 py-2 text-slate-700 whitespace-nowrap max-w-xs truncate ${isFrozen ? "bg-white group-hover:bg-pink-50" : ""}`}
                   >
                     {search.trim() ? highlightMatch(row[h] || "", search) : (row[h] || "")}
                   </td>
