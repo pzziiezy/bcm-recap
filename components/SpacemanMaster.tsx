@@ -3,30 +3,14 @@
 import { useRef, useState, useEffect, useMemo, DragEvent } from "react";
 import * as XLSX from "xlsx";
 import {
-  CloudUpload,
-  CheckCircle,
-  XCircle,
-  Clock,
-  RefreshCw,
-  Search,
-  ChevronLeft,
-  ChevronRight,
-  ChevronDown,
-  ChevronUp,
-  Database,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  Filter,
+  CloudUpload, CheckCircle, XCircle, Clock, RefreshCw, Search,
+  ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Database,
+  ArrowUpDown, ArrowUp, ArrowDown, Filter, LayoutList, Network, X,
 } from "lucide-react";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 
-export interface DriveFileInfo {
-  id: string;
-  name: string;
-  createdTime: string;
-}
+export interface DriveFileInfo { id: string; name: string; createdTime: string; }
 
 export function formatDateTime(isoString: string): string {
   const d = new Date(isoString);
@@ -34,23 +18,34 @@ export function formatDateTime(isoString: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-interface Props {
-  onFileInfoChange: (info: DriveFileInfo | null) => void;
-}
+interface Props { onFileInfoChange: (info: DriveFileInfo | null) => void; }
 
 type DataRow = Record<string, string>;
+type TreeNode = { count: number; children: Map<string, TreeNode> };
+type TreeSel = { f02?: string; f03?: string; f04?: string; pg?: string };
 
 const PAGE_SIZE = 100;
+const TREE_COLS = ["PLANOFOLDER02", "PLANOFOLDER03", "PLANOFOLDER04", "PLANOGRAM"] as const;
+
+const LEVEL_COLORS = [
+  "text-slate-800 font-semibold text-xs",
+  "text-slate-700 font-medium text-xs",
+  "text-slate-600 text-xs",
+  "text-slate-500 text-xs",
+];
+const LEVEL_INDENT = ["pl-2", "pl-5", "pl-8", "pl-11"];
+const LEVEL_DOT = ["bg-[#E91E8C]", "bg-[#00A6E2]", "bg-[#F15A22]", "bg-[#72BF44]"];
 
 export default function SpacemanMaster({ onFileInfoChange }: Props) {
+  // File meta & table data
   const [latestFile, setLatestFile] = useState<DriveFileInfo | null>(null);
   const [loadingMeta, setLoadingMeta] = useState(true);
-
   const [headers, setHeaders] = useState<string[]>([]);
   const [tableData, setTableData] = useState<DataRow[]>([]);
   const [loadingData, setLoadingData] = useState(false);
   const [dataError, setDataError] = useState("");
 
+  // Table controls
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [sortCol, setSortCol] = useState<string | null>(null);
@@ -58,6 +53,12 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const [colFilters, setColFilters] = useState<Record<string, string>>({});
   const [showColFilters, setShowColFilters] = useState(false);
 
+  // View mode
+  const [viewMode, setViewMode] = useState<"table" | "tree">("table");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [treeSel, setTreeSel] = useState<TreeSel>({});
+
+  // Upload
   const [showUpload, setShowUpload] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -69,10 +70,9 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   const tokenClientRef = useRef<any>(null);
   const pendingFileRef = useRef<File | null>(null);
 
-  // Load Google Identity Services script and init token client with persistent callback
+  // ── GIS init ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID) return;
-
     const initClient = () => {
       tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
         client_id: GOOGLE_CLIENT_ID,
@@ -80,7 +80,6 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
         callback: async (resp: { access_token?: string; error?: string }) => {
           const file = pendingFileRef.current;
           pendingFileRef.current = null;
-
           if (resp.error || !resp.access_token || !file) {
             setUploadStatus("error");
             setUploadError(resp.error || "ไม่สามารถรับ access token ได้");
@@ -88,14 +87,11 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
             return;
           }
           try {
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("accessToken", resp.access_token);
-            const res = await fetch("/api/spaceman/upload", { method: "POST", body: formData });
-            if (!res.ok) {
-              const data = await res.json();
-              throw new Error(data.error || "อัปโหลดล้มเหลว");
-            }
+            const fd = new FormData();
+            fd.append("file", file);
+            fd.append("accessToken", resp.access_token);
+            const res = await fetch("/api/spaceman/upload", { method: "POST", body: fd });
+            if (!res.ok) { const d = await res.json(); throw new Error(d.error || "อัปโหลดล้มเหลว"); }
             setUploadStatus("success");
             setSelectedFile(null);
             const newFile = await fetchLatest();
@@ -110,19 +106,18 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
       });
       setGisReady(true);
     };
-
-    if ((window as any).google?.accounts?.oauth2) {
-      initClient();
-    } else {
+    if ((window as any).google?.accounts?.oauth2) initClient();
+    else {
       const script = document.createElement("script");
       script.src = "https://accounts.google.com/gsi/client";
       script.async = true;
       script.onload = initClient;
       document.head.appendChild(script);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Data fetching ─────────────────────────────────────────────────────────
   const fetchLatest = async () => {
     setLoadingMeta(true);
     try {
@@ -151,23 +146,21 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     setSortDir("asc");
     setColFilters({});
     setSearch("");
+    setTreeSel({});
+    setExpanded(new Set());
     try {
       const res = await fetch(`/api/spaceman/file?id=${file.id}`);
       if (!res.ok) throw new Error("ดาวน์โหลดไฟล์ไม่สำเร็จ");
       const buffer = await res.arrayBuffer();
-
       const wb = XLSX.read(buffer, { type: "array" });
       const ws = wb.Sheets["QRY_Product_by_POG"];
       if (!ws) throw new Error('ไม่พบ Sheet "QRY_Product_by_POG" ในไฟล์');
-
       const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-
       const hdrs: string[] = [];
       for (let c = 0; c <= range.e.c; c++) {
         const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
         hdrs.push(cell?.v != null ? String(cell.v).trim() : `คอลัมน์ ${c + 1}`);
       }
-
       const rows: DataRow[] = [];
       for (let r = 1; r <= range.e.r; r++) {
         const row: DataRow = {};
@@ -180,7 +173,6 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
         }
         if (hasValue) rows.push(row);
       }
-
       setHeaders(hdrs);
       setTableData(rows);
     } catch (err) {
@@ -191,13 +183,11 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
   };
 
   useEffect(() => {
-    fetchLatest().then((file) => {
-      if (file) loadData(file);
-    });
+    fetchLatest().then((file) => { if (file) loadData(file); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Step 1: user picks a file — just store it, don't trigger OAuth yet
+  // ── Upload handlers ───────────────────────────────────────────────────────
   const handleFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setSelectedFile(files[0]);
@@ -205,7 +195,6 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     setUploadError("");
   };
 
-  // Step 2: user clicks the upload button — trigger OAuth popup (direct user gesture)
   const handleUpload = () => {
     if (!selectedFile) return;
     if (!gisReady || !tokenClientRef.current) {
@@ -226,84 +215,231 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
     if (!uploading) handleFiles(e.dataTransfer.files);
   };
 
+  // ── Tree data ─────────────────────────────────────────────────────────────
+  const treeData = useMemo((): Map<string, TreeNode> => {
+    const root = new Map<string, TreeNode>();
+    for (const row of tableData) {
+      const vals = TREE_COLS.map((c) => row[c] || "(ไม่ระบุ)");
+      let cur = root;
+      for (const val of vals) {
+        if (!cur.has(val)) cur.set(val, { count: 0, children: new Map() });
+        const node = cur.get(val)!;
+        node.count++;
+        cur = node.children;
+      }
+    }
+    return root;
+  }, [tableData]);
+
+  // ── Filter + sort ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
     let data = tableData;
-
-    // Apply per-column filters
     const activeFilters = Object.entries(colFilters).filter(([, v]) => v.trim());
-    if (activeFilters.length > 0) {
-      data = data.filter((row) =>
-        activeFilters.every(([col, val]) =>
-          (row[col] || "").toLowerCase().includes(val.toLowerCase())
-        )
-      );
-    }
-
-    // Apply global search
+    if (activeFilters.length > 0)
+      data = data.filter((row) => activeFilters.every(([col, val]) => (row[col] || "").toLowerCase().includes(val.toLowerCase())));
     if (search.trim()) {
       const q = search.toLowerCase();
-      data = data.filter((row) =>
-        Object.values(row).some((v) => v.toLowerCase().includes(q))
-      );
+      data = data.filter((row) => Object.values(row).some((v) => v.toLowerCase().includes(q)));
     }
-
-    // Apply sort
     if (sortCol) {
       data = [...data].sort((a, b) => {
-        const av = a[sortCol] || "";
-        const bv = b[sortCol] || "";
-        const aNum = Number(av);
-        const bNum = Number(bv);
+        const av = a[sortCol] || "", bv = b[sortCol] || "";
+        const aNum = Number(av), bNum = Number(bv);
         const isNum = av !== "" && bv !== "" && !isNaN(aNum) && !isNaN(bNum);
         const cmp = isNum ? aNum - bNum : av.localeCompare(bv, "th");
         return sortDir === "asc" ? cmp : -cmp;
       });
     }
-
     return data;
   }, [tableData, search, colFilters, sortCol, sortDir]);
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const pageData = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // Apply tree selection on top of existing filters
+  const displayData = useMemo(() => {
+    if (!treeSel.f02 && !treeSel.f03 && !treeSel.f04 && !treeSel.pg) return filtered;
+    return filtered.filter((row) => {
+      if (treeSel.f02 && row["PLANOFOLDER02"] !== treeSel.f02) return false;
+      if (treeSel.f03 && row["PLANOFOLDER03"] !== treeSel.f03) return false;
+      if (treeSel.f04 && row["PLANOFOLDER04"] !== treeSel.f04) return false;
+      if (treeSel.pg  && row["PLANOGRAM"]     !== treeSel.pg)  return false;
+      return true;
+    });
+  }, [filtered, treeSel]);
 
-  const handleSearch = (val: string) => {
-    setSearch(val);
-    setPage(0);
-  };
+  const totalPages = Math.ceil(displayData.length / PAGE_SIZE);
+  const pageData = displayData.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
+  // ── Table handlers ────────────────────────────────────────────────────────
+  const handleSearch = (val: string) => { setSearch(val); setPage(0); };
   const handleSort = (col: string) => {
-    if (sortCol === col) {
-      if (sortDir === "asc") setSortDir("desc");
-      else { setSortCol(null); setSortDir("asc"); }
-    } else {
-      setSortCol(col);
-      setSortDir("asc");
-    }
+    if (sortCol === col) { if (sortDir === "asc") setSortDir("desc"); else { setSortCol(null); setSortDir("asc"); } }
+    else { setSortCol(col); setSortDir("asc"); }
     setPage(0);
   };
-
-  const handleColFilter = (col: string, val: string) => {
-    setColFilters((prev) => ({ ...prev, [col]: val }));
-    setPage(0);
-  };
-
-  const clearAllFilters = () => {
-    setColFilters({});
-    setSearch("");
-    setSortCol(null);
-    setSortDir("asc");
-    setPage(0);
-  };
-
+  const handleColFilter = (col: string, val: string) => { setColFilters((p) => ({ ...p, [col]: val })); setPage(0); };
+  const clearAllFilters = () => { setColFilters({}); setSearch(""); setSortCol(null); setSortDir("asc"); setPage(0); };
   const activeFilterCount = Object.values(colFilters).filter((v) => v.trim()).length + (search.trim() ? 1 : 0);
 
+  // ── Tree handlers ─────────────────────────────────────────────────────────
+  const handleTreeSelect = (level: number, pathParts: string[], label: string) => {
+    const parts = [...pathParts, label];
+    const newSel: TreeSel = {};
+    if (parts[0]) newSel.f02 = parts[0];
+    if (level >= 1 && parts[1]) newSel.f03 = parts[1];
+    if (level >= 2 && parts[2]) newSel.f04 = parts[2];
+    if (level >= 3 && parts[3]) newSel.pg = parts[3];
+    setTreeSel(newSel);
+    setPage(0);
+  };
+
+  const clearTreeSel = () => { setTreeSel({}); setPage(0); };
+
+  const toggleExpand = (pathKey: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(pathKey) ? next.delete(pathKey) : next.add(pathKey);
+      return next;
+    });
+  };
+
+  const isOnPath = (level: number, pathParts: string[], label: string) => {
+    const parts = [...pathParts, label];
+    const vals: (string | undefined)[] = [treeSel.f02, treeSel.f03, treeSel.f04, treeSel.pg];
+    for (let i = 0; i <= level; i++) if (vals[i] !== parts[i]) return false;
+    return true;
+  };
+
+  const isLeafSel = (level: number, pathParts: string[], label: string) => {
+    if (!isOnPath(level, pathParts, label)) return false;
+    const vals = [treeSel.f02, treeSel.f03, treeSel.f04, treeSel.pg];
+    for (let i = level + 1; i < 4; i++) if (vals[i]) return false;
+    return true;
+  };
+
+  const breadcrumb = [treeSel.f02, treeSel.f03, treeSel.f04, treeSel.pg].filter(Boolean) as string[];
+
+  // ── Tree renderer ─────────────────────────────────────────────────────────
+  const renderTree = (map: Map<string, TreeNode>, level: number, pathParts: string[]): React.ReactNode =>
+    [...map.entries()]
+      .sort(([a], [b]) => a.localeCompare(b, "th"))
+      .map(([label, node]) => {
+        const pathKey = [...pathParts, label].join("\0");
+        const isExp = expanded.has(pathKey);
+        const hasKids = node.children.size > 0 && level < 3;
+        const onPath = isOnPath(level, pathParts, label);
+        const isLeaf = isLeafSel(level, pathParts, label);
+
+        return (
+          <div key={pathKey}>
+            <div
+              onClick={() => handleTreeSelect(level, pathParts, label)}
+              className={`flex items-center gap-1 py-1 pr-2 cursor-pointer rounded-lg transition-all select-none
+                ${LEVEL_INDENT[level]}
+                ${isLeaf ? "bg-pink-100" : onPath ? "bg-pink-50" : "hover:bg-slate-100"}`}
+            >
+              {hasKids ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleExpand(pathKey); }}
+                  className="flex-shrink-0 w-4 h-4 flex items-center justify-center text-slate-400 hover:text-slate-600"
+                >
+                  {isExp ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                </button>
+              ) : (
+                <span className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+                  <span className={`w-1.5 h-1.5 rounded-full ${LEVEL_DOT[level]}`} />
+                </span>
+              )}
+              <span className={`flex-1 truncate ${isLeaf ? "text-[#E91E8C] font-semibold text-xs" : LEVEL_COLORS[level]}`}>
+                {label}
+              </span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 tabular-nums
+                ${isLeaf ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"}`}>
+                {node.count.toLocaleString()}
+              </span>
+            </div>
+            {hasKids && isExp && renderTree(node.children, level + 1, [...pathParts, label])}
+          </div>
+        );
+      });
+
+  // ── Shared table content ──────────────────────────────────────────────────
+  const tableContent = (
+    <>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="bg-slate-50 border-b border-slate-200">
+            {headers.map((h) => (
+              <th
+                key={h}
+                onClick={() => handleSort(h)}
+                className="px-4 py-2.5 text-left text-xs font-semibold text-slate-600 whitespace-nowrap cursor-pointer select-none hover:bg-slate-100 transition-colors group"
+              >
+                <div className="flex items-center gap-1">
+                  {h}
+                  {sortCol === h
+                    ? sortDir === "asc" ? <ArrowUp className="w-3 h-3 text-[#E91E8C]" /> : <ArrowDown className="w-3 h-3 text-[#E91E8C]" />
+                    : <ArrowUpDown className="w-3 h-3 text-slate-300 group-hover:text-slate-400" />}
+                </div>
+              </th>
+            ))}
+          </tr>
+          {showColFilters && (
+            <tr className="bg-white border-b border-slate-200">
+              {headers.map((h) => (
+                <th key={h} className="px-2 py-1.5">
+                  <input
+                    type="text"
+                    value={colFilters[h] || ""}
+                    onChange={(e) => handleColFilter(h, e.target.value)}
+                    placeholder="filter..."
+                    className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C] font-normal min-w-[80px]"
+                  />
+                </th>
+              ))}
+            </tr>
+          )}
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {pageData.map((row, i) => (
+            <tr key={i} className="hover:bg-pink-50/40 transition-colors">
+              {headers.map((h) => (
+                <td key={h} className="px-4 py-2 text-slate-700 whitespace-nowrap max-w-xs truncate">
+                  {search.trim() ? highlightMatch(row[h] || "", search) : (row[h] || "")}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {totalPages > 1 && (
+        <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500 bg-white sticky bottom-0">
+          <span>
+            แสดง {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, displayData.length)} จาก{" "}
+            {displayData.length.toLocaleString()} แถว
+            {(search || Object.values(colFilters).some(Boolean)) && ` (กรองจาก ${tableData.length.toLocaleString()})`}
+          </span>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}
+              className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed">
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="px-3 font-medium">{page + 1} / {totalPages}</span>
+            <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}
+              className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed">
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      {/* Upload section */}
+      {/* ── Upload card ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#00A6E2] via-[#FFD100] via-[#F15A22] to-[#72BF44]" />
-
-        {/* Header row */}
         <div className="px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-1 h-5 rounded-full bg-gradient-to-b from-[#E91E8C] to-[#F15A22]" />
@@ -318,9 +454,7 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                 <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1">
                   <Clock className="w-3 h-3" />
                   อัปโหลดล่าสุด:{" "}
-                  <strong className="text-slate-700">
-                    {formatDateTime(latestFile.createdTime)}
-                  </strong>
+                  <strong className="text-slate-700">{formatDateTime(latestFile.createdTime)}</strong>
                   <span className="text-slate-400 ml-1">— {latestFile.name}</span>
                 </p>
               ) : (
@@ -328,7 +462,6 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
               )}
             </div>
           </div>
-
           <div className="flex items-center gap-2">
             <button
               onClick={() => fetchLatest().then((f) => f && loadData(f))}
@@ -349,30 +482,21 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
           </div>
         </div>
 
-        {/* Upload panel (collapsible) */}
         {showUpload && (
           <div className="px-6 pb-6 space-y-3 border-t border-pink-50 pt-4">
-            {/* Step 1: File picker drop zone */}
             <div
               onClick={() => !uploading && inputRef.current?.click()}
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
               onDrop={onDrop}
-              className={`
-                flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 transition-all duration-200
+              className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 transition-all duration-200
                 ${uploading ? "opacity-60 cursor-not-allowed border-pink-200 bg-pink-50/30"
                   : dragging ? "border-[#E91E8C] bg-pink-50 scale-[1.01] cursor-pointer"
                   : selectedFile ? "border-green-300 bg-green-50/40 cursor-pointer"
-                  : "border-pink-200 bg-pink-50/30 hover:border-[#E91E8C] hover:bg-pink-50 cursor-pointer"}
-              `}
+                  : "border-pink-200 bg-pink-50/30 hover:border-[#E91E8C] hover:bg-pink-50 cursor-pointer"}`}
             >
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".xlsx,.xls"
-                className="hidden"
-                onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }}
-              />
+              <input ref={inputRef} type="file" accept=".xlsx,.xls" className="hidden"
+                onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
               {uploading ? (
                 <div className="animate-spin rounded-full h-8 w-8 border-4 border-pink-200 border-t-[#E91E8C]" />
               ) : selectedFile ? (
@@ -381,75 +505,83 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                 <CloudUpload className={`w-8 h-8 ${dragging ? "text-[#E91E8C]" : "text-pink-300"}`} />
               )}
               <div className="text-center">
-                {uploading ? (
-                  <p className="text-sm text-slate-500">กำลังอัปโหลดไปยัง Google Drive...</p>
-                ) : selectedFile ? (
-                  <>
-                    <p className="font-semibold text-green-700 text-sm">{selectedFile.name}</p>
-                    <p className="text-xs text-slate-400 mt-0.5">คลิกเพื่อเลือกไฟล์ใหม่</p>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-semibold text-slate-700 text-sm">เลือกไฟล์ DATA_SPACEMAN</p>
-                    <p className="text-xs text-slate-400 mt-0.5">คลิกหรือลากไฟล์ .xlsx มาวางที่นี่</p>
-                  </>
-                )}
+                {uploading ? <p className="text-sm text-slate-500">กำลังอัปโหลดไปยัง Google Drive...</p>
+                  : selectedFile ? (
+                    <><p className="font-semibold text-green-700 text-sm">{selectedFile.name}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">คลิกเพื่อเลือกไฟล์ใหม่</p></>
+                  ) : (
+                    <><p className="font-semibold text-slate-700 text-sm">เลือกไฟล์ DATA_SPACEMAN</p>
+                    <p className="text-xs text-slate-400 mt-0.5">คลิกหรือลากไฟล์ .xlsx มาวางที่นี่</p></>
+                  )}
               </div>
             </div>
-
-            {/* Step 2: Confirm upload button (only shows after file selected) */}
             {selectedFile && !uploading && uploadStatus !== "success" && (
-              <button
-                onClick={handleUpload}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] transition-all shadow-sm"
-              >
-                <CloudUpload className="w-4 h-4" />
-                อัปโหลดขึ้น Google Drive
+              <button onClick={handleUpload}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] transition-all shadow-sm">
+                <CloudUpload className="w-4 h-4" />อัปโหลดขึ้น Google Drive
               </button>
             )}
-
             {uploadStatus === "success" && (
               <div className="flex items-center gap-2 px-4 py-2.5 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm">
-                <CheckCircle className="w-4 h-4 flex-shrink-0" />
-                อัปโหลดสำเร็จ! ข้อมูลด้านล่างได้รับการอัปเดตแล้ว
+                <CheckCircle className="w-4 h-4 flex-shrink-0" />อัปโหลดสำเร็จ! ข้อมูลด้านล่างได้รับการอัปเดตแล้ว
               </div>
             )}
             {uploadStatus === "error" && (
               <div className="flex items-start gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
-                <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                <span>อัปโหลดล้มเหลว: {uploadError}</span>
+                <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /><span>อัปโหลดล้มเหลว: {uploadError}</span>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Data table section */}
+      {/* ── Data card ── */}
       <div className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
         <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#00A6E2] via-[#FFD100] via-[#F15A22] to-[#72BF44]" />
-        <div className="px-6 py-4 border-b border-pink-50 flex items-center justify-between gap-4">
+
+        {/* Card header */}
+        <div className="px-6 py-4 border-b border-pink-50 flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <div className="w-1 h-5 rounded-full bg-gradient-to-b from-[#E91E8C] to-[#F15A22]" />
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <Database className="w-4 h-4 text-slate-400" />
-              <h2 className="font-bold text-slate-800 text-lg">
-                ข้อมูลใน QRY_Product_by_POG
-              </h2>
+              <h2 className="font-bold text-slate-800 text-lg">ข้อมูลใน QRY_Product_by_POG</h2>
               {tableData.length > 0 && (
                 <span className="text-xs bg-pink-100 text-[#E91E8C] px-2 py-0.5 rounded-full font-medium">
                   {tableData.length.toLocaleString()} แถว
                 </span>
               )}
-              {filtered.length !== tableData.length && (
+              {displayData.length !== tableData.length && (
                 <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
-                  กรองแล้ว: {filtered.length.toLocaleString()} แถว
+                  กรองแล้ว: {displayData.length.toLocaleString()} แถว
                 </span>
               )}
             </div>
           </div>
 
           {tableData.length > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* View toggle */}
+              <div className="flex bg-slate-100 rounded-lg p-0.5 gap-0.5">
+                <button
+                  onClick={() => setViewMode("table")}
+                  className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md transition-all ${
+                    viewMode === "table" ? "bg-white text-slate-700 shadow-sm font-medium" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  <LayoutList className="w-3.5 h-3.5" /> ตาราง
+                </button>
+                <button
+                  onClick={() => setViewMode("tree")}
+                  className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md transition-all ${
+                    viewMode === "tree" ? "bg-white text-slate-700 shadow-sm font-medium" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  <Network className="w-3.5 h-3.5" /> Tree
+                </button>
+              </div>
+
+              {/* Global search */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                 <input
@@ -460,6 +592,8 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                   className="pl-8 pr-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C] w-48"
                 />
               </div>
+
+              {/* Column filter toggle */}
               <button
                 onClick={() => setShowColFilters((v) => !v)}
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${
@@ -476,9 +610,9 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
                   </span>
                 )}
               </button>
-              {activeFilterCount > 0 && (
+              {(activeFilterCount > 0 || treeSel.f02) && (
                 <button
-                  onClick={clearAllFilters}
+                  onClick={() => { clearAllFilters(); clearTreeSel(); }}
                   className="text-xs text-slate-400 hover:text-red-500 transition-colors"
                 >
                   ล้างทั้งหมด
@@ -488,117 +622,106 @@ export default function SpacemanMaster({ onFileInfoChange }: Props) {
           )}
         </div>
 
-        <div className="overflow-x-auto">
-          {loadingData ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-500">
-              <div className="animate-spin rounded-full h-8 w-8 border-4 border-pink-200 border-t-[#E91E8C]" />
-              <p className="text-sm">กำลังโหลดข้อมูลจาก Google Drive...</p>
-            </div>
-          ) : dataError ? (
-            <div className="m-6 flex items-start gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
-              <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>{dataError}</span>
-            </div>
-          ) : !latestFile ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400">
-              <CloudUpload className="w-10 h-10 text-pink-200" />
-              <p className="text-sm">ยังไม่มีไฟล์ใน Google Drive</p>
-              <p className="text-xs">คลิก "อัปโหลดไฟล์ใหม่" ด้านบนเพื่อเริ่มต้น</p>
-            </div>
-          ) : tableData.length === 0 ? (
-            <div className="flex items-center justify-center py-16 text-slate-400 text-sm">
-              ไม่พบข้อมูล
-            </div>
-          ) : (
-            <>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    {headers.map((h) => (
-                      <th
-                        key={h}
-                        onClick={() => handleSort(h)}
-                        className="px-4 py-2.5 text-left text-xs font-semibold text-slate-600 whitespace-nowrap cursor-pointer select-none hover:bg-slate-100 transition-colors group"
-                      >
-                        <div className="flex items-center gap-1">
-                          {h}
-                          {sortCol === h ? (
-                            sortDir === "asc"
-                              ? <ArrowUp className="w-3 h-3 text-[#E91E8C]" />
-                              : <ArrowDown className="w-3 h-3 text-[#E91E8C]" />
-                          ) : (
-                            <ArrowUpDown className="w-3 h-3 text-slate-300 group-hover:text-slate-400" />
-                          )}
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                  {showColFilters && (
-                    <tr className="bg-white border-b border-slate-200">
-                      {headers.map((h) => (
-                        <th key={h} className="px-2 py-1.5">
-                          <input
-                            type="text"
-                            value={colFilters[h] || ""}
-                            onChange={(e) => handleColFilter(h, e.target.value)}
-                            placeholder="filter..."
-                            className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C] font-normal min-w-[80px]"
-                          />
-                        </th>
-                      ))}
-                    </tr>
-                  )}
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {pageData.map((row, i) => (
-                    <tr key={i} className="hover:bg-pink-50/40 transition-colors">
-                      {headers.map((h) => (
-                        <td
-                          key={h}
-                          className="px-4 py-2 text-slate-700 whitespace-nowrap max-w-xs truncate"
-                        >
-                          {search.trim()
-                            ? highlightMatch(row[h] || "", search)
-                            : (row[h] || "")}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        {/* Loading / error / empty states */}
+        {loadingData && (
+          <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-500">
+            <div className="animate-spin rounded-full h-8 w-8 border-4 border-pink-200 border-t-[#E91E8C]" />
+            <p className="text-sm">กำลังโหลดข้อมูลจาก Google Drive...</p>
+          </div>
+        )}
+        {!loadingData && dataError && (
+          <div className="m-6 flex items-start gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+            <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /><span>{dataError}</span>
+          </div>
+        )}
+        {!loadingData && !dataError && !latestFile && (
+          <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400">
+            <CloudUpload className="w-10 h-10 text-pink-200" />
+            <p className="text-sm">ยังไม่มีไฟล์ใน Google Drive</p>
+            <p className="text-xs">คลิก "อัปโหลดไฟล์ใหม่" ด้านบนเพื่อเริ่มต้น</p>
+          </div>
+        )}
+        {!loadingData && !dataError && latestFile && tableData.length === 0 && (
+          <div className="flex items-center justify-center py-16 text-slate-400 text-sm">ไม่พบข้อมูล</div>
+        )}
 
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500">
-                  <span>
-                    แสดง {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} จาก{" "}
-                    {filtered.length.toLocaleString()} แถว
-                    {search && ` (กรองจาก ${tableData.length.toLocaleString()})`}
+        {/* ── Tree view ── */}
+        {!loadingData && !dataError && tableData.length > 0 && viewMode === "tree" && (
+          <div className="flex" style={{ minHeight: "70vh" }}>
+            {/* Left: Tree panel */}
+            <div className="w-64 flex-shrink-0 border-r border-slate-100 overflow-y-auto bg-slate-50/40 p-2">
+              {/* All rows option */}
+              <div
+                onClick={clearTreeSel}
+                className={`flex items-center gap-2 py-1.5 px-2 rounded-lg cursor-pointer text-xs mb-1 transition-all ${
+                  !treeSel.f02 ? "bg-pink-100 text-[#E91E8C] font-semibold" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                <Database className="w-3 h-3 flex-shrink-0" />
+                <span className="flex-1">ทั้งหมด</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums ${
+                  !treeSel.f02 ? "bg-[#E91E8C] text-white" : "bg-slate-200 text-slate-600"
+                }`}>
+                  {filtered.length.toLocaleString()}
+                </span>
+              </div>
+              <div className="h-px bg-slate-200 mx-1 mb-1" />
+
+              {/* Level labels */}
+              <div className="flex gap-1 mb-2 px-1">
+                {(["F02", "F03", "F04", "POG"] as const).map((lbl, i) => (
+                  <span key={lbl} className="text-[9px] px-1.5 py-0.5 rounded font-medium"
+                    style={{ background: ["#fce7f3","#e0f2fe","#ffedd5","#dcfce7"][i], color: ["#be185d","#0369a1","#c2410c","#15803d"][i] }}>
+                    {lbl}
                   </span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setPage((p) => Math.max(0, p - 1))}
-                      disabled={page === 0}
-                      className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      <ChevronLeft className="w-4 h-4" />
+                ))}
+              </div>
+
+              {renderTree(treeData, 0, [])}
+            </div>
+
+            {/* Right: breadcrumb + table */}
+            <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+              {/* Breadcrumb */}
+              <div className={`flex items-center gap-1.5 px-4 py-2 border-b border-pink-50 text-xs flex-wrap ${
+                breadcrumb.length > 0 ? "bg-pink-50/60" : "bg-slate-50/40"
+              }`}>
+                {breadcrumb.length === 0 ? (
+                  <span className="text-slate-400">คลิก node ใน Tree ทางซ้ายเพื่อกรองข้อมูล</span>
+                ) : (
+                  <>
+                    <span className="text-slate-400">เลือก:</span>
+                    {breadcrumb.map((b, i) => (
+                      <span key={i} className="flex items-center gap-1">
+                        {i > 0 && <ChevronRight className="w-3 h-3 text-slate-300" />}
+                        <span className={i === breadcrumb.length - 1 ? "text-[#E91E8C] font-semibold" : "text-slate-600"}>
+                          {b}
+                        </span>
+                      </span>
+                    ))}
+                    <button onClick={clearTreeSel} className="ml-1 text-slate-400 hover:text-red-400 transition-colors">
+                      <X className="w-3.5 h-3.5" />
                     </button>
-                    <span className="px-3 font-medium">
-                      {page + 1} / {totalPages}
-                    </span>
-                    <button
-                      onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                      disabled={page >= totalPages - 1}
-                      className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
+                  </>
+                )}
+              </div>
+
+              {/* Table (scrollable) */}
+              <div className="flex-1 overflow-auto">
+                <div className="overflow-x-auto">
+                  {tableContent}
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Table-only view ── */}
+        {!loadingData && !dataError && tableData.length > 0 && viewMode === "table" && (
+          <div className="overflow-x-auto">
+            {tableContent}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -611,9 +734,7 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   return (
     <>
       {text.slice(0, idx)}
-      <mark className="bg-yellow-200 text-yellow-900 rounded px-0.5">
-        {text.slice(idx, idx + query.length)}
-      </mark>
+      <mark className="bg-yellow-200 text-yellow-900 rounded px-0.5">{text.slice(idx, idx + query.length)}</mark>
       {text.slice(idx + query.length)}
     </>
   );
