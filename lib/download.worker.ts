@@ -130,32 +130,56 @@ function findSheetPath(wbXml: string, relsXml: string, name: string): string | n
 
 // ── Cell patcher ─────────────────────────────────────────────────────────────
 
-// (col index, FilledData key) pairs we write
-const FILL_COLS: Array<[number, string]> = [
+// String columns to fill (col index → FilledData key)
+const STRING_FILL_COLS: Array<[number, string]> = [
   [5, "division"], [6, "dept"], [7, "subDept"], [8, "cls"],
   [9, "planogram"], [13, "colN"], [14, "colO"],
 ];
+
+type CellTarget =
+  | { kind: "s"; ssIdx: number }
+  | { kind: "n"; value: number };
+
+/**
+ * Write a numeric cell (no t= attribute in XLSX = number).
+ * Preserves existing s= style attribute if the cell already exists.
+ */
+function patchNumericCell(
+  inner: string,
+  letter: string,
+  row: number,
+  value: number,
+  ci: number
+): string {
+  const ref = `${letter}${row}`;
+  const pat = new RegExp(`<c r="${ref}"([^>]*?)(?:\\/>|>[\\s\\S]*?<\\/c>)`);
+  const m = pat.exec(inner);
+
+  if (m) {
+    const sM = /\bs="(\d+)"/.exec(m[1]);
+    const newCell = `<c r="${ref}"${sM ? ` s="${sM[1]}"` : ""}><v>${value}</v></c>`;
+    return inner.slice(0, m.index) + newCell + inner.slice(m.index + m[0].length);
+  }
+
+  const newCell = `<c r="${ref}"><v>${value}</v></c>`;
+  const scanPat = /<c\s+r="([A-Z]+)\d+"/g;
+  let at = -1;
+  let im: RegExpExecArray | null;
+  while ((im = scanPat.exec(inner)) !== null) {
+    if (colLetterIdx(im[1]) > ci) { at = im.index; break; }
+  }
+  return at >= 0
+    ? inner.slice(0, at) + newCell + inner.slice(at)
+    : inner + newCell;
+}
 
 function applyRows(
   sheetXml: string,
   rows: DownloadRow[],
   sstStrings: string[]
 ): { sheetXml: string; newStrings: string[] } {
-  // Build: Excel-row-number → Map<colIdx, value>
-  const target = new Map<number, Map<number, string>>();
-  for (const row of rows) {
-    const data = row.override ? { ...row.filled, ...row.override } : row.filled;
-    if (!data) continue;
-    const excelRow = row.rowIndex + 1; // SheetJS uses 0-based; Excel XML uses 1-based
-    const cols = new Map<number, string>();
-    for (const [ci, key] of FILL_COLS) {
-      const v = (data as Record<string, string>)[key];
-      if (v) cols.set(ci, v);
-    }
-    if (cols.size) target.set(excelRow, cols);
-  }
-
-  if (!target.size) return { sheetXml, newStrings: [] };
+  // Build: Excel-row-number → Map<colIdx, CellTarget>
+  const target = new Map<number, Map<number, CellTarget>>();
 
   // Shared string lookup (find existing or queue new)
   const allStrings = [...sstStrings];
@@ -164,6 +188,31 @@ function applyRows(
     if (i < 0) { i = allStrings.length; allStrings.push(v); }
     return i;
   };
+
+  for (const row of rows) {
+    const data = row.override ? { ...row.filled, ...row.override } : row.filled;
+    if (!data) continue;
+    const excelRow = row.rowIndex + 1;
+    const cols = new Map<number, CellTarget>();
+
+    // String columns
+    for (const [ci, key] of STRING_FILL_COLS) {
+      const v = (data as Record<string, string>)[key];
+      if (v) cols.set(ci, { kind: "s", ssIdx: ssIdx(v) });
+    }
+
+    // Column P (index 15) — always computed from effective O and N
+    const oNum = parseFloat((data as Record<string, string>).colO ?? "100") || 100;
+    const nNum = parseFloat((data as Record<string, string>).colN ?? "0") || 0;
+    if (nNum !== 0 || (data as Record<string, string>).colN) {
+      const pVal = Math.round((oNum / 100) * nNum * 100) / 100;
+      cols.set(15, { kind: "n", value: pVal });
+    }
+
+    if (cols.size) target.set(excelRow, cols);
+  }
+
+  if (!target.size) return { sheetXml, newStrings: [] };
 
   // Process each <row> element in the sheet XML
   const result = sheetXml.replace(
@@ -175,8 +224,12 @@ function applyRows(
       if (!cols) return full;
 
       let cells = inner;
-      for (const [ci, val] of cols) {
-        cells = patchCell(cells, colLetter(ci), +rm[1], ssIdx(val), ci);
+      for (const [ci, cell] of cols) {
+        if (cell.kind === "s") {
+          cells = patchCell(cells, colLetter(ci), +rm[1], cell.ssIdx, ci);
+        } else {
+          cells = patchNumericCell(cells, colLetter(ci), +rm[1], cell.value, ci);
+        }
       }
       return open + cells + close;
     }

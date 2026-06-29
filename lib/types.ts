@@ -20,7 +20,7 @@ export interface FilledData {
   cls: string;         // I  (index 8)
   planogram: string;   // J  (index 9)  ← DATA_SPACEMAN col D
   colN: string;        // N  (index 13) ← 100 ช่อง col DF
-  colO: string;        // O  (index 14) ← DATA_SPACEMAN col AL
+  colO: string;        // O  (index 14) ← percentage string e.g. "100%" or "50%"
 }
 
 export interface ProcessedRow extends MissingRow {
@@ -44,4 +44,32 @@ export interface HierarchyMap {
   divToDept: Record<string, string[]>; // DIVISION value → sorted DEPT values
   deptToSub: Record<string, string[]>; // DEPT value → sorted SUB-DEPT values
   subToCls:  Record<string, string[]>; // SUB-DEPT value → sorted CLASS values
+}
+
+/** Metadata for a single product looked up from DATA_SPACEMAN */
+export interface SpacemanRowMeta {
+  category: string;
+  subcategory: string;
+  descC: string;
+}
+
+/** One exception rule in the O% config */
+export interface ExceptionConfig {
+  id: string;
+  category: string;     // exact CATEGORY value, or "ทั้งหมด" (wildcard)
+  subcategory: string;  // exact SUBCATEGORY value, or "ทั้งหมด"
+  descC: string;        // exact DESC_C value, or "ทั้งหมด"
+  percentage: string;   // numeric string without %, e.g. "50"
+  status: "active" | "inactive";
+  createdAt: string;    // ISO timestamp when rule was first added
+  updatedAt: string;    // ISO timestamp of last write to Google Sheets
+}
+
+/** Return value of parsePlanogramLookup */
+export interface PlanogramLookupResult {
+  byPrefix: Map<string, { planogram: string; colAL: string }>;
+  byUpc: Map<string, SpacemanRowMeta>;
+  categories: string[];
+  subcategories: string[];
+  descCList: string[];
 }

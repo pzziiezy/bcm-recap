@@ -19,6 +19,7 @@ import {
   MinusCircle,
   X,
   ChevronRight,
+  Settings2,
 } from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
@@ -27,7 +28,9 @@ import ResultsTable from "@/components/ResultsTable";
 import SpacemanMaster, {
   DriveFileInfo,
   formatDateTime,
+  type SpacemanValues,
 } from "@/components/SpacemanMaster";
+import ConfigMenu, { EXCEPTION_CONFIG_KEY, type SyncStatus } from "@/components/ConfigMenu";
 import { toDownloadRows, type DownloadRow } from "@/lib/download";
 import {
   parseMissingRows,
@@ -38,7 +41,7 @@ import {
   extractExistingValues,
   extractHierarchy,
 } from "@/lib/processor";
-import type { ProcessedRow, HierarchyMap } from "@/lib/types";
+import type { ProcessedRow, HierarchyMap, ExceptionConfig } from "@/lib/types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -100,6 +103,26 @@ export default function Home() {
   const [recapSuggestions, setRecapSuggestions] = useState<Partial<Record<string, string[]>>>({});
   const [recapHierarchy, setRecapHierarchy] = useState<HierarchyMap | null>(null);
 
+  // Exception config — loaded from Google Sheets on mount; localStorage is fallback cache
+  const [exceptionConfig, setExceptionConfig] = useState<ExceptionConfig[]>(() => {
+    try {
+      const raw = localStorage.getItem(EXCEPTION_CONFIG_KEY);
+      return raw ? (JSON.parse(raw) as ExceptionConfig[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [showConfig, setShowConfig] = useState(false);
+  const [configSyncStatus, setConfigSyncStatus] = useState<SyncStatus>("loading");
+  const [configLastSaved, setConfigLastSaved] = useState<string | null>(null);
+  const [configSyncError, setConfigSyncError] = useState("");
+  // Unique values from DATA_SPACEMAN for config dropdowns
+  const [spacemanValues, setSpacemanValues] = useState<SpacemanValues>({
+    categories: [],
+    subcategories: [],
+    descCList: [],
+  });
+
   // Queue state (display only — heavy data lives in refs)
   const [jobs, setJobs] = useState<BuildJob[]>([]);
   const [queuePanelOpen, setQueuePanelOpen] = useState(false);
@@ -124,6 +147,25 @@ export default function Home() {
       .catch(() => setDriveFileInfo(null))
       .finally(() => setDriveLoading(false));
   }, []);
+
+  // Load exception config from Google Sheets on mount (localStorage is fallback)
+  useEffect(() => {
+    setConfigSyncStatus("loading");
+    fetch("/api/config/load")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        const loaded: ExceptionConfig[] = data.config ?? [];
+        setExceptionConfig(loaded);
+        setConfigLastSaved(data.lastSaved ?? null);
+        localStorage.setItem(EXCEPTION_CONFIG_KEY, JSON.stringify(loaded));
+        setConfigSyncStatus("idle");
+      })
+      .catch((e) => {
+        setConfigSyncError(String(e));
+        setConfigSyncStatus("error");
+      });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Core job starter (stable — only touches refs + functional setJobs) ──
 
@@ -299,13 +341,13 @@ export default function Home() {
 
       setStatusMsg("อ่าน DATA_SPACEMAN เพื่อหา PLANOGRAM...");
       setPct(50);
-      const planogramMap = await parsePlanogramLookup(spacemanFile, (p) =>
+      const planogramResult = await parsePlanogramLookup(spacemanFile, (p) =>
         setPct(50 + p * 0.35)
       );
 
       setStatusMsg("ประมวลผลข้อมูล...");
       setPct(90);
-      const processed = processRows(missing, barcodeMap, structureMap, planogramMap);
+      const processed = processRows(missing, barcodeMap, structureMap, planogramResult, exceptionConfig);
       setResults(processed);
 
       setPct(100);
@@ -333,6 +375,32 @@ export default function Home() {
     setResults([]);
     setRecapSuggestions({});
     setRecapHierarchy(null);
+  };
+
+  const handleConfigChange = (updated: ExceptionConfig[]) => {
+    setExceptionConfig(updated);
+    localStorage.setItem(EXCEPTION_CONFIG_KEY, JSON.stringify(updated));
+    setConfigSyncStatus("saving");
+    fetch("/api/config/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries: updated }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.error);
+        // Server stamped updatedAt — sync those back so localStorage stays accurate
+        if (data.entries) {
+          setExceptionConfig(data.entries);
+          localStorage.setItem(EXCEPTION_CONFIG_KEY, JSON.stringify(data.entries));
+        }
+        setConfigLastSaved(data.savedAt ?? null);
+        setConfigSyncStatus("saved");
+      })
+      .catch((e) => {
+        setConfigSyncError(String(e));
+        setConfigSyncStatus("error");
+      });
   };
 
   const confirmed = results.filter((r) => r.confidence === "confirmed").length;
@@ -376,19 +444,39 @@ export default function Home() {
 
       {/* Tab Navigation */}
       <div className="bg-white border-b border-slate-200 shadow-sm px-6">
-        <div className="flex gap-0">
-          <TabBtn active={view === "main"} onClick={() => setView("main")}>
-            <FileSpreadsheet className="w-4 h-4" />
-            อัปโหลดข้อมูล
-          </TabBtn>
-          <TabBtn active={view === "spaceman"} onClick={() => setView("spaceman")}>
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-              <ellipse cx="12" cy="5" rx="9" ry="3" />
-              <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
-              <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" />
-            </svg>
-            DATA_SPACEMAN
-          </TabBtn>
+        <div className="flex items-center justify-between">
+          <div className="flex gap-0">
+            <TabBtn active={view === "main"} onClick={() => setView("main")}>
+              <FileSpreadsheet className="w-4 h-4" />
+              อัปโหลดข้อมูล
+            </TabBtn>
+            <TabBtn active={view === "spaceman"} onClick={() => setView("spaceman")}>
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <ellipse cx="12" cy="5" rx="9" ry="3" />
+                <path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5" />
+                <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3" />
+              </svg>
+              DATA_SPACEMAN
+            </TabBtn>
+          </div>
+          {/* Config button */}
+          <button
+            onClick={() => setShowConfig(true)}
+            title="Config — ข้อยกเว้นคอลัมน์ O (%)"
+            className={`flex items-center gap-1.5 px-3 py-1.5 mr-1 rounded-lg text-xs font-medium transition-colors ${
+              exceptionConfig.length > 0
+                ? "bg-pink-50 text-[#E91E8C] border border-pink-200 hover:bg-pink-100"
+                : "text-slate-500 hover:bg-slate-100"
+            }`}
+          >
+            <Settings2 className="w-4 h-4" />
+            Config O%
+            {exceptionConfig.length > 0 && (
+              <span className="bg-[#E91E8C] text-white text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none">
+                {exceptionConfig.length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
@@ -409,6 +497,7 @@ export default function Home() {
                   setDriveFileInfo(info);
                   setDriveLoading(false);
                 }}
+                onSpacemanValues={setSpacemanValues}
               />
             </div>
 
@@ -585,6 +674,21 @@ export default function Home() {
           onTerminate={terminateJob}
           onRemove={removeJob}
           onDownload={downloadJob}
+        />
+      )}
+
+      {/* Config modal */}
+      {showConfig && (
+        <ConfigMenu
+          config={exceptionConfig}
+          onChange={handleConfigChange}
+          onClose={() => setShowConfig(false)}
+          categories={spacemanValues.categories}
+          subcategories={spacemanValues.subcategories}
+          descCList={spacemanValues.descCList}
+          syncStatus={configSyncStatus}
+          lastSaved={configLastSaved}
+          syncError={configSyncError}
         />
       )}
     </main>

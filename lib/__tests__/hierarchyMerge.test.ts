@@ -16,6 +16,7 @@ function row(
     barcode: "000",
     name: "test",
     confidence: "confirmed",
+    note: "",
     filled: { division, dept, subDept, cls, planogram: "", colN: "", colO: "" },
     override,
   };
@@ -124,6 +125,7 @@ describe("buildHierarchyFromRows — override takes precedence over filled", () 
   it("handles row where filled is null", () => {
     const r: ProcessedRow = {
       rowIndex: 0, barcode: "000", name: "test", confidence: "not_found",
+      note: "",
       filled: null,
     };
     expect(buildHierarchyFromRows([r])).toEqual(EMPTY);

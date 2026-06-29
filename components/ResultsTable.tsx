@@ -40,9 +40,17 @@ const FIELDS: { key: keyof FilledData; col: string }[] = [
   { key: "subDept",   col: "H — SUB-DEPT"  },
   { key: "cls",       col: "I — Class"     },
   { key: "planogram", col: "J — PLANOGRAM" },
-  { key: "colN",      col: "N — MBC Forecast sale"              },
-  { key: "colO",      col: "O — Shelf stock ON POG (Piece) 100%" },
+  { key: "colN",      col: "N — MBC Forecast sale"   },
+  { key: "colO",      col: "O — Shelf stock ON POG (%)" },
 ];
+
+/** Compute column P from effective O and N values */
+function computeColP(data: Record<string, string>): string {
+  const oNum = parseFloat(data.colO ?? "100") || 100;
+  const nNum = parseFloat(data.colN ?? "0") || 0;
+  if (!data.colN) return "";
+  return (Math.round((oNum / 100) * nNum * 100) / 100).toFixed(2);
+}
 
 export default function ResultsTable({ rows, onChange, externalSuggestions, hierarchyMap }: Props) {
   const [editIdx, setEditIdx] = useState<number | null>(null);
@@ -154,6 +162,7 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
                   {col}
                 </th>
               ))}
+              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">P — Shelf stock ON POG (Net)</th>
               <th className="px-3 py-3 text-center font-semibold whitespace-nowrap">แก้ไข</th>
             </tr>
           </thead>
@@ -200,6 +209,19 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
                       )}
                     </td>
                   ))}
+
+                  {/* Column P — computed from effective O × N, always read-only */}
+                  <td className="px-3 py-3 min-w-[120px]">
+                    {(() => {
+                      const effectiveData = isEditing
+                        ? { ...(data as Record<string, string>), ...draft }
+                        : (data as Record<string, string>);
+                      const p = computeColP(effectiveData);
+                      return p
+                        ? <span className="text-slate-700 text-xs font-mono">{p}</span>
+                        : <span className="text-slate-300 italic text-xs">—</span>;
+                    })()}
+                  </td>
 
                   <td className="px-3 py-3 text-center whitespace-nowrap">
                     {isEditing ? (

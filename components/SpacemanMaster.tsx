@@ -18,10 +18,18 @@ export function formatDateTime(isoString: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+export interface SpacemanValues {
+  categories: string[];
+  subcategories: string[];
+  descCList: string[];
+}
+
 interface Props {
   onFileInfoChange: (info: DriveFileInfo | null) => void;
   /** True when this tab is visible — needed to measure frozen-column offsets */
   isVisible?: boolean;
+  /** Called once after DATA_SPACEMAN finishes parsing — provides unique CATEGORY/SUBCATEGORY/DESC_C values for Config dropdowns */
+  onSpacemanValues?: (values: SpacemanValues) => void;
 }
 
 type DataRow = Record<string, string>;
@@ -40,7 +48,7 @@ const LEVEL_COLORS = [
 const LEVEL_INDENT = ["pl-2", "pl-5", "pl-8", "pl-11"];
 const LEVEL_DOT = ["bg-[#E91E8C]", "bg-[#00A6E2]", "bg-[#F15A22]", "bg-[#72BF44]"];
 
-export default function SpacemanMaster({ onFileInfoChange, isVisible = false }: Props) {
+export default function SpacemanMaster({ onFileInfoChange, isVisible = false, onSpacemanValues }: Props) {
   // File meta & table data
   const [latestFile, setLatestFile] = useState<DriveFileInfo | null>(null);
   const [loadingMeta, setLoadingMeta] = useState(true);
@@ -201,6 +209,15 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false }: 
           setTableData(msg.rows);
           setParseProgress(100);
           setLoadingData(false);
+          if (onSpacemanValues) {
+            const uniq = (col: string) =>
+              col ? [...new Set(msg.rows.map((r: Record<string, string>) => r[col]).filter(Boolean))].sort() : [];
+            onSpacemanValues({
+              categories:    uniq("CATEGORY"),
+              subcategories: uniq("SUBCATEGORY"),
+              descCList:     uniq("DESC_C"),
+            });
+          }
         } else if (msg.type === "error") {
           parseWorkerRef.current = null;
           setDataError(msg.message);

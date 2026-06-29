@@ -6,6 +6,9 @@ import type {
   HierarchyNames,
   HierarchyMap,
   FilledData,
+  ExceptionConfig,
+  SpacemanRowMeta,
+  PlanogramLookupResult,
 } from "./types";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -59,7 +62,7 @@ function buildRecapCodes(h: HierarchyNames): FilledData {
     cls: `${div}${dep}${sub}${cls}: ${clsName}`,
     planogram: "", // filled later by parsePlanogramLookup col D
     colN: "",      // filled later by parseXlsbFiles col DF
-    colO: "",      // filled later by parsePlanogramLookup col AL
+    colO: "",      // filled later by processRows (exception config → percentage%)
   };
 }
 
@@ -194,18 +197,19 @@ export async function buildStructureLookup(
   return map;
 }
 
-export interface PlanogramEntry {
-  planogram: string; // most-frequent value from col D (index 3)
-  colAL: string;     // most-frequent value from col AL (index 37)
-}
-
-// ─── Step 4: Parse DATA_SPACEMAN → subdept prefix → planogram + colAL ────
+// ─── Step 4: Parse DATA_SPACEMAN → prefix/UPC lookups ───────────────────────
 
 export async function parsePlanogramLookup(
   file: File,
   onProgress?: (pct: number) => void
-): Promise<Map<string, PlanogramEntry>> {
-  const map = new Map<string, PlanogramEntry>(); // key = 6-digit subdept prefix
+): Promise<PlanogramLookupResult> {
+  const empty: PlanogramLookupResult = {
+    byPrefix: new Map(),
+    byUpc: new Map(),
+    categories: [],
+    subcategories: [],
+    descCList: [],
+  };
 
   const buf = await file.arrayBuffer();
   onProgress?.(20);
@@ -214,36 +218,50 @@ export async function parsePlanogramLookup(
   try {
     wb = XLSX.read(buf, { type: "array" });
   } catch {
-    return map;
+    return empty;
   }
   onProgress?.(60);
 
   const ws = wb.Sheets["QRY_Product_by_POG"];
-  if (!ws) return map;
+  if (!ws) return empty;
 
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
 
-  // Find SUBCATEGORY column by header name (position may vary across file versions)
-  let subcatCol = -1;
+  // Locate columns by header name
+  let subcatCol = -1, categoryCol = -1, upcCol = -1, descCCol = -1;
   for (let c = 0; c <= range.e.c; c++) {
-    if (cellVal(ws, 0, c) === "SUBCATEGORY") { subcatCol = c; break; }
+    const h = cellVal(ws, 0, c);
+    if (h === "SUBCATEGORY") subcatCol = c;
+    else if (h === "CATEGORY") categoryCol = c;
+    else if (h === "UPC") upcCol = c;
+    else if (h === "DESC_C") descCCol = c;
   }
-  if (subcatCol < 0) return map;
+  if (subcatCol < 0) return empty;
 
-  // Planogram: col D (fixed index 3) per new format
-  // ColAL: col AL (fixed index 37)
-  const COL_D  = 3;
-  const COL_AL = 37;
+  const COL_D  = 3;  // PLANOGRAM
+  const COL_AL = 37; // colAL (kept for backward compat but not used in O anymore)
 
   const freqPlog = new Map<string, Map<string, number>>();
   const freqAL   = new Map<string, Map<string, number>>();
+  const byUpc    = new Map<string, SpacemanRowMeta>();
+  const catSet   = new Set<string>();
+  const subSet   = new Set<string>();
+  const descSet  = new Set<string>();
+
+  const mostFrequent = (freq: Map<string, number>): string => {
+    let best = ""; let bestCount = 0;
+    for (const [val, count] of freq.entries()) {
+      if (count > bestCount) { best = val; bestCount = count; }
+    }
+    return best;
+  };
 
   for (let r = 1; r <= range.e.r; r++) {
-    const subcat = cellVal(ws, r, subcatCol); // e.g. "0420600103: CRACKERS"
+    const subcat = cellVal(ws, r, subcatCol);
     if (!subcat) continue;
 
-    const prefix = subcat.slice(0, 6); // "042060"
-    if (!/^\d{6}$/.test(prefix)) continue; // skip rows where prefix is not 6 digits
+    const prefix = subcat.slice(0, 6);
+    if (!/^\d{6}$/.test(prefix)) continue;
 
     const plog = cellVal(ws, r, COL_D);
     if (plog) {
@@ -258,26 +276,38 @@ export async function parsePlanogramLookup(
       const m = freqAL.get(prefix)!;
       m.set(al, (m.get(al) || 0) + 1);
     }
+
+    // Build UPC-level meta for exception config matching
+    if (upcCol >= 0) {
+      const upc = normalizeBarcode(cellVal(ws, r, upcCol));
+      if (upc && !byUpc.has(upc)) {
+        const category   = categoryCol >= 0 ? cellVal(ws, r, categoryCol) : "";
+        const descC      = descCCol   >= 0 ? cellVal(ws, r, descCCol)   : "";
+        byUpc.set(upc, { category, subcategory: subcat, descC });
+        if (category) catSet.add(category);
+        if (subcat)   subSet.add(subcat);
+        if (descC)    descSet.add(descC);
+      }
+    }
   }
 
-  const mostFrequent = (freq: Map<string, number>): string => {
-    let best = ""; let bestCount = 0;
-    for (const [val, count] of freq.entries()) {
-      if (count > bestCount) { best = val; bestCount = count; }
-    }
-    return best;
-  };
-
   const allPrefixes = new Set([...freqPlog.keys(), ...freqAL.keys()]);
+  const byPrefix = new Map<string, { planogram: string; colAL: string }>();
   for (const prefix of allPrefixes) {
-    map.set(prefix, {
+    byPrefix.set(prefix, {
       planogram: freqPlog.has(prefix) ? mostFrequent(freqPlog.get(prefix)!) : "",
       colAL:     freqAL.has(prefix)   ? mostFrequent(freqAL.get(prefix)!)   : "",
     });
   }
 
   onProgress?.(100);
-  return map;
+  return {
+    byPrefix,
+    byUpc,
+    categories:   [...catSet].sort(),
+    subcategories: [...subSet].sort(),
+    descCList:    [...descSet].sort(),
+  };
 }
 
 // ─── Extract cascading hierarchy from RECAP cols F-I ──────────────────────
@@ -338,7 +368,7 @@ export function extractExistingValues(
     cls: 8,
     planogram: 9,
     colN: 13,
-    colO: 14,
+    colO: 14, // O: percentage string e.g. "100%"
   };
 
   const sets: Record<string, Set<string>> = {};
@@ -356,14 +386,34 @@ export function extractExistingValues(
   );
 }
 
+// ─── Exception config helpers ───────────────────────────────────────────────
+
+function matchesConfig(entry: ExceptionConfig, meta: SpacemanRowMeta): boolean {
+  const catOk  = entry.category    === "ทั้งหมด" || entry.category    === meta.category;
+  const subOk  = entry.subcategory === "ทั้งหมด" || entry.subcategory === meta.subcategory;
+  const descOk = entry.descC       === "ทั้งหมด" || entry.descC       === meta.descC;
+  return catOk && subOk && descOk;
+}
+
+function findMatchingConfig(config: ExceptionConfig[], meta: SpacemanRowMeta): ExceptionConfig | null {
+  for (const entry of config) {
+    if (entry.status === "inactive") continue;
+    if (matchesConfig(entry, meta)) return entry;
+  }
+  return null;
+}
+
 // ─── Step 5: Combine everything ────────────────────────────────────────────
 
 export function processRows(
   missing: MissingRow[],
   barcodeMap: Map<string, SubclassInfo>,
   structureMap: Map<string, HierarchyNames>,
-  planogramMap: Map<string, PlanogramEntry>
+  planogramResult: PlanogramLookupResult,
+  config: ExceptionConfig[] = []
 ): ProcessedRow[] {
+  const { byPrefix, byUpc } = planogramResult;
+
   return missing.map((row) => {
     const info = barcodeMap.get(row.barcode);
 
@@ -388,11 +438,16 @@ export function processRows(
     }
 
     const filled = buildRecapCodes(hierarchy);
-    const subdeptPrefix = info.subclassCode.slice(0, 6); // e.g. "042060"
-    const entry = planogramMap.get(subdeptPrefix);
+    const subdeptPrefix = info.subclassCode.slice(0, 6);
+    const entry = byPrefix.get(subdeptPrefix);
     filled.planogram = entry?.planogram || "";
-    filled.colN      = info.colDF || "";   // 100 ช่อง col DF → RECAP col N
-    filled.colO      = entry?.colAL || ""; // DATA_SPACEMAN col AL → RECAP col O
+    filled.colN      = info.colDF || "";
+
+    // Column O: percentage string. Look up this barcode in DATA_SPACEMAN meta, then
+    // match against exception config (first match wins). Default = "100%".
+    const meta = byUpc.get(row.barcode) ?? { category: "", subcategory: "", descC: "" };
+    const matched = config.length > 0 ? findMatchingConfig(config, meta) : null;
+    filled.colO = matched ? `${matched.percentage}%` : "100%";
 
     const confidence = filled.planogram ? "confirmed" : "inferred";
 
