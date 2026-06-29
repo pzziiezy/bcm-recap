@@ -701,7 +701,6 @@ export default function ConfigMenu({
                   <p className="text-sm text-slate-500 mt-1">
                     คุณต้องการลบ <strong className="text-red-600">{confirmIds.length} รายการ</strong> ที่เลือกหรือไม่?
                   </p>
-                  <p className="text-xs text-slate-400 mt-1">รายการจะถูกซ่อนจากหน้าจอ แต่ยังคงอยู่ใน Google Sheets (status: deleted)</p>
                 </div>
               </div>
               <div className="flex gap-3 justify-end">
