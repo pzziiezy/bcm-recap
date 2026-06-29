@@ -63,9 +63,10 @@ export interface ExceptionConfig {
   subcategory: string;  // exact SUBCATEGORY value, or "ทั้งหมด"
   descC: string;        // exact DESC_C value, or "ทั้งหมด"
   percentage: string;   // numeric string without %, e.g. "50"
-  status: "active" | "inactive";
+  status: "active" | "inactive" | "deleted";
   createdAt: string;    // ISO timestamp when rule was first added
   updatedAt: string;    // ISO timestamp of last write to Google Sheets
+  deletedAt?: string;   // ISO timestamp when soft-deleted (undefined if not deleted)
 }
 
 /** Return value of parsePlanogramLookup */

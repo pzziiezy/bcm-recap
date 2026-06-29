@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect } from "react";
 import {
   Plus, X, Settings2, CloudUpload, Loader2, CheckCircle,
-  AlertTriangle, Search, Pencil, Copy, Save,
+  AlertTriangle, Search, Pencil, Copy, Save, Trash2,
   ChevronUp, ChevronDown, ChevronsUpDown,
 } from "lucide-react";
 import type { ExceptionConfig } from "@/lib/types";
@@ -254,6 +254,7 @@ export default function ConfigMenu({
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [colFilters, setColFilters] = useState<ColFilters>(emptyFilters());
   const [page, setPage] = useState(0);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const isEditing = editId !== null;
   const set = (k: keyof DraftFields, v: string) => setDraft((d) => ({ ...d, [k]: v }));
@@ -264,11 +265,24 @@ export default function ConfigMenu({
     ? detectConflict(draft, config, isEditing ? editId! : undefined)
     : null;
 
+  // ── Delete helpers ──
+  const deleteEntries = (ids: string[]) => {
+    const now = new Date().toISOString();
+    onChange(config.map((e) =>
+      ids.includes(e.id) ? { ...e, status: "deleted" as const, deletedAt: now, updatedAt: now } : e
+    ));
+    setSelectedIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
+  };
+
+  const toggleSelect = (id: string) =>
+    setSelectedIds((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+
   // ── Computed table data ──
   // When conflict active → override table to show only conflicting entries (highlighted)
   const conflictIds = conflict ? new Set(conflict.entries.map((e) => e.id)) : null;
 
   const afterFilter = config.filter((e) =>
+    e.status !== "deleted" &&
     (!colFilters.category || e.category.toLowerCase().includes(colFilters.category.toLowerCase())) &&
     (!colFilters.subcategory || e.subcategory.toLowerCase().includes(colFilters.subcategory.toLowerCase())) &&
     (!colFilters.descC || e.descC.toLowerCase().includes(colFilters.descC.toLowerCase())) &&
@@ -300,6 +314,7 @@ export default function ConfigMenu({
   const setFilter = (key: keyof ColFilters, value: string) => {
     setColFilters((f) => ({ ...f, [key]: value }));
     setPage(0);
+    setSelectedIds(new Set());
   };
   const hasFilter = Object.values(colFilters).some(Boolean);
 
@@ -469,6 +484,24 @@ export default function ConfigMenu({
             </div>
           </div>
 
+          {/* Bulk-delete bar */}
+          {selectedIds.size > 0 && (
+            <div className="flex items-center gap-3 px-4 py-2 bg-red-50 border border-red-200 rounded-xl text-xs">
+              <span className="text-red-700 font-medium">เลือกแล้ว {selectedIds.size} รายการ</span>
+              <button
+                onClick={() => deleteEntries([...selectedIds])}
+                disabled={syncStatus === "saving"}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-40 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                ลบที่เลือก ({selectedIds.size})
+              </button>
+              <button onClick={() => setSelectedIds(new Set())} className="text-slate-400 hover:text-slate-600 transition-colors">
+                ยกเลิก
+              </button>
+            </div>
+          )}
+
           {/* Table */}
           {syncStatus === "loading" ? (
             <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin text-pink-300" /></div>
@@ -489,6 +522,24 @@ export default function ConfigMenu({
                 <table className="min-w-full text-xs">
                   <thead>
                     <tr className="bg-slate-50 text-slate-600 border-b border-slate-100">
+                      <th className="px-3 py-2 w-8">
+                        {!isConflictView && (
+                          <input
+                            type="checkbox"
+                            className="rounded accent-[#E91E8C] cursor-pointer"
+                            checked={pageData.length > 0 && pageData.every((e) => selectedIds.has(e.id))}
+                            onChange={() => {
+                              const pageIds = pageData.map((e) => e.id);
+                              const allSel = pageIds.every((id) => selectedIds.has(id));
+                              setSelectedIds((prev) => {
+                                const next = new Set(prev);
+                                allSel ? pageIds.forEach((id) => next.delete(id)) : pageIds.forEach((id) => next.add(id));
+                                return next;
+                              });
+                            }}
+                          />
+                        )}
+                      </th>
                       <th className="px-3 py-2 text-left font-semibold w-10">#</th>
                       {(["descC","category","subcategory","percentage","status","createdAt","updatedAt"] as const).map((col) => {
                         const labels: Record<string, string> = {
@@ -511,6 +562,7 @@ export default function ConfigMenu({
                     {/* Filter row */}
                     <tr className="bg-white border-b border-slate-100">
                       <td className="px-3 py-1.5" />
+                      <td className="px-3 py-1.5" />
                       <td className="px-2 py-1.5"><input value={colFilters.descC} onChange={(e) => setFilter("descC", e.target.value)} placeholder="กรอง…" className="w-full text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
                       <td className="px-2 py-1.5"><input value={colFilters.category} onChange={(e) => setFilter("category", e.target.value)} placeholder="กรอง…" className="w-full text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
                       <td className="px-2 py-1.5"><input value={colFilters.subcategory} onChange={(e) => setFilter("subcategory", e.target.value)} placeholder="กรอง…" className="w-full text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
@@ -532,7 +584,7 @@ export default function ConfigMenu({
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {tableRows.length === 0 ? (
-                      <tr><td colSpan={9} className="px-3 py-6 text-center text-xs text-slate-400">ไม่พบรายการที่ตรงกับ Filter</td></tr>
+                      <tr><td colSpan={10} className="px-3 py-6 text-center text-xs text-slate-400">ไม่พบรายการที่ตรงกับ Filter</td></tr>
                     ) : tableRows.map((entry, i) => {
                       const isThisEdit = editId === entry.id;
                       const isConflicting = conflictIds?.has(entry.id) ?? false;
@@ -547,6 +599,16 @@ export default function ConfigMenu({
                             : entry.status === "inactive" ? "opacity-50 hover:opacity-70"
                             : "hover:bg-slate-50"
                         }`}>
+                          <td className="px-3 py-2.5">
+                            {!isConflictView && (
+                              <input
+                                type="checkbox"
+                                className="rounded accent-[#E91E8C] cursor-pointer"
+                                checked={selectedIds.has(entry.id)}
+                                onChange={() => toggleSelect(entry.id)}
+                              />
+                            )}
+                          </td>
                           <td className="px-3 py-2.5 text-slate-400">{globalIdx}</td>
                           <td className="px-3 py-2.5 max-w-[160px]" title={entry.descC}>
                             <span className={`truncate block ${entry.descC === ALL ? "text-slate-400 italic" : ""}`}>{entry.descC}</span>
@@ -579,6 +641,9 @@ export default function ConfigMenu({
                               <button onClick={() => copyEntry(entry)} title="คัดลอก → กรอก form" disabled={syncStatus === "saving"}
                                 className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-400 hover:text-blue-500 disabled:opacity-40 transition-colors"
                               ><Copy className="w-3.5 h-3.5" /></button>
+                              <button onClick={() => deleteEntries([entry.id])} title="ลบรายการนี้" disabled={syncStatus === "saving"}
+                                className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 disabled:opacity-40 transition-colors"
+                              ><Trash2 className="w-3.5 h-3.5" /></button>
                             </div>
                           </td>
                         </tr>
