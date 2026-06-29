@@ -443,10 +443,22 @@ export function processRows(
     filled.planogram = entry?.planogram || "";
     filled.colN      = info.colDF || "";
 
-    // Column O: percentage string. Look up this barcode in DATA_SPACEMAN meta, then
-    // match against exception config (first match wins). Default = "100%".
+    // Column O: percentage string. Match against exception config (first active rule wins).
+    // Primary: look up the barcode in DATA_SPACEMAN's byUpc map for exact CATEGORY/SUBCATEGORY/DESC_C.
+    // Fallback: derive meta from the RECAP hierarchy we already computed — Class → category,
+    // SubDept → descC, SubclassCode+Name → subcategory. This covers products that have a
+    // planogram prefix entry but whose individual UPC row is absent from DATA_SPACEMAN.
     const metaEntry = byUpc.get(row.barcode);
-    const meta = metaEntry ?? { category: "", subcategory: "", descC: "" };
+    const derivedMeta: SpacemanRowMeta = {
+      category:    filled.cls,
+      subcategory: info.subclassCode
+        ? (info.subclassName.trim()
+            ? `${info.subclassCode}: ${info.subclassName.trim()}`
+            : info.subclassCode)
+        : "",
+      descC: filled.subDept,
+    };
+    const meta = metaEntry ?? derivedMeta;
     const matched = config.length > 0 ? findMatchingConfig(config, meta) : null;
     filled.colO = matched ? `${matched.percentage}%` : "100%";
 
@@ -456,8 +468,6 @@ export function processRows(
     if (config.length > 0) {
       if (matched) {
         configNote = ` | Rule O: ${matched.percentage}%`;
-      } else if (!metaEntry) {
-        configNote = ` | ไม่พบ UPC ใน DATA_SPACEMAN → O=100%`;
       } else {
         configNote = ` | ไม่มี Rule ตรง (${meta.category || "–"}) → O=100%`;
       }
