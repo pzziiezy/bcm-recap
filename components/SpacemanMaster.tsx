@@ -57,6 +57,7 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
   const [loadingData, setLoadingData] = useState(false);
   const [parseProgress, setParseProgress] = useState(0);
   const [dataError, setDataError] = useState("");
+  const [totalRows, setTotalRows] = useState(0);
   const parseWorkerRef = useRef<Worker | null>(null);
 
   // Table controls
@@ -198,7 +199,7 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
       worker.onmessage = (e: MessageEvent) => {
         const msg = e.data as
           | { type: "progress"; pct: number }
-          | { type: "done"; headers: string[]; rows: DataRow[] }
+          | { type: "done"; headers: string[]; rows: DataRow[]; totalRows: number; uniqueCategories: string[]; uniqueSubcategories: string[]; uniqueDescC: string[] }
           | { type: "error"; message: string };
 
         if (msg.type === "progress") {
@@ -207,15 +208,14 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
           parseWorkerRef.current = null;
           setHeaders(msg.headers);
           setTableData(msg.rows);
+          setTotalRows(msg.totalRows ?? msg.rows.length);
           setParseProgress(100);
           setLoadingData(false);
           if (onSpacemanValues) {
-            const uniq = (col: string) =>
-              col ? [...new Set(msg.rows.map((r: Record<string, string>) => r[col]).filter(Boolean))].sort() : [];
             onSpacemanValues({
-              categories:    uniq("CATEGORY"),
-              subcategories: uniq("SUBCATEGORY"),
-              descCList:     uniq("DESC_C"),
+              categories:    msg.uniqueCategories    ?? [],
+              subcategories: msg.uniqueSubcategories ?? [],
+              descCList:     msg.uniqueDescC         ?? [],
             });
           }
         } else if (msg.type === "error") {
@@ -737,7 +737,12 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
               <h2 className="font-bold text-slate-800 text-lg">ข้อมูลใน QRY_Product_by_POG</h2>
               {tableData.length > 0 && (
                 <span className="text-xs bg-pink-100 text-[#E91E8C] px-2 py-0.5 rounded-full font-medium">
-                  {tableData.length.toLocaleString()} แถว
+                  {totalRows.toLocaleString()} แถว
+                </span>
+              )}
+              {totalRows > tableData.length && (
+                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                  แสดง {tableData.length.toLocaleString()} แถวแรก
                 </span>
               )}
               {displayData.length !== tableData.length && (

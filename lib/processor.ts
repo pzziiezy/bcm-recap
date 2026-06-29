@@ -445,20 +445,32 @@ export function processRows(
 
     // Column O: percentage string. Look up this barcode in DATA_SPACEMAN meta, then
     // match against exception config (first match wins). Default = "100%".
-    const meta = byUpc.get(row.barcode) ?? { category: "", subcategory: "", descC: "" };
+    const metaEntry = byUpc.get(row.barcode);
+    const meta = metaEntry ?? { category: "", subcategory: "", descC: "" };
     const matched = config.length > 0 ? findMatchingConfig(config, meta) : null;
     filled.colO = matched ? `${matched.percentage}%` : "100%";
 
     const confidence = filled.planogram ? "confirmed" : "inferred";
+
+    let configNote = "";
+    if (config.length > 0) {
+      if (matched) {
+        configNote = ` | Rule O: ${matched.percentage}%`;
+      } else if (!metaEntry) {
+        configNote = ` | ไม่พบ UPC ใน DATA_SPACEMAN → O=100%`;
+      } else {
+        configNote = ` | ไม่มี Rule ตรง (${meta.category || "–"}) → O=100%`;
+      }
+    }
 
     return {
       ...row,
       filled,
       confidence,
       subclassCode: info.subclassCode,
-      note: confidence === "confirmed"
+      note: (confidence === "confirmed"
         ? `จาก ${info.sourceFile}`
-        : `จาก ${info.sourceFile} — PLANOGRAM ไม่พบใน DATA_SPACEMAN`,
+        : `จาก ${info.sourceFile} — PLANOGRAM ไม่พบใน DATA_SPACEMAN`) + configNote,
     };
   });
 }
