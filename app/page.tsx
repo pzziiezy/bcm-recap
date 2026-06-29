@@ -122,6 +122,7 @@ export default function Home() {
     subcategories: [],
     descCList: [],
   });
+  const [spacemanLoaded, setSpacemanLoaded] = useState(false);
 
   // Queue state (display only — heavy data lives in refs)
   const [jobs, setJobs] = useState<BuildJob[]>([]);
@@ -497,7 +498,7 @@ export default function Home() {
                   setDriveFileInfo(info);
                   setDriveLoading(false);
                 }}
-                onSpacemanValues={setSpacemanValues}
+                onSpacemanValues={(v) => { setSpacemanValues(v); setSpacemanLoaded(true); }}
               />
             </div>
 
@@ -686,6 +687,7 @@ export default function Home() {
           categories={spacemanValues.categories}
           subcategories={spacemanValues.subcategories}
           descCList={spacemanValues.descCList}
+          spacemanLoaded={spacemanLoaded}
           syncStatus={configSyncStatus}
           lastSaved={configLastSaved}
           syncError={configSyncError}

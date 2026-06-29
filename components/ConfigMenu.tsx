@@ -18,6 +18,7 @@ interface Props {
   categories: string[];
   subcategories: string[];
   descCList: string[];
+  spacemanLoaded: boolean;
   syncStatus: SyncStatus;
   lastSaved: string | null;
   syncError: string;
@@ -46,13 +47,13 @@ function SearchSelect({
   value,
   options,
   onChange,
-  compact = false,
+  loading = false,
 }: {
   label?: string;
   value: string;
   options: string[];
   onChange: (v: string) => void;
-  compact?: boolean;
+  loading?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -77,19 +78,35 @@ function SearchSelect({
   const select = (v: string) => { onChange(v); setOpen(false); setSearch(""); };
 
   return (
-    <div ref={wrapRef} className={`flex flex-col gap-1 relative ${compact ? "" : ""}`}>
+    <div ref={wrapRef} className="flex flex-col gap-1 relative">
       {label && <label className="text-xs font-medium text-slate-500">{label}</label>}
       <button
         type="button"
-        onClick={() => { setOpen((o) => !o); setSearch(""); }}
-        className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-left flex items-center justify-between gap-1 focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C] hover:border-pink-300 transition-colors min-w-0"
+        disabled={loading}
+        onClick={() => { if (!loading) { setOpen((o) => !o); setSearch(""); } }}
+        className={`text-xs border rounded-lg px-2 py-1.5 bg-white text-left flex items-center justify-between gap-1 focus:outline-none transition-colors min-w-0 ${
+          loading
+            ? "border-slate-100 bg-slate-50 cursor-not-allowed opacity-70"
+            : "border-slate-200 hover:border-pink-300 focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C]"
+        }`}
       >
-        <span className={`truncate ${!value ? "text-slate-300" : value === ALL ? "text-slate-400 italic" : "text-slate-700"}`}>
-          {value || "— เลือก —"}
-        </span>
-        <svg className="w-3 h-3 text-slate-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
+        {loading ? (
+          <>
+            <span className="flex items-center gap-1.5 text-slate-400 italic">
+              <Loader2 className="w-3 h-3 animate-spin flex-shrink-0" />
+              กำลังโหลด...
+            </span>
+          </>
+        ) : (
+          <span className={`truncate ${!value ? "text-slate-300" : value === ALL ? "text-slate-400 italic" : "text-slate-700"}`}>
+            {value || "— เลือก —"}
+          </span>
+        )}
+        {!loading && (
+          <svg className="w-3 h-3 text-slate-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        )}
       </button>
 
       {open && (
@@ -134,6 +151,7 @@ export default function ConfigMenu({
   categories,
   subcategories,
   descCList,
+  spacemanLoaded,
   syncStatus,
   lastSaved,
   syncError,
@@ -286,24 +304,36 @@ export default function ConfigMenu({
               {isEditing ? "✏️ แก้ไข Rule" : "เพิ่ม Rule ใหม่"}
             </p>
 
+            {!spacemanLoaded && (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin flex-shrink-0" />
+                <p className="text-xs text-amber-700">
+                  กำลังโหลดข้อมูลจาก DATA_SPACEMAN — dropdown จะพร้อมใช้งานหลังโหลดเสร็จ
+                </p>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <SearchSelect
                 label="CATEGORY"
                 value={draft.category}
                 options={categories}
                 onChange={(v) => set("category", v)}
+                loading={!spacemanLoaded}
               />
               <SearchSelect
                 label="SUBCATEGORY"
                 value={draft.subcategory}
                 options={subcategories}
                 onChange={(v) => set("subcategory", v)}
+                loading={!spacemanLoaded}
               />
               <SearchSelect
                 label="DESC_C"
                 value={draft.descC}
                 options={descCList}
                 onChange={(v) => set("descC", v)}
+                loading={!spacemanLoaded}
               />
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-slate-500">Percentage (%)</label>
