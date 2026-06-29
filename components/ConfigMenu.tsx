@@ -407,9 +407,9 @@ export default function ConfigMenu({
             )}
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <SearchSelect label="DESC_C" value={draft.descC} options={descCList} onChange={(v) => set("descC", v)} loading={!spacemanLoaded} />
               <SearchSelect label="CATEGORY" value={draft.category} options={categories} onChange={(v) => set("category", v)} loading={!spacemanLoaded} />
               <SearchSelect label="SUBCATEGORY" value={draft.subcategory} options={subcategories} onChange={(v) => set("subcategory", v)} loading={!spacemanLoaded} />
-              <SearchSelect label="DESC_C" value={draft.descC} options={descCList} onChange={(v) => set("descC", v)} loading={!spacemanLoaded} />
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-slate-500">Percentage (%)</label>
                 <input
@@ -490,9 +490,9 @@ export default function ConfigMenu({
                   <thead>
                     <tr className="bg-slate-50 text-slate-600 border-b border-slate-100">
                       <th className="px-3 py-2 text-left font-semibold w-10">#</th>
-                      {(["category","subcategory","descC","percentage","status","createdAt","updatedAt"] as const).map((col) => {
+                      {(["descC","category","subcategory","percentage","status","createdAt","updatedAt"] as const).map((col) => {
                         const labels: Record<string, string> = {
-                          category: "CATEGORY", subcategory: "SUBCATEGORY", descC: "DESC_C",
+                          descC: "DESC_C", category: "CATEGORY", subcategory: "SUBCATEGORY",
                           percentage: "%", status: "Status", createdAt: "สร้างเมื่อ", updatedAt: "อัปเดตล่าสุด",
                         };
                         return (
@@ -511,9 +511,9 @@ export default function ConfigMenu({
                     {/* Filter row */}
                     <tr className="bg-white border-b border-slate-100">
                       <td className="px-3 py-1.5" />
+                      <td className="px-2 py-1.5"><input value={colFilters.descC} onChange={(e) => setFilter("descC", e.target.value)} placeholder="กรอง…" className="w-full text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
                       <td className="px-2 py-1.5"><input value={colFilters.category} onChange={(e) => setFilter("category", e.target.value)} placeholder="กรอง…" className="w-full text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
                       <td className="px-2 py-1.5"><input value={colFilters.subcategory} onChange={(e) => setFilter("subcategory", e.target.value)} placeholder="กรอง…" className="w-full text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
-                      <td className="px-2 py-1.5"><input value={colFilters.descC} onChange={(e) => setFilter("descC", e.target.value)} placeholder="กรอง…" className="w-full text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
                       <td className="px-2 py-1.5 text-center"><input value={colFilters.percentage} onChange={(e) => setFilter("percentage", e.target.value)} placeholder="กรอง…" className="w-16 text-center text-[11px] border border-slate-200 rounded px-1.5 py-0.5 focus:outline-none focus:border-pink-300 placeholder-slate-300" /></td>
                       <td className="px-2 py-1.5 text-center">
                         <select value={colFilters.status} onChange={(e) => setFilter("status", e.target.value)} className="text-[11px] border border-slate-200 rounded px-1 py-0.5 focus:outline-none focus:border-pink-300 bg-white text-slate-600">
@@ -548,14 +548,14 @@ export default function ConfigMenu({
                             : "hover:bg-slate-50"
                         }`}>
                           <td className="px-3 py-2.5 text-slate-400">{globalIdx}</td>
+                          <td className="px-3 py-2.5 max-w-[160px]" title={entry.descC}>
+                            <span className={`truncate block ${entry.descC === ALL ? "text-slate-400 italic" : ""}`}>{entry.descC}</span>
+                          </td>
                           <td className="px-3 py-2.5 max-w-[160px]" title={entry.category}>
                             <span className={`truncate block ${entry.category === ALL ? "text-slate-400 italic" : ""}`}>{entry.category}</span>
                           </td>
                           <td className="px-3 py-2.5 max-w-[200px]" title={entry.subcategory}>
                             <span className={`truncate block ${entry.subcategory === ALL ? "text-slate-400 italic" : ""}`}>{entry.subcategory}</span>
-                          </td>
-                          <td className="px-3 py-2.5 max-w-[160px]" title={entry.descC}>
-                            <span className={`truncate block ${entry.descC === ALL ? "text-slate-400 italic" : ""}`}>{entry.descC}</span>
                           </td>
                           <td className="px-3 py-2.5 text-center font-semibold text-[#E91E8C] whitespace-nowrap">{entry.percentage}%</td>
                           <td className="px-3 py-2.5 text-center">
