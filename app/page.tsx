@@ -457,7 +457,7 @@ export default function Home() {
           {/* Config button */}
           <button
             onClick={() => setShowConfig(true)}
-            title="Config — ข้อยกเว้นคอลัมน์ O (%)"
+            title="Config Rules"
             className={`flex items-center gap-1.5 px-3 py-1.5 mr-1 rounded-lg text-xs font-medium transition-colors ${
               exceptionConfig.length > 0
                 ? "bg-pink-50 text-[#E91E8C] border border-pink-200 hover:bg-pink-100"
@@ -465,7 +465,7 @@ export default function Home() {
             }`}
           >
             <Settings2 className="w-4 h-4" />
-            Config O%
+            Config Rules
             {exceptionConfig.length > 0 && (
               <span className="bg-[#E91E8C] text-white text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none">
                 {exceptionConfig.length}

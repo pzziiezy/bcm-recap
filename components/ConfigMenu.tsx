@@ -365,7 +365,7 @@ export default function ConfigMenu({
           <div className="flex items-center gap-3">
             <Settings2 className="w-5 h-5 text-[#E91E8C]" />
             <div>
-              <h2 className="font-bold text-slate-800 text-base">Config — ข้อยกเว้นคอลัมน์ O (%)</h2>
+              <h2 className="font-bold text-slate-800 text-base">Config Rules</h2>
               <SyncBadge />
             </div>
           </div>
