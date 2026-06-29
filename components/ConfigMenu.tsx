@@ -255,6 +255,7 @@ export default function ConfigMenu({
   const [colFilters, setColFilters] = useState<ColFilters>(emptyFilters());
   const [page, setPage] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [confirmIds, setConfirmIds] = useState<string[] | null>(null); // null = dialog closed
 
   const isEditing = editId !== null;
   const set = (k: keyof DraftFields, v: string) => setDraft((d) => ({ ...d, [k]: v }));
@@ -266,12 +267,16 @@ export default function ConfigMenu({
     : null;
 
   // ── Delete helpers ──
-  const deleteEntries = (ids: string[]) => {
+  const requestDelete = (ids: string[]) => setConfirmIds(ids);
+
+  const confirmDelete = () => {
+    if (!confirmIds) return;
     const now = new Date().toISOString();
     onChange(config.map((e) =>
-      ids.includes(e.id) ? { ...e, status: "deleted" as const, deletedAt: now, updatedAt: now } : e
+      confirmIds.includes(e.id) ? { ...e, status: "deleted" as const, deletedAt: now, updatedAt: now } : e
     ));
-    setSelectedIds((prev) => { const next = new Set(prev); ids.forEach((id) => next.delete(id)); return next; });
+    setSelectedIds((prev) => { const next = new Set(prev); confirmIds.forEach((id) => next.delete(id)); return next; });
+    setConfirmIds(null);
   };
 
   const toggleSelect = (id: string) =>
@@ -489,7 +494,7 @@ export default function ConfigMenu({
             <div className="flex items-center gap-3 px-4 py-2 bg-red-50 border border-red-200 rounded-xl text-xs">
               <span className="text-red-700 font-medium">เลือกแล้ว {selectedIds.size} รายการ</span>
               <button
-                onClick={() => deleteEntries([...selectedIds])}
+                onClick={() => requestDelete([...selectedIds])}
                 disabled={syncStatus === "saving"}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-40 transition-colors"
               >
@@ -641,7 +646,7 @@ export default function ConfigMenu({
                               <button onClick={() => copyEntry(entry)} title="คัดลอก → กรอก form" disabled={syncStatus === "saving"}
                                 className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-400 hover:text-blue-500 disabled:opacity-40 transition-colors"
                               ><Copy className="w-3.5 h-3.5" /></button>
-                              <button onClick={() => deleteEntries([entry.id])} title="ลบรายการนี้" disabled={syncStatus === "saving"}
+                              <button onClick={() => requestDelete([entry.id])} title="ลบรายการนี้" disabled={syncStatus === "saving"}
                                 className="p-1.5 rounded-lg hover:bg-red-50 text-slate-400 hover:text-red-500 disabled:opacity-40 transition-colors"
                               ><Trash2 className="w-3.5 h-3.5" /></button>
                             </div>
@@ -680,6 +685,44 @@ export default function ConfigMenu({
           </button>
         </div>
       </div>
+
+      {/* Delete confirmation dialog */}
+      {confirmIds !== null && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm mx-4 overflow-hidden">
+            <div className="h-1 bg-gradient-to-r from-red-500 to-red-400" />
+            <div className="px-6 py-5 space-y-4">
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 bg-red-100 rounded-full p-2">
+                  <Trash2 className="w-5 h-5 text-red-600" />
+                </div>
+                <div>
+                  <p className="font-bold text-slate-800">ยืนยันการลบ</p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    คุณต้องการลบ <strong className="text-red-600">{confirmIds.length} รายการ</strong> ที่เลือกหรือไม่?
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">รายการจะถูกซ่อนจากหน้าจอ แต่ยังคงอยู่ใน Google Sheets (status: deleted)</p>
+                </div>
+              </div>
+              <div className="flex gap-3 justify-end">
+                <button
+                  onClick={() => setConfirmIds(null)}
+                  className="px-4 py-2 text-sm font-semibold text-slate-600 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-red-600 rounded-xl hover:bg-red-700 transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  ลบเลย
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
