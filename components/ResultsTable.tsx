@@ -41,15 +41,16 @@ const FIELDS: { key: keyof FilledData; col: string }[] = [
   { key: "cls",       col: "I — Class"     },
   { key: "planogram", col: "J — PLANOGRAM" },
   { key: "colN",      col: "N — MBC Forecast sale"   },
-  { key: "colO",      col: "O — Shelf stock ON POG (%)" },
+  { key: "colPiece",  col: "O — Shelf stock ON POG (Piece) 100%" },
+  { key: "colO",      col: "P — Shelf stock ON POG (%)" },
 ];
 
-/** Compute column P from effective O and N values */
-function computeColP(data: Record<string, string>): string {
-  const oNum = parseFloat(data.colO ?? "100") || 100;
-  const nNum = parseFloat(data.colN ?? "0") || 0;
-  if (!data.colN) return "";
-  return (Math.round((oNum / 100) * nNum * 100) / 100).toFixed(2);
+/** Compute column Q: colO% × colPiece */
+function computeColQ(data: Record<string, string>): string {
+  const pctNum   = parseFloat(data.colO     ?? "0") || 0;
+  const pieceNum = parseFloat(data.colPiece ?? "0") || 0;
+  if (!data.colPiece || !data.colO) return "";
+  return (Math.round((pctNum / 100) * pieceNum * 100) / 100).toFixed(2);
 }
 
 export default function ResultsTable({ rows, onChange, externalSuggestions, hierarchyMap }: Props) {
@@ -154,16 +155,16 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
         <table className="min-w-full text-sm">
           <thead>
             <tr className="bg-gradient-to-r from-pink-50 to-orange-50 text-slate-700">
-              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">สถานะ</th>
-              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">Barcode</th>
-              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">ชื่อสินค้า</th>
+              <th className="px-2 py-3 text-left font-semibold whitespace-nowrap">สถานะ</th>
+              <th className="px-2 py-3 text-left font-semibold whitespace-nowrap">Barcode</th>
+              <th className="px-2 py-3 text-left font-semibold whitespace-nowrap">ชื่อสินค้า</th>
               {FIELDS.map(({ col }) => (
-                <th key={col} className="px-3 py-3 text-left font-semibold whitespace-nowrap">
+                <th key={col} className="px-2 py-3 text-left font-semibold whitespace-nowrap">
                   {col}
                 </th>
               ))}
-              <th className="px-3 py-3 text-left font-semibold whitespace-nowrap">P — Shelf stock ON POG (Net)</th>
-              <th className="px-3 py-3 text-center font-semibold whitespace-nowrap">แก้ไข</th>
+              <th className="px-2 py-3 text-left font-semibold whitespace-nowrap">Q — Shelf stock ON POG (Net)</th>
+              <th className="px-2 py-3 text-center font-semibold whitespace-nowrap">แก้ไข</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -177,31 +178,31 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
                   key={row.barcode}
                   className={`${meta.bg} hover:brightness-[0.98] transition-colors`}
                 >
-                  <td className="px-3 py-3 whitespace-nowrap">
-                    <div className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium ${meta.badge}`}>
+                  <td className="px-2 py-3 whitespace-nowrap">
+                    <div className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${meta.badge}`}>
                       {meta.icon}
                       {meta.label}
                     </div>
                   </td>
-                  <td className="px-3 py-3 font-mono text-xs text-slate-600 whitespace-nowrap">
+                  <td className="px-2 py-3 font-mono text-xs text-slate-600 whitespace-nowrap">
                     {row.barcode}
                   </td>
-                  <td className="px-3 py-3 max-w-[200px] truncate text-slate-700" title={row.name}>
+                  <td className="px-2 py-3 max-w-[140px] truncate text-slate-700 text-xs" title={row.name}>
                     {row.name}
                   </td>
 
                   {FIELDS.map(({ key }) => (
-                    <td key={key} className="px-3 py-3 min-w-[160px]">
+                    <td key={key} className="px-2 py-3 min-w-[90px]">
                       {isEditing ? (
                         <input
                           list={`dl-${key}`}
                           value={draft[key] ?? ""}
                           onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
                           placeholder="พิมพ์หรือเลือก..."
-                          className="w-full px-2 py-1.5 text-xs border border-[#E91E8C] rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-200 bg-white"
+                          className="w-full min-w-[80px] px-2 py-1.5 text-xs border border-[#E91E8C] rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-200 bg-white"
                         />
                       ) : (
-                        <span className="text-slate-700 text-xs">
+                        <span className="text-slate-700 text-xs whitespace-nowrap">
                           {(data as Record<string, string>)[key] || (
                             <span className="text-slate-300 italic">—</span>
                           )}
@@ -210,20 +211,20 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
                     </td>
                   ))}
 
-                  {/* Column P — computed from effective O × N, always read-only */}
-                  <td className="px-3 py-3 min-w-[120px]">
+                  {/* Column Q — computed from colO% × colPiece, always read-only */}
+                  <td className="px-3 py-3 min-w-[80px]">
                     {(() => {
                       const effectiveData = isEditing
                         ? { ...(data as Record<string, string>), ...draft }
                         : (data as Record<string, string>);
-                      const p = computeColP(effectiveData);
-                      return p
-                        ? <span className="text-slate-700 text-xs font-mono">{p}</span>
+                      const q = computeColQ(effectiveData);
+                      return q
+                        ? <span className="text-slate-700 text-xs font-mono">{q}</span>
                         : <span className="text-slate-300 italic text-xs">—</span>;
                     })()}
                   </td>
 
-                  <td className="px-3 py-3 text-center whitespace-nowrap">
+                  <td className="px-2 py-3 text-center whitespace-nowrap">
                     {isEditing ? (
                       <div className="flex items-center justify-center gap-1">
                         <button

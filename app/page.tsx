@@ -38,10 +38,8 @@ import {
   buildStructureLookup,
   parsePlanogramLookup,
   processRows,
-  extractExistingValues,
-  extractHierarchy,
 } from "@/lib/processor";
-import type { ProcessedRow, HierarchyMap, ExceptionConfig } from "@/lib/types";
+import type { ProcessedRow, ExceptionConfig } from "@/lib/types";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -100,8 +98,6 @@ export default function Home() {
   const [driveFileInfo, setDriveFileInfo] = useState<DriveFileInfo | null>(null);
   const [driveLoading, setDriveLoading] = useState(true);
   const [results, setResults] = useState<ProcessedRow[]>([]);
-  const [recapSuggestions, setRecapSuggestions] = useState<Partial<Record<string, string[]>>>({});
-  const [recapHierarchy, setRecapHierarchy] = useState<HierarchyMap | null>(null);
 
   // Exception config — loaded from Google Sheets on mount; localStorage is fallback cache
   const [exceptionConfig, setExceptionConfig] = useState<ExceptionConfig[]>(() => {
@@ -320,8 +316,6 @@ export default function Home() {
       recapBufRef.current = recapBuf.slice(0);
       const wb = XLSX.read(recapBuf, { type: "array" });
       const missing = parseMissingRows(wb);
-      setRecapSuggestions(extractExistingValues(wb));
-      setRecapHierarchy(extractHierarchy(wb));
 
       setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล — กำลังค้นหาในไฟล์ 100 ช่อง...`);
       setPct(25);
@@ -374,8 +368,6 @@ export default function Home() {
     setRecapFiles([]);
     setXlsbFiles([]);
     setResults([]);
-    setRecapSuggestions({});
-    setRecapHierarchy(null);
   };
 
   const handleConfigChange = (updated: ExceptionConfig[]) => {
@@ -620,8 +612,10 @@ export default function Home() {
                         <ResultsTable
                           rows={results}
                           onChange={handleResultsChange}
-                          externalSuggestions={recapSuggestions}
-                          hierarchyMap={recapHierarchy ?? undefined}
+                          externalSuggestions={{
+                            cls:     spacemanValues.categories,
+                            subDept: spacemanValues.descCList,
+                          }}
                         />
                         <div className="flex gap-3 pt-4 border-t border-slate-100">
                           <NavBtn onClick={enqueueJob}>
