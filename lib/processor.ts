@@ -62,6 +62,7 @@ function buildRecapCodes(h: HierarchyNames): FilledData {
     cls: `${div}${dep}${sub}${cls}: ${clsName}`,
     planogram: "", // filled later by parsePlanogramLookup col D
     colN: "",      // filled later by parseXlsbFiles col DF
+    colPiece: "",  // filled later by processRows (DATA_SPACEMAN TOTAL_UNITS)
     colO: "",      // filled later by processRows (exception config → percentage%)
   };
 }
@@ -228,21 +229,20 @@ export async function parsePlanogramLookup(
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
 
   // Locate columns by header name
-  let subcatCol = -1, categoryCol = -1, upcCol = -1, descCCol = -1;
+  let subcatCol = -1, categoryCol = -1, upcCol = -1, descCCol = -1, totalUnitsCol = -1;
   for (let c = 0; c <= range.e.c; c++) {
     const h = cellVal(ws, 0, c);
     if (h === "SUBCATEGORY") subcatCol = c;
     else if (h === "CATEGORY") categoryCol = c;
     else if (h === "UPC") upcCol = c;
     else if (h === "DESC_C") descCCol = c;
+    else if (h === "TOTAL_UNITS") totalUnitsCol = c;
   }
   if (subcatCol < 0) return empty;
 
-  const COL_D  = 3;  // PLANOGRAM
-  const COL_AL = 37; // colAL (kept for backward compat but not used in O anymore)
+  const COL_D = 3; // PLANOGRAM column (col D, 0-indexed)
 
   const freqPlog = new Map<string, Map<string, number>>();
-  const freqAL   = new Map<string, Map<string, number>>();
   const byUpc    = new Map<string, SpacemanRowMeta>();
   const catSet   = new Set<string>();
   const subSet   = new Set<string>();
@@ -270,20 +270,14 @@ export async function parsePlanogramLookup(
       m.set(plog, (m.get(plog) || 0) + 1);
     }
 
-    const al = cellVal(ws, r, COL_AL);
-    if (al) {
-      if (!freqAL.has(prefix)) freqAL.set(prefix, new Map());
-      const m = freqAL.get(prefix)!;
-      m.set(al, (m.get(al) || 0) + 1);
-    }
-
-    // Build UPC-level meta for exception config matching
+    // Build UPC-level meta for config matching + TOTAL_UNITS lookup
     if (upcCol >= 0) {
       const upc = normalizeBarcode(cellVal(ws, r, upcCol));
       if (upc && !byUpc.has(upc)) {
-        const category   = categoryCol >= 0 ? cellVal(ws, r, categoryCol) : "";
-        const descC      = descCCol   >= 0 ? cellVal(ws, r, descCCol)   : "";
-        byUpc.set(upc, { category, subcategory: subcat, descC });
+        const category   = categoryCol   >= 0 ? cellVal(ws, r, categoryCol)   : "";
+        const descC      = descCCol      >= 0 ? cellVal(ws, r, descCCol)      : "";
+        const totalUnits = totalUnitsCol >= 0 ? cellVal(ws, r, totalUnitsCol) : "";
+        byUpc.set(upc, { category, subcategory: subcat, descC, totalUnits });
         if (category) catSet.add(category);
         if (subcat)   subSet.add(subcat);
         if (descC)    descSet.add(descC);
@@ -291,12 +285,11 @@ export async function parsePlanogramLookup(
     }
   }
 
-  const allPrefixes = new Set([...freqPlog.keys(), ...freqAL.keys()]);
   const byPrefix = new Map<string, { planogram: string; colAL: string }>();
-  for (const prefix of allPrefixes) {
+  for (const prefix of freqPlog.keys()) {
     byPrefix.set(prefix, {
-      planogram: freqPlog.has(prefix) ? mostFrequent(freqPlog.get(prefix)!) : "",
-      colAL:     freqAL.has(prefix)   ? mostFrequent(freqAL.get(prefix)!)   : "",
+      planogram: mostFrequent(freqPlog.get(prefix)!),
+      colAL: "",
     });
   }
 
@@ -443,12 +436,19 @@ export function processRows(
     filled.planogram = entry?.planogram || "";
     filled.colN      = info.colDF || "";
 
-    // Column O: percentage string. Match against exception config (first active rule wins).
-    // Primary: look up the barcode in DATA_SPACEMAN's byUpc map for exact CATEGORY/SUBCATEGORY/DESC_C.
-    // Fallback: derive meta from the RECAP hierarchy we already computed — Class → category,
-    // SubDept → descC, SubclassCode+Name → subcategory. This covers products that have a
-    // planogram prefix entry but whose individual UPC row is absent from DATA_SPACEMAN.
+    // UPC-level DATA_SPACEMAN lookup — used for both TOTAL_UNITS and config meta.
     const metaEntry = byUpc.get(row.barcode);
+
+    // Col O (Piece 100%): TOTAL_UNITS from DATA_SPACEMAN.
+    // No fallback — this is a physical shelf count; only meaningful when the product
+    // is explicitly listed in DATA_SPACEMAN.
+    filled.colPiece = metaEntry?.totalUnits || "";
+
+    // Col P (%): Match exception config rules (first active match wins, default 100%).
+    // Primary: use DATA_SPACEMAN meta (CATEGORY/SUBCATEGORY/DESC_C) from byUpc.
+    // Fallback: derive meta from RECAP hierarchy — Class→category, SubDept→descC,
+    // SubclassCode+Name→subcategory — so rules apply even when the barcode is absent
+    // from DATA_SPACEMAN's UPC column.
     const derivedMeta: SpacemanRowMeta = {
       category:    filled.cls,
       subcategory: info.subclassCode
@@ -456,7 +456,8 @@ export function processRows(
             ? `${info.subclassCode}: ${info.subclassName.trim()}`
             : info.subclassCode)
         : "",
-      descC: filled.subDept,
+      descC:      filled.subDept,
+      totalUnits: "",
     };
     const meta = metaEntry ?? derivedMeta;
     const matched = config.length > 0 ? findMatchingConfig(config, meta) : null;
@@ -503,14 +504,26 @@ export function applyAndDownload(
       const addr = XLSX.utils.encode_cell({ r: row.rowIndex, c });
       ws[addr] = { t: "s", v };
     };
+    const writeNum = (c: number, v: number) => {
+      const addr = XLSX.utils.encode_cell({ r: row.rowIndex, c });
+      ws[addr] = { t: "n", v };
+    };
 
     write(5,  data.division  || "");
     write(6,  data.dept      || "");
     write(7,  data.subDept   || "");
     write(8,  data.cls       || "");
-    write(9,  data.planogram || ""); // J ← DATA_SPACEMAN col D
-    write(13, data.colN      || ""); // N ← 100 ช่อง col DF
-    write(14, data.colO      || ""); // O ← DATA_SPACEMAN col AL
+    write(9,  data.planogram || ""); // J ← DATA_SPACEMAN col D (PLANOGRAM)
+    write(13, data.colN      || ""); // N ← 100 ช่อง col DF (MBC Forecast)
+    write(14, data.colPiece  || ""); // O ← DATA_SPACEMAN TOTAL_UNITS (Piece 100%)
+    write(15, data.colO      || ""); // P ← config % (Shelf stock ON POG %)
+
+    // Q ← Net = P% × O pieces
+    const pctNum   = parseFloat(data.colO    || "0");
+    const pieceNum = parseFloat(data.colPiece || "0");
+    if (pctNum > 0 && pieceNum > 0) {
+      writeNum(16, Math.round((pctNum / 100) * pieceNum * 100) / 100);
+    }
   }
 
   XLSX.writeFile(wb, "RECAP_filled.xlsx");

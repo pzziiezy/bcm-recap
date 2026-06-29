@@ -28,6 +28,7 @@ const ALL: Record<keyof FilledData, string[]> = {
   cls:       ["04205001: CANDY", "04205002: GUM", "04506010: RED", "04506011: WHITE", "04506012: ROSE", "08101001: MOP"],
   planogram: ["POG-001"],
   colN:      ["100"],
+  colPiece:  ["5"],
   colO:      ["200"],
 };
 

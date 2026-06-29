@@ -133,7 +133,7 @@ function findSheetPath(wbXml: string, relsXml: string, name: string): string | n
 // String columns to fill (col index → FilledData key)
 const STRING_FILL_COLS: Array<[number, string]> = [
   [5, "division"], [6, "dept"], [7, "subDept"], [8, "cls"],
-  [9, "planogram"], [13, "colN"], [14, "colO"],
+  [9, "planogram"], [13, "colN"], [14, "colPiece"], [15, "colO"],
 ];
 
 type CellTarget =
@@ -201,12 +201,12 @@ function applyRows(
       if (v) cols.set(ci, { kind: "s", ssIdx: ssIdx(v) });
     }
 
-    // Column P (index 15) — always computed from effective O and N
-    const oNum = parseFloat((data as Record<string, string>).colO ?? "100") || 100;
-    const nNum = parseFloat((data as Record<string, string>).colN ?? "0") || 0;
-    if (nNum !== 0 || (data as Record<string, string>).colN) {
-      const pVal = Math.round((oNum / 100) * nNum * 100) / 100;
-      cols.set(15, { kind: "n", value: pVal });
+    // Column Q (index 16) — Net = colO% × colPiece
+    const pctNum   = parseFloat((data as Record<string, string>).colO     ?? "0") || 0;
+    const pieceNum = parseFloat((data as Record<string, string>).colPiece ?? "0") || 0;
+    if (pctNum > 0 && pieceNum > 0) {
+      const qVal = Math.round((pctNum / 100) * pieceNum * 100) / 100;
+      cols.set(16, { kind: "n", value: qVal });
     }
 
     if (cols.size) target.set(excelRow, cols);

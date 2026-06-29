@@ -17,7 +17,7 @@ function row(
     name: "test",
     confidence: "confirmed",
     note: "",
-    filled: { division, dept, subDept, cls, planogram: "", colN: "", colO: "" },
+    filled: { division, dept, subDept, cls, planogram: "", colN: "", colPiece: "", colO: "" },
     override,
   };
 }

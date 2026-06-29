@@ -18,9 +18,11 @@ export interface FilledData {
   dept: string;        // G  (index 6)
   subDept: string;     // H  (index 7)
   cls: string;         // I  (index 8)
-  planogram: string;   // J  (index 9)  ← DATA_SPACEMAN col D
-  colN: string;        // N  (index 13) ← 100 ช่อง col DF
-  colO: string;        // O  (index 14) ← percentage string e.g. "100%" or "50%"
+  planogram: string;   // J  (index 9)  ← DATA_SPACEMAN col D (PLANOGRAM)
+  colN: string;        // N  (index 13) ← 100 ช่อง col DF (MBC Forecast)
+  colPiece: string;    // O  (index 14) ← DATA_SPACEMAN TOTAL_UNITS (Shelf stock ON POG Piece 100%)
+  colO: string;        // P  (index 15) ← config % string e.g. "100%" or "40%"
+  // Q (index 16) = colO% × colPiece — computed on write, not stored
 }
 
 export interface ProcessedRow extends MissingRow {
@@ -51,6 +53,7 @@ export interface SpacemanRowMeta {
   category: string;
   subcategory: string;
   descC: string;
+  totalUnits: string;  // TOTAL_UNITS column from DATA_SPACEMAN
 }
 
 /** One exception rule in the O% config */
