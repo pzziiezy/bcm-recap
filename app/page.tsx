@@ -116,6 +116,8 @@ export default function Home() {
   const [spacemanValues, setSpacemanValues] = useState<SpacemanValues>({
     categories: [],
     subcategories: [],
+    descAList: [],
+    descBList: [],
     descCList: [],
   });
   const [spacemanLoaded, setSpacemanLoaded] = useState(false);
@@ -613,8 +615,10 @@ export default function Home() {
                           rows={results}
                           onChange={handleResultsChange}
                           externalSuggestions={{
-                            cls:     spacemanValues.categories,
-                            subDept: spacemanValues.descCList,
+                            division: spacemanValues.descAList,
+                            dept:     spacemanValues.descBList,
+                            subDept:  spacemanValues.descCList,
+                            cls:      spacemanValues.categories,
                           }}
                         />
                         <div className="flex gap-3 pt-4 border-t border-slate-100">

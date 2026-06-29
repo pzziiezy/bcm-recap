@@ -21,6 +21,8 @@ export function formatDateTime(isoString: string): string {
 export interface SpacemanValues {
   categories: string[];
   subcategories: string[];
+  descAList: string[];
+  descBList: string[];
   descCList: string[];
 }
 
@@ -199,7 +201,7 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
       worker.onmessage = (e: MessageEvent) => {
         const msg = e.data as
           | { type: "progress"; pct: number }
-          | { type: "done"; headers: string[]; rows: DataRow[]; totalRows: number; uniqueCategories: string[]; uniqueSubcategories: string[]; uniqueDescC: string[] }
+          | { type: "done"; headers: string[]; rows: DataRow[]; totalRows: number; uniqueCategories: string[]; uniqueSubcategories: string[]; uniqueDescA: string[]; uniqueDescB: string[]; uniqueDescC: string[] }
           | { type: "error"; message: string };
 
         if (msg.type === "progress") {
@@ -215,6 +217,8 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
             onSpacemanValues({
               categories:    msg.uniqueCategories    ?? [],
               subcategories: msg.uniqueSubcategories ?? [],
+              descAList:     msg.uniqueDescA         ?? [],
+              descBList:     msg.uniqueDescB         ?? [],
               descCList:     msg.uniqueDescC         ?? [],
             });
           }
