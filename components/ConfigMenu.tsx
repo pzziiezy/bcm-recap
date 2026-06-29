@@ -1,6 +1,6 @@
 "use client";
-import { useState } from "react";
-import { Plus, Trash2, X, Settings2, CloudUpload, Loader2, CheckCircle, AlertTriangle } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Plus, Trash2, X, Settings2, CloudUpload, Loader2, CheckCircle, AlertTriangle, Search } from "lucide-react";
 import type { ExceptionConfig } from "@/lib/types";
 
 export const EXCEPTION_CONFIG_KEY = "recap_exception_config";
@@ -35,6 +35,100 @@ function fmtDate(iso: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// ── Searchable combobox ───────────────────────────────────────────────────────
+function SearchSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setSearch("");
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const allOptions = [ALL, ...options];
+  const filtered = search
+    ? allOptions.filter((o) => o.toLowerCase().includes(search.toLowerCase()))
+    : allOptions;
+
+  const select = (v: string) => {
+    onChange(v);
+    setOpen(false);
+    setSearch("");
+  };
+
+  return (
+    <div ref={wrapRef} className="flex flex-col gap-1 relative">
+      <label className="text-xs font-medium text-slate-500">{label}</label>
+      <button
+        type="button"
+        onClick={() => { setOpen((o) => !o); setSearch(""); }}
+        className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-left flex items-center justify-between gap-1 focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C] hover:border-pink-300 transition-colors"
+      >
+        <span className={value === ALL ? "text-slate-400 italic" : "text-slate-700 truncate"}>
+          {value}
+        </span>
+        <svg className="w-3 h-3 text-slate-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute top-full mt-1 left-0 right-0 z-[60] bg-white border border-slate-200 rounded-xl shadow-xl flex flex-col"
+          style={{ minWidth: "220px" }}>
+          {/* Search input */}
+          <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-slate-100">
+            <Search className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+            <input
+              autoFocus
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="ค้นหา..."
+              className="text-xs flex-1 outline-none bg-transparent placeholder-slate-300"
+            />
+          </div>
+          {/* Options list */}
+          <div className="overflow-y-auto max-h-52">
+            {filtered.length === 0 ? (
+              <p className="text-xs text-slate-400 px-3 py-2">ไม่พบข้อมูล</p>
+            ) : (
+              filtered.map((o) => (
+                <button
+                  key={o}
+                  type="button"
+                  onClick={() => select(o)}
+                  className={`w-full text-left text-xs px-3 py-1.5 hover:bg-pink-50 transition-colors ${
+                    o === value ? "bg-pink-50 text-[#E91E8C] font-semibold" : o === ALL ? "text-slate-400 italic" : "text-slate-700"
+                  }`}
+                >
+                  {o}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function ConfigMenu({
   config,
   onChange,
@@ -55,7 +149,7 @@ export default function ConfigMenu({
   const addEntry = () => {
     const pct = parseFloat(draft.percentage);
     if (isNaN(pct) || pct <= 0 || pct > 100) {
-      setError("Percentage ต้องเป็นตัวเลข 1-100");
+      setError("Percentage ต้องเป็นตัวเลข 1–100");
       return;
     }
     setError("");
@@ -71,32 +165,6 @@ export default function ConfigMenu({
     onChange(config.map((e) =>
       e.id === id ? { ...e, status: e.status === "active" ? "inactive" : "active" } : e
     ));
-
-  const SelectField = ({
-    label,
-    value,
-    options,
-    onChange: onCh,
-  }: {
-    label: string;
-    value: string;
-    options: string[];
-    onChange: (v: string) => void;
-  }) => (
-    <div className="flex flex-col gap-1">
-      <label className="text-xs font-medium text-slate-500">{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onCh(e.target.value)}
-        className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C]"
-      >
-        <option value={ALL}>{ALL}</option>
-        {options.map((o) => (
-          <option key={o} value={o}>{o}</option>
-        ))}
-      </select>
-    </div>
-  );
 
   const SyncBadge = () => {
     if (syncStatus === "loading") return (
@@ -132,7 +200,7 @@ export default function ConfigMenu({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <div className="flex items-center gap-3">
@@ -142,10 +210,7 @@ export default function ConfigMenu({
               <SyncBadge />
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors"
-          >
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -160,21 +225,21 @@ export default function ConfigMenu({
 
           {/* Add form */}
           <div className="bg-pink-50/60 rounded-xl border border-pink-100 p-4 space-y-3">
-            <p className="text-xs font-semibold text-[#E91E8C] mb-1">เพิ่ม Rule ใหม่</p>
+            <p className="text-xs font-semibold text-[#E91E8C]">เพิ่ม Rule ใหม่</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <SelectField
+              <SearchSelect
                 label="CATEGORY"
                 value={draft.category}
                 options={categories}
                 onChange={(v) => set("category", v)}
               />
-              <SelectField
+              <SearchSelect
                 label="SUBCATEGORY"
                 value={draft.subcategory}
                 options={subcategories}
                 onChange={(v) => set("subcategory", v)}
               />
-              <SelectField
+              <SearchSelect
                 label="DESC_C"
                 value={draft.descC}
                 options={descCList}
@@ -194,6 +259,23 @@ export default function ConfigMenu({
                 />
               </div>
             </div>
+
+            {/* Status toggle in add form */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-slate-500">Status:</span>
+              <button
+                type="button"
+                onClick={() => set("status", draft.status === "active" ? "inactive" : "active")}
+                className={`px-3 py-1 rounded-full text-xs font-bold transition-colors ${
+                  draft.status === "active"
+                    ? "bg-green-100 text-green-700 hover:bg-green-200"
+                    : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                }`}
+              >
+                {draft.status === "active" ? "Active" : "Inactive"}
+              </button>
+            </div>
+
             {error && <p className="text-xs text-red-500">{error}</p>}
             <button
               onClick={addEntry}
@@ -229,22 +311,16 @@ export default function ConfigMenu({
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {config.map((entry, i) => (
-                    <tr key={entry.id} className="hover:bg-slate-50 transition-colors">
+                    <tr key={entry.id} className={`hover:bg-slate-50 transition-colors ${entry.status === "inactive" ? "opacity-50" : ""}`}>
                       <td className="px-3 py-2 text-slate-400">{i + 1}</td>
                       <td className="px-3 py-2 max-w-[140px] truncate" title={entry.category}>
-                        {entry.category === ALL
-                          ? <span className="text-slate-400 italic">{ALL}</span>
-                          : entry.category}
+                        {entry.category === ALL ? <span className="text-slate-400 italic">{ALL}</span> : entry.category}
                       </td>
                       <td className="px-3 py-2 max-w-[180px] truncate" title={entry.subcategory}>
-                        {entry.subcategory === ALL
-                          ? <span className="text-slate-400 italic">{ALL}</span>
-                          : entry.subcategory}
+                        {entry.subcategory === ALL ? <span className="text-slate-400 italic">{ALL}</span> : entry.subcategory}
                       </td>
                       <td className="px-3 py-2 max-w-[140px] truncate" title={entry.descC}>
-                        {entry.descC === ALL
-                          ? <span className="text-slate-400 italic">{ALL}</span>
-                          : entry.descC}
+                        {entry.descC === ALL ? <span className="text-slate-400 italic">{ALL}</span> : entry.descC}
                       </td>
                       <td className="px-3 py-2 text-center font-semibold text-[#E91E8C]">
                         {entry.percentage}%
