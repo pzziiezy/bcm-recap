@@ -26,10 +26,10 @@ interface Props {
 type DraftFields = Omit<ExceptionConfig, "id" | "createdAt" | "updatedAt">;
 
 const emptyDraft = (): DraftFields => ({
-  category: ALL,
-  subcategory: ALL,
-  descC: ALL,
-  percentage: "100",
+  category: "",
+  subcategory: "",
+  descC: "",
+  percentage: "",
   status: "active",
 });
 
@@ -84,7 +84,9 @@ function SearchSelect({
         onClick={() => { setOpen((o) => !o); setSearch(""); }}
         className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-white text-left flex items-center justify-between gap-1 focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C] hover:border-pink-300 transition-colors min-w-0"
       >
-        <span className={`truncate ${value === ALL ? "text-slate-400 italic" : "text-slate-700"}`}>{value}</span>
+        <span className={`truncate ${!value ? "text-slate-300" : value === ALL ? "text-slate-400 italic" : "text-slate-700"}`}>
+          {value || "— เลือก —"}
+        </span>
         <svg className="w-3 h-3 text-slate-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
@@ -165,10 +167,27 @@ export default function ConfigMenu({
     setFormError("");
   };
 
+  const isDuplicate = (d: DraftFields, excludeId?: string) =>
+    config.some(
+      (e) =>
+        e.id !== excludeId &&
+        e.category === d.category &&
+        e.subcategory === d.subcategory &&
+        e.descC === d.descC
+    );
+
   const submitForm = () => {
+    if (!draft.category || !draft.subcategory || !draft.descC) {
+      setFormError("กรุณาเลือกค่าให้ครบทุกช่อง (เลือก 'ทั้งหมด' ถ้าต้องการจับคู่ทุก value)");
+      return;
+    }
     const pct = parseFloat(draft.percentage);
     if (isNaN(pct) || pct <= 0 || pct > 100) {
       setFormError("Percentage ต้องเป็นตัวเลข 1–100");
+      return;
+    }
+    if (isDuplicate(draft, isEditing ? editId! : undefined)) {
+      setFormError("มี Rule ที่ใช้ CATEGORY / SUBCATEGORY / DESC_C นี้อยู่แล้ว กรุณาแก้ไข Rule เดิมแทน");
       return;
     }
     setFormError("");
