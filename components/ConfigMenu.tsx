@@ -223,16 +223,18 @@ function ConflictCard({ conflict }: { conflict: ConflictResult }) {
   const blocking = isBlockingConflict(conflict.kind);
   return (
     <div className={`rounded-xl border-l-4 p-4 space-y-1.5 text-xs ${
-      blocking ? "bg-red-50 border-l-red-500 border border-red-200" : "bg-amber-50 border-l-amber-400 border border-amber-200"
+      blocking
+        ? "bg-red-200 border-l-red-600 border border-red-300"
+        : "bg-amber-200 border-l-amber-500 border border-amber-300"
     }`}>
-      <div className={`flex items-start gap-2 ${blocking ? "text-red-700" : "text-amber-700"}`}>
+      <div className={`flex items-start gap-2 ${blocking ? "text-red-900" : "text-amber-900"}`}>
         <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
         <div>
           <p className="font-bold text-sm leading-snug">{blocking ? "ไม่สามารถเพิ่ม Rule นี้ได้" : "คำเตือน"}</p>
           <p className="mt-0.5 leading-relaxed">{conflictMessage(conflict.kind)}</p>
         </div>
       </div>
-      <p className="text-slate-400 text-[11px] pl-6">↓ รายการที่ขัดแย้งถูกไฮไลต์ในตารางด้านล่างแล้ว</p>
+      <p className={`text-[11px] pl-6 ${blocking ? "text-red-700" : "text-amber-700"}`}>↓ รายการที่ขัดแย้งถูกไฮไลต์ในตารางด้านล่างแล้ว</p>
     </div>
   );
 }
@@ -439,7 +441,7 @@ export default function ConfigMenu({
             {/* Live conflict card */}
             {conflict && <ConflictCard conflict={conflict} />}
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={submitForm}
                 disabled={syncStatus === "saving" || !canSubmit}
@@ -454,8 +456,15 @@ export default function ConfigMenu({
                   ยกเลิก
                 </button>
               )}
+              <button
+                onClick={() => { setEditId(null); setDraft(emptyDraft()); setFormError(""); }}
+                className="flex items-center gap-1 px-3 py-1.5 text-slate-400 text-xs font-semibold rounded-lg hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                title="ล้างค่าในฟอร์มทั้งหมด"
+              >
+                <X className="w-3 h-3" /> ล้างค่า
+              </button>
               {conflict && !isBlockingConflict(conflict.kind) && (
-                <span className="text-[11px] text-amber-600">⚠️ เพิ่มได้ แต่ควรตรวจสอบลำดับ Rule ในตาราง</span>
+                <span className="text-[11px] text-amber-700 font-medium">⚠️ เพิ่มได้ แต่ควรตรวจสอบลำดับ Rule ในตาราง</span>
               )}
             </div>
           </div>
