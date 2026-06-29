@@ -58,6 +58,12 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const descASet = new Set<string>();
     const descBSet = new Set<string>();
     const descCSet = new Set<string>();
+
+    // Hierarchy maps for cascade filtering: DESC_A→DESC_B→DESC_C→CATEGORY
+    const divToDeptMap = new Map<string, Set<string>>();
+    const deptToSubMap = new Map<string, Set<string>>();
+    const subToClsMap  = new Map<string, Set<string>>();
+
     let totalRows = 0; // actual non-empty rows across the full file
 
     for (let r = 1; r <= totalRowsInSheet; r++) {
@@ -73,12 +79,30 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
       totalRows++;
 
-      // Collect unique values from EVERY row (not limited by display cap)
-      if (catIdx   >= 0 && row[headers[catIdx]])   catSet.add(row[headers[catIdx]]);
-      if (subIdx   >= 0 && row[headers[subIdx]])   subSet.add(row[headers[subIdx]]);
-      if (descAIdx >= 0 && row[headers[descAIdx]]) descASet.add(row[headers[descAIdx]]);
-      if (descBIdx >= 0 && row[headers[descBIdx]]) descBSet.add(row[headers[descBIdx]]);
-      if (descCIdx >= 0 && row[headers[descCIdx]]) descCSet.add(row[headers[descCIdx]]);
+      // Collect unique flat values from EVERY row (not limited by display cap)
+      const vCat   = catIdx   >= 0 ? row[headers[catIdx]]   : "";
+      const vDescA = descAIdx >= 0 ? row[headers[descAIdx]] : "";
+      const vDescB = descBIdx >= 0 ? row[headers[descBIdx]] : "";
+      const vDescC = descCIdx >= 0 ? row[headers[descCIdx]] : "";
+      if (catIdx   >= 0 && vCat)   catSet.add(vCat);
+      if (subIdx   >= 0 && row[headers[subIdx]]) subSet.add(row[headers[subIdx]]);
+      if (descAIdx >= 0 && vDescA) descASet.add(vDescA);
+      if (descBIdx >= 0 && vDescB) descBSet.add(vDescB);
+      if (descCIdx >= 0 && vDescC) descCSet.add(vDescC);
+
+      // Build cascade hierarchy (DESC_A→DESC_B→DESC_C→CATEGORY)
+      if (vDescA && vDescB) {
+        if (!divToDeptMap.has(vDescA)) divToDeptMap.set(vDescA, new Set());
+        divToDeptMap.get(vDescA)!.add(vDescB);
+      }
+      if (vDescB && vDescC) {
+        if (!deptToSubMap.has(vDescB)) deptToSubMap.set(vDescB, new Set());
+        deptToSubMap.get(vDescB)!.add(vDescC);
+      }
+      if (vDescC && vCat) {
+        if (!subToClsMap.has(vDescC)) subToClsMap.set(vDescC, new Set());
+        subToClsMap.get(vDescC)!.add(vCat);
+      }
 
       // Only keep first MAX_DISPLAY_ROWS for the table display
       if (rows.length < MAX_DISPLAY_ROWS) rows.push(row);
@@ -92,6 +116,12 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
     }
 
+    const hierarchyMap = {
+      divToDept: Object.fromEntries([...divToDeptMap].map(([k, v]) => [k, [...v].sort()])),
+      deptToSub: Object.fromEntries([...deptToSubMap].map(([k, v]) => [k, [...v].sort()])),
+      subToCls:  Object.fromEntries([...subToClsMap] .map(([k, v]) => [k, [...v].sort()])),
+    };
+
     self.postMessage({
       type: "done",
       headers,
@@ -102,6 +132,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       uniqueDescA:         [...descASet].sort(),
       uniqueDescB:         [...descBSet].sort(),
       uniqueDescC:         [...descCSet].sort(),
+      hierarchyMap,
     });
   } catch (err) {
     self.postMessage({ type: "error", message: String(err) });

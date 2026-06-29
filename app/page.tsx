@@ -119,6 +119,7 @@ export default function Home() {
     descAList: [],
     descBList: [],
     descCList: [],
+    hierarchyMap: { divToDept: {}, deptToSub: {}, subToCls: {} },
   });
   const [spacemanLoaded, setSpacemanLoaded] = useState(false);
 
@@ -620,6 +621,7 @@ export default function Home() {
                             subDept:  spacemanValues.descCList,
                             cls:      spacemanValues.categories,
                           }}
+                          hierarchyMap={spacemanValues.hierarchyMap}
                         />
                         <div className="flex gap-3 pt-4 border-t border-slate-100">
                           <NavBtn onClick={enqueueJob}>
