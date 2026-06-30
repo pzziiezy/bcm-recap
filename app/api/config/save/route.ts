@@ -23,16 +23,16 @@ export async function POST(req: Request) {
     // Build rows: header + data
     const headerRow = [...HEADERS];
     const dataRows = stamped.map((e) => [
-      e.id, e.category, e.subcategory, e.descC, e.percentage, e.status ?? "active", e.createdAt, e.updatedAt,
+      e.id, e.category, e.subcategory, e.descC, e.percentage, e.status ?? "active", e.createdAt, e.updatedAt, e.deletedAt ?? "",
     ]);
 
     const values = [headerRow, ...dataRows];
-    const range = `${SHEET_NAME}!A1:H${values.length}`;
+    const range = `${SHEET_NAME}!A1:I${values.length}`;
 
     // Clear existing content first, then write fresh
     await sheets.spreadsheets.values.clear({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:H`,
+      range: `${SHEET_NAME}!A:I`,
     });
 
     await sheets.spreadsheets.values.update({

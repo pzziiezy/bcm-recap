@@ -11,7 +11,7 @@ export async function GET() {
 
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A1:H`,
+      range: `${SHEET_NAME}!A1:I`,
     });
 
     const rows = res.data.values ?? [];
@@ -29,6 +29,13 @@ export async function GET() {
     const iStatus  = idx("status");
     const iCreated = idx("createdAt");
     const iUpdated = idx("updatedAt");
+    const iDeleted = idx("deletedAt");
+
+    const rawStatus = (s: string): ExceptionConfig["status"] => {
+      if (s === "inactive") return "inactive";
+      if (s === "deleted")  return "deleted";
+      return "active";
+    };
 
     const config: ExceptionConfig[] = rows.slice(1)
       .filter((r) => r[iId])
@@ -38,9 +45,10 @@ export async function GET() {
         subcategory: r[iSub]     ?? "ทั้งหมด",
         descC:       r[iDesc]    ?? "ทั้งหมด",
         percentage:  r[iPct]     ?? "100",
-        status:      (r[iStatus] === "inactive" ? "inactive" : "active") as "active" | "inactive",
+        status:      rawStatus(r[iStatus] ?? ""),
         createdAt:   r[iCreated] ?? "",
         updatedAt:   r[iUpdated] ?? "",
+        ...(iDeleted >= 0 && r[iDeleted] ? { deletedAt: r[iDeleted] } : {}),
       }));
 
     // The most recent updatedAt across all entries = last save time

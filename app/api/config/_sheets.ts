@@ -11,7 +11,7 @@ export const SPREADSHEET_ID = "1cZMKuiOOgBvHCUVtWpd-wUCdAWo2u21XDg6FlE6z5Zg";
 export const SHEET_NAME = "Config";
 
 export const HEADERS = [
-  "id", "category", "subcategory", "descC", "percentage", "status", "createdAt", "updatedAt",
+  "id", "category", "subcategory", "descC", "percentage", "status", "createdAt", "updatedAt", "deletedAt",
 ] as const;
 
 export function getSheetsClient() {
