@@ -455,24 +455,29 @@ export default function Home() {
               DATA_SPACEMAN
             </TabBtn>
           </div>
-          {/* Config button */}
-          <button
-            onClick={() => setShowConfig(true)}
-            title="Config Rules"
-            className={`flex items-center gap-1.5 px-3 py-1.5 mr-1 rounded-lg text-xs font-medium transition-colors ${
-              exceptionConfig.length > 0
-                ? "bg-pink-50 text-[#E91E8C] border border-pink-200 hover:bg-pink-100"
-                : "text-slate-500 hover:bg-slate-100"
-            }`}
-          >
-            <Settings2 className="w-4 h-4" />
-            Config Rules
-            {exceptionConfig.length > 0 && (
-              <span className="bg-[#E91E8C] text-white text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none">
-                {exceptionConfig.length}
-              </span>
-            )}
-          </button>
+          {/* Config button — badge counts only non-deleted rules */}
+          {(() => {
+            const activeCount = exceptionConfig.filter((e) => e.status !== "deleted").length;
+            return (
+              <button
+                onClick={() => setShowConfig(true)}
+                title="Config Rules"
+                className={`flex items-center gap-1.5 px-3 py-1.5 mr-1 rounded-lg text-xs font-medium transition-colors ${
+                  activeCount > 0
+                    ? "bg-pink-50 text-[#E91E8C] border border-pink-200 hover:bg-pink-100"
+                    : "text-slate-500 hover:bg-slate-100"
+                }`}
+              >
+                <Settings2 className="w-4 h-4" />
+                Config Rules
+                {activeCount > 0 && (
+                  <span className="bg-[#E91E8C] text-white text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none">
+                    {activeCount}
+                  </span>
+                )}
+              </button>
+            );
+          })()}
         </div>
       </div>
 
