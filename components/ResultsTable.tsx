@@ -34,15 +34,15 @@ const CONFIDENCE_META = {
   },
 };
 
-const FIELDS: { key: keyof FilledData; col: string }[] = [
+const FIELDS: { key: keyof FilledData; col: string; minW?: string }[] = [
   { key: "division",  col: "F — DIVISION"  },
   { key: "dept",      col: "G — DEPT"      },
   { key: "subDept",   col: "H — SUB-DEPT"  },
   { key: "cls",       col: "I — Class"     },
   { key: "planogram", col: "J — PLANOGRAM" },
-  { key: "colN",      col: "N — MBC Forecast sale"   },
-  { key: "colPiece",  col: "O — Shelf stock ON POG (Piece) 100%" },
-  { key: "colO",      col: "P — Shelf stock ON POG (%)" },
+  { key: "colN",      col: "N — MBC Forecast sale" },
+  { key: "colPiece",  col: "O — Piece 100%",  minW: "min-w-[64px]" },
+  { key: "colO",      col: "P — %",            minW: "min-w-[56px]" },
 ];
 
 /** Compute column Q: colO% × colPiece */
@@ -163,7 +163,7 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
                   {col}
                 </th>
               ))}
-              <th className="px-2 py-3 text-left font-semibold whitespace-nowrap">Q — Shelf stock ON POG (Net)</th>
+              <th className="px-2 py-3 text-left font-semibold whitespace-nowrap">Q — Net</th>
               <th className="px-2 py-3 text-center font-semibold whitespace-nowrap">แก้ไข</th>
             </tr>
           </thead>
@@ -191,8 +191,8 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
                     {row.name}
                   </td>
 
-                  {FIELDS.map(({ key }) => (
-                    <td key={key} className="px-2 py-3 min-w-[90px]">
+                  {FIELDS.map(({ key, minW }) => (
+                    <td key={key} className={`px-2 py-3 ${minW ?? "min-w-[90px]"}`}>
                       {isEditing ? (
                         <input
                           list={`dl-${key}`}
@@ -212,7 +212,7 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
                   ))}
 
                   {/* Column Q — computed from colO% × colPiece, always read-only */}
-                  <td className="px-3 py-3 min-w-[80px]">
+                  <td className="px-2 py-3 min-w-[56px]">
                     {(() => {
                       const effectiveData = isEditing
                         ? { ...(data as Record<string, string>), ...draft }
