@@ -1,6 +1,6 @@
 "use client";
 import { useState, useMemo } from "react";
-import { CheckCircle, AlertTriangle, XCircle, Pencil, Save, X } from "lucide-react";
+import { CheckCircle, AlertTriangle, XCircle, Pencil, Save, X, Database } from "lucide-react";
 import type { ProcessedRow, FilledData, HierarchyMap } from "@/lib/types";
 import { getHierarchyOptions, isHierarchyKey, buildHierarchyFromRows, mergeHierarchies } from "@/lib/hierarchy";
 
@@ -31,6 +31,12 @@ const CONFIDENCE_META = {
     label: "ไม่พบ",
     bg: "bg-red-50",
     badge: "bg-red-100 text-red-700",
+  },
+  from_spaceman: {
+    icon: <Database className="w-4 h-4 text-blue-500" />,
+    label: "จาก Spaceman",
+    bg: "bg-blue-50",
+    badge: "bg-blue-100 text-blue-700",
   },
 };
 
@@ -121,9 +127,10 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
   const cancelEdit = () => setEditIdx(null);
 
   const summary = {
-    confirmed: rows.filter((r) => r.confidence === "confirmed").length,
-    inferred:  rows.filter((r) => r.confidence === "inferred").length,
-    not_found: rows.filter((r) => r.confidence === "not_found").length,
+    confirmed:    rows.filter((r) => r.confidence === "confirmed").length,
+    inferred:     rows.filter((r) => r.confidence === "inferred").length,
+    not_found:    rows.filter((r) => r.confidence === "not_found").length,
+    from_spaceman: rows.filter((r) => r.confidence === "from_spaceman").length,
   };
 
   return (
@@ -139,7 +146,7 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
 
       {/* Summary pills */}
       <div className="flex flex-wrap gap-3">
-        {(["confirmed", "inferred", "not_found"] as const).map((c) => (
+        {(["confirmed", "inferred", "not_found", "from_spaceman"] as const).map((c) => (
           <div
             key={c}
             className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold ${CONFIDENCE_META[c].badge}`}
@@ -259,6 +266,12 @@ export default function ResultsTable({ rows, onChange, externalSuggestions, hier
         </table>
       </div>
 
+      {summary.from_spaceman > 0 && (
+        <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3">
+          ℹ️ มี {summary.from_spaceman} รายการที่ไม่พบในไฟล์ 100 ช่อง —
+          ข้อมูลคอลัมน์ F/G/H/I นำมาจาก DATA_SPACEMAN (คอลัมน์ N จะเว้นว่างไว้)
+        </p>
+      )}
       {summary.not_found > 0 && (
         <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
           ⚠️ มี {summary.not_found} รายการที่ไม่พบในไฟล์ 100 ช่อง —

@@ -229,12 +229,14 @@ export async function parsePlanogramLookup(
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
 
   // Locate columns by header name
-  let subcatCol = -1, categoryCol = -1, upcCol = -1, descCCol = -1, totalUnitsCol = -1;
+  let subcatCol = -1, categoryCol = -1, upcCol = -1, descACol = -1, descBCol = -1, descCCol = -1, totalUnitsCol = -1;
   for (let c = 0; c <= range.e.c; c++) {
     const h = cellVal(ws, 0, c);
     if (h === "SUBCATEGORY") subcatCol = c;
     else if (h === "CATEGORY") categoryCol = c;
     else if (h === "UPC") upcCol = c;
+    else if (h === "DESC_A") descACol = c;
+    else if (h === "DESC_B") descBCol = c;
     else if (h === "DESC_C") descCCol = c;
     else if (h === "TOTAL_UNITS") totalUnitsCol = c;
   }
@@ -275,9 +277,11 @@ export async function parsePlanogramLookup(
       const upc = normalizeBarcode(cellVal(ws, r, upcCol));
       if (upc && !byUpc.has(upc)) {
         const category   = categoryCol   >= 0 ? cellVal(ws, r, categoryCol)   : "";
+        const descA      = descACol      >= 0 ? cellVal(ws, r, descACol)      : "";
+        const descB      = descBCol      >= 0 ? cellVal(ws, r, descBCol)      : "";
         const descC      = descCCol      >= 0 ? cellVal(ws, r, descCCol)      : "";
         const totalUnits = totalUnitsCol >= 0 ? cellVal(ws, r, totalUnitsCol) : "";
-        byUpc.set(upc, { category, subcategory: subcat, descC, totalUnits });
+        byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits });
         if (category) catSet.add(category);
         if (subcat)   subSet.add(subcat);
         if (descC)    descSet.add(descC);
@@ -411,6 +415,28 @@ export function processRows(
     const info = barcodeMap.get(row.barcode);
 
     if (!info) {
+      // Fallback: look up barcode in DATA_SPACEMAN to fill F/G/H/I
+      const spacemanMeta = byUpc.get(row.barcode);
+      if (spacemanMeta) {
+        const subdeptPrefix = spacemanMeta.subcategory.slice(0, 6);
+        const plogEntry = byPrefix.get(subdeptPrefix);
+        const matched = config.length > 0 ? findMatchingConfig(config, spacemanMeta) : null;
+        return {
+          ...row,
+          filled: {
+            division: spacemanMeta.descA,
+            dept:     spacemanMeta.descB,
+            subDept:  spacemanMeta.descC,
+            cls:      spacemanMeta.category,
+            planogram: plogEntry?.planogram || "",
+            colN:     "",   // MBC Forecast: ว่างไว้เมื่อข้อมูลมาจาก DATA_SPACEMAN
+            colPiece: spacemanMeta.totalUnits,
+            colO:     matched ? `${matched.percentage}%` : "100%",
+          },
+          confidence: "from_spaceman",
+          note: "ไม่พบในไฟล์ 100 ช่อง — F/G/H/I จาก DATA_SPACEMAN",
+        };
+      }
       return {
         ...row,
         filled: null,
@@ -456,6 +482,8 @@ export function processRows(
             ? `${info.subclassCode}: ${info.subclassName.trim()}`
             : info.subclassCode)
         : "",
+      descA:      filled.division,
+      descB:      filled.dept,
       descC:      filled.subDept,
       totalUnits: "",
     };

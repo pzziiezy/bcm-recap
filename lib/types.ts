@@ -11,7 +11,7 @@ export interface SubclassInfo {
   colDF: string;       // col DF from 100 ช่อง → RECAP col N (index 13)
 }
 
-export type ConfidenceLevel = "confirmed" | "inferred" | "not_found";
+export type ConfidenceLevel = "confirmed" | "inferred" | "not_found" | "from_spaceman";
 
 export interface FilledData {
   division: string;    // F  (index 5)
@@ -52,6 +52,8 @@ export interface HierarchyMap {
 export interface SpacemanRowMeta {
   category: string;
   subcategory: string;
+  descA: string;       // DESC_A → DIVISION fallback
+  descB: string;       // DESC_B → DEPT fallback
   descC: string;
   totalUnits: string;  // TOTAL_UNITS column from DATA_SPACEMAN
 }

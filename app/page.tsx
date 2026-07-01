@@ -402,6 +402,7 @@ export default function Home() {
   const confirmed = results.filter((r) => r.confidence === "confirmed").length;
   const inferred = results.filter((r) => r.confidence === "inferred").length;
   const notFound = results.filter((r) => r.confidence === "not_found").length;
+  const fromSpaceman = results.filter((r) => r.confidence === "from_spaceman").length;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -612,9 +613,10 @@ export default function Home() {
 
                     {status === "done" && (
                       <>
-                        <div className="grid grid-cols-3 gap-4 mb-6">
+                        <div className="grid grid-cols-4 gap-4 mb-6">
                           <StatCard label="ยืนยันแล้ว" value={confirmed} color="green" />
                           <StatCard label="ไม่มี Planogram" value={inferred} color="amber" />
+                          <StatCard label="จาก DATA_SPACEMAN" value={fromSpaceman} color="blue" />
                           <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
                         </div>
                         <ResultsTable
@@ -984,12 +986,13 @@ function StatCard({
 }: {
   label: string;
   value: number;
-  color: "green" | "amber" | "red";
+  color: "green" | "amber" | "red" | "blue";
 }) {
   const colors = {
     green: "bg-green-50 border-green-200 text-green-700",
     amber: "bg-amber-50 border-amber-200 text-amber-700",
-    red: "bg-red-50 border-red-200 text-red-700",
+    red:   "bg-red-50 border-red-200 text-red-700",
+    blue:  "bg-blue-50 border-blue-200 text-blue-700",
   };
   return (
     <div className={`${colors[color]} border rounded-xl p-4 text-center`}>
