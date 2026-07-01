@@ -67,27 +67,35 @@ function buildRecapCodes(h: HierarchyNames): FilledData {
   };
 }
 
+export interface ParseMissingResult {
+  rows: MissingRow[];
+  totalScanned: number;   // rows that have a barcode in col D
+  alreadyFilled: number;  // barcoded rows where col F was already non-empty
+}
+
 // ─── Step 1: Parse RECAP ───────────────────────────────────────────────────
 
-export function parseMissingRows(wb: XLSX.WorkBook): MissingRow[] {
+export function parseMissingRows(wb: XLSX.WorkBook): ParseMissingResult {
   const ws = wb.Sheets["NEW SCM"];
   if (!ws) throw new Error('ไม่พบชีต "NEW SCM" ในไฟล์ RECAP');
 
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-  const results: MissingRow[] = [];
+  const rows: MissingRow[] = [];
+  let totalScanned = 0;
+  let alreadyFilled = 0;
 
   for (let r = 4; r <= range.e.r; r++) {
     const barcode = normalizeBarcode(cellVal(ws, r, 3)); // col D
+    if (!barcode) continue;
+    totalScanned++;
     const fVal = cellVal(ws, r, 5); // col F (DIVISION)
-    if (barcode && !fVal) {
-      results.push({
-        rowIndex: r,
-        barcode,
-        name: cellVal(ws, r, 4), // col E
-      });
+    if (fVal) {
+      alreadyFilled++;
+    } else {
+      rows.push({ rowIndex: r, barcode, name: cellVal(ws, r, 4) });
     }
   }
-  return results;
+  return { rows, totalScanned, alreadyFilled };
 }
 
 // ─── Step 2: Parse xlsb/xlsx source files (100 ช่อง) ──────────────────────

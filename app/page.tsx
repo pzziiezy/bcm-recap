@@ -43,6 +43,7 @@ import {
   processRows,
 } from "@/lib/processor";
 import type { ProcessedRow, ExceptionConfig } from "@/lib/types";
+import { makeEntry, sendLog } from "@/lib/logger";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -133,6 +134,7 @@ export default function Home() {
 
   // Refs — not in React state to avoid re-render overhead and serialization issues
   const recapBufRef = useRef<ArrayBuffer | null>(null);
+  const sessionIdRef = useRef<string>("");
   const workersRef = useRef<Map<string, Worker>>(new Map());
   const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[] }>>(new Map());
   const jobCounterRef = useRef(0);
@@ -174,6 +176,9 @@ export default function Home() {
   // ── Core job starter (stable — only touches refs + functional setJobs) ──
 
   const startJobFn = useCallback((id: string, recapBuf: ArrayBuffer, rows: DownloadRow[]) => {
+    const buildSid = `build-${id.slice(0, 8)}`;
+    const buildStart = Date.now();
+
     setJobs((prev) =>
       prev.map((j) =>
         j.id === id ? { ...j, status: "processing", startedAt: new Date(), progress: 5 } : j
@@ -194,39 +199,57 @@ export default function Home() {
             prev.map((j) => (j.id === id ? { ...j, progress: msg.pct ?? j.progress } : j))
           );
           break;
-        case "done":
+        case "done": {
           workersRef.current.delete(id);
           jobDataRef.current.delete(id);
-          setJobs((prev) =>
-            prev.map((j) =>
+          const durSec = ((Date.now() - buildStart) / 1000).toFixed(1);
+          setJobs((prev) => {
+            const label = prev.find((j) => j.id === id)?.label ?? id;
+            sendLog([makeEntry(buildSid, "BUILD_COMPLETE", "INFO",
+              `Build ${label} เสร็จในเวลา ${durSec} วินาที`,
+              { jobId: id, label, durationSec: durSec }
+            )]);
+            return prev.map((j) =>
               j.id === id
                 ? { ...j, status: "done", progress: 100, completedAt: new Date(), buffer: msg.buffer }
                 : j
-            )
-          );
+            );
+          });
           break;
-        case "error":
+        }
+        case "error": {
           workersRef.current.delete(id);
-          setJobs((prev) =>
-            prev.map((j) =>
+          setJobs((prev) => {
+            const label = prev.find((j) => j.id === id)?.label ?? id;
+            sendLog([makeEntry(buildSid, "BUILD_FAILED", "ERROR",
+              `Build ${label} ล้มเหลว: ${msg.message ?? "Worker error"}`,
+              { jobId: id, label, error: msg.message }
+            )]);
+            return prev.map((j) =>
               j.id === id
                 ? { ...j, status: "failed", error: msg.message ?? "Worker error", completedAt: new Date() }
                 : j
-            )
-          );
+            );
+          });
           break;
+        }
       }
     };
 
     worker.onerror = (e: ErrorEvent) => {
       workersRef.current.delete(id);
-      setJobs((prev) =>
-        prev.map((j) =>
+      setJobs((prev) => {
+        const label = prev.find((j) => j.id === id)?.label ?? id;
+        sendLog([makeEntry(buildSid, "BUILD_FAILED", "ERROR",
+          `Build ${label} crash: ${e.message ?? "Worker crashed"}`,
+          { jobId: id, label, error: e.message }
+        )]);
+        return prev.map((j) =>
           j.id === id
             ? { ...j, status: "failed", error: e.message ?? "Worker crashed", completedAt: new Date() }
             : j
-        )
-      );
+        );
+      });
     };
 
     // Transfer buffer to avoid a full copy (slice first to preserve original)
@@ -253,15 +276,22 @@ export default function Home() {
     const id = crypto.randomUUID();
     const num = ++jobCounterRef.current;
     const baseName = recapFiles[0]?.name.replace(/\.[^.]+$/, "") ?? "RECAP";
+    const label = `${baseName}_filled_#${num}.xlsx`;
 
     jobDataRef.current.set(id, {
       recapBuf: recapBufRef.current.slice(0),
       rows: toDownloadRows(results),
     });
 
+    sendLog([makeEntry(
+      `build-${id.slice(0, 8)}`, "BUILD_QUEUED", "INFO",
+      `เพิ่มไฟล์ ${label} เข้าคิว Build (session: ${sessionIdRef.current.slice(0, 8)})`,
+      { jobId: id, filename: label, processingSession: sessionIdRef.current }
+    )]);
+
     setJobs((prev) => [
       ...prev,
-      { id, label: `${baseName}_filled_#${num}.xlsx`, status: "queued", createdAt: new Date(), progress: 0 },
+      { id, label, status: "queued", createdAt: new Date(), progress: 0 },
     ]);
     setQueuePanelOpen(true);
     setStep(4);
@@ -312,9 +342,23 @@ export default function Home() {
   const handleProcess = async () => {
     if (!recapFiles[0] || xlsbFiles.length === 0 || !driveFileInfo) return;
 
+    const sessionId = crypto.randomUUID();
+    sessionIdRef.current = sessionId;
+    const t0 = Date.now();
+
     setStatus("processing");
     setStep(3);
     setPct(0);
+
+    sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
+      `เริ่มประมวลผล: ${recapFiles[0].name} + ${xlsbFiles.length} ไฟล์ 100 ช่อง + ${driveFileInfo.name}`,
+      {
+        recapFile: recapFiles[0].name,
+        xlsbFiles: xlsbFiles.map((f) => f.name),
+        spacemanFile: driveFileInfo.name,
+        spacemanFileId: driveFileInfo.id,
+      }
+    )]);
 
     try {
       setStatusMsg("อ่านไฟล์ RECAP...");
@@ -322,7 +366,17 @@ export default function Home() {
       const recapBuf = await recapFiles[0].arrayBuffer();
       recapBufRef.current = recapBuf.slice(0);
       const wb = XLSX.read(recapBuf, { type: "array" });
-      const missing = parseMissingRows(wb);
+      const { rows: missing, totalScanned, alreadyFilled } = parseMissingRows(wb);
+
+      const recapLevel = missing.length === 0 && totalScanned > 0 ? "WARN" : "INFO";
+      const recapMsg = missing.length === 0 && totalScanned === 0
+        ? `ไม่พบบาร์โค้ดในชีท NEW SCM — ตรวจสอบว่าไฟล์ถูกต้อง`
+        : missing.length === 0
+          ? `ไม่พบแถวที่ต้องเติม — บาร์โค้ดทั้งหมด ${totalScanned} รายการมีข้อมูลคอลัมน์ F อยู่แล้ว`
+          : `RECAP: พบ ${missing.length} แถวที่ต้องเติม (สแกน ${totalScanned} แถว, ข้าม ${alreadyFilled} แถวที่มีข้อมูลอยู่แล้ว)`;
+      sendLog([makeEntry(sessionId, "RECAP_PARSED", recapLevel, recapMsg, {
+        totalScanned, rowsMissing: missing.length, rowsAlreadyFilled: alreadyFilled,
+      })]);
 
       setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล — กำลังค้นหาในไฟล์ 100 ช่อง...`);
       setPct(25);
@@ -331,6 +385,11 @@ export default function Home() {
         parseXlsbFiles(xlsbFiles),
         buildStructureLookup(xlsbFiles),
       ]);
+
+      sendLog([makeEntry(sessionId, "XLSB_PARSED", "INFO",
+        `100 ช่อง: พบบาร์โค้ด ${barcodeMap.size} รายการ, โครงสร้างสินค้า ${structureMap.size} รายการ จาก ${xlsbFiles.length} ไฟล์`,
+        { files: xlsbFiles.map((f) => f.name), barcodesFound: barcodeMap.size, structureFound: structureMap.size }
+      )]);
 
       setStatusMsg("กำลังตรวจสอบข้อมูลจาก DATA_SPACEMAN...");
       setPct(45);
@@ -347,15 +406,35 @@ export default function Home() {
         setPct(50 + p * 0.35)
       );
 
+      sendLog([makeEntry(sessionId, "SPACEMAN_PARSED", "INFO",
+        `DATA_SPACEMAN: พบ prefix ${planogramResult.byPrefix.size} รายการ, UPC ${planogramResult.byUpc.size} รายการ`,
+        { prefixCount: planogramResult.byPrefix.size, upcCount: planogramResult.byUpc.size, filename: driveFileInfo.name }
+      )]);
+
       setStatusMsg("ประมวลผลข้อมูล...");
       setPct(90);
       const processed = processRows(missing, barcodeMap, structureMap, planogramResult, exceptionConfig);
-      setResults(processed);
 
+      const cCount = processed.filter((r) => r.confidence === "confirmed").length;
+      const iCount = processed.filter((r) => r.confidence === "inferred").length;
+      const sCount = processed.filter((r) => r.confidence === "from_spaceman").length;
+      const nCount = processed.filter((r) => r.confidence === "not_found").length;
+      const durSec = ((Date.now() - t0) / 1000).toFixed(1);
+
+      sendLog([makeEntry(sessionId, "PROCESS_COMPLETE", "INFO",
+        `เสร็จใน ${durSec}s — ยืนยัน ${cCount} | ไม่มี Planogram ${iCount} | จาก Spaceman ${sCount} | ไม่พบ ${nCount}`,
+        { confirmed: cCount, inferred: iCount, fromSpaceman: sCount, notFound: nCount, durationSec: durSec }
+      )]);
+
+      setResults(processed);
       setPct(100);
       setStatusMsg("เสร็จสิ้น!");
       setStatus("done");
     } catch (err) {
+      sendLog([makeEntry(sessionId, "ERROR", "ERROR",
+        `เกิดข้อผิดพลาดระหว่างประมวลผล: ${String(err)}`,
+        { error: String(err) }
+      )]);
       setStatus("error");
       setStatusMsg(String(err));
     }
