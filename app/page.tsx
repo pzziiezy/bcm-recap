@@ -20,6 +20,9 @@ import {
   X,
   ChevronRight,
   Settings2,
+  BookOpen,
+  Database,
+  AlertTriangle,
 } from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
@@ -109,6 +112,7 @@ export default function Home() {
     }
   });
   const [showConfig, setShowConfig] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [configSyncStatus, setConfigSyncStatus] = useState<SyncStatus>("loading");
   const [configLastSaved, setConfigLastSaved] = useState<string | null>(null);
   const [configSyncError, setConfigSyncError] = useState("");
@@ -456,29 +460,40 @@ export default function Home() {
               DATA_SPACEMAN
             </TabBtn>
           </div>
-          {/* Config button — badge counts only non-deleted rules */}
-          {(() => {
-            const activeCount = exceptionConfig.filter((e) => e.status !== "deleted").length;
-            return (
-              <button
-                onClick={() => setShowConfig(true)}
-                title="Config Rules"
-                className={`flex items-center gap-1.5 px-3 py-1.5 mr-1 rounded-lg text-xs font-medium transition-colors ${
-                  activeCount > 0
-                    ? "bg-pink-50 text-[#E91E8C] border border-pink-200 hover:bg-pink-100"
-                    : "text-slate-500 hover:bg-slate-100"
-                }`}
-              >
-                <Settings2 className="w-4 h-4" />
-                Config Rules
-                {activeCount > 0 && (
-                  <span className="bg-[#E91E8C] text-white text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none">
-                    {activeCount}
-                  </span>
-                )}
-              </button>
-            );
-          })()}
+          <div className="flex items-center gap-1">
+            {/* Help button */}
+            <button
+              onClick={() => setShowHelp(true)}
+              title="วิธีการทำงาน"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors text-slate-500 hover:bg-slate-100"
+            >
+              <BookOpen className="w-4 h-4" />
+              วิธีการทำงาน
+            </button>
+            {/* Config button — badge counts only non-deleted rules */}
+            {(() => {
+              const activeCount = exceptionConfig.filter((e) => e.status !== "deleted").length;
+              return (
+                <button
+                  onClick={() => setShowConfig(true)}
+                  title="Config Rules"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 mr-1 rounded-lg text-xs font-medium transition-colors ${
+                    activeCount > 0
+                      ? "bg-pink-50 text-[#E91E8C] border border-pink-200 hover:bg-pink-100"
+                      : "text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  <Settings2 className="w-4 h-4" />
+                  Config Rules
+                  {activeCount > 0 && (
+                    <span className="bg-[#E91E8C] text-white text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none">
+                      {activeCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
+          </div>
         </div>
       </div>
 
@@ -684,6 +699,9 @@ export default function Home() {
           onDownload={downloadJob}
         />
       )}
+
+      {/* Help modal */}
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
 
       {/* Config modal */}
       {showConfig && (
@@ -976,6 +994,178 @@ function NavBtn({
     >
       {children}
     </button>
+  );
+}
+
+// ─── Help Modal ───────────────────────────────────────────────────────────────
+
+function HelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100] flex-shrink-0" />
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <BookOpen className="w-5 h-5 text-[#E91E8C]" />
+            <h2 className="font-bold text-slate-800 text-lg">วิธีการทำงานของระบบ</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6 text-sm text-slate-700">
+
+          {/* Step-by-step */}
+          <section>
+            <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
+              <span className="bg-[#E91E8C] text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">1</span>
+              อ่านไฟล์ RECAP
+            </h3>
+            <p className="text-slate-600 leading-relaxed pl-7">
+              ระบบสแกนหาแถวใน Sheet <span className="font-mono bg-slate-100 px-1 rounded">NEW SCM</span> ที่มีบาร์โค้ดในคอลัมน์ D แต่คอลัมน์ F (DIVISION) ยังว่างอยู่ — เหล่านี้คือรายการที่ต้องเติมข้อมูล
+            </p>
+          </section>
+
+          <section>
+            <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
+              <span className="bg-[#F15A22] text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">2</span>
+              ค้นหาในไฟล์ 100 ช่อง
+            </h3>
+            <p className="text-slate-600 leading-relaxed pl-7">
+              เอาบาร์โค้ดแต่ละตัวไปค้นใน Sheet <span className="font-mono bg-slate-100 px-1 rounded">Base</span> หรือ <span className="font-mono bg-slate-100 px-1 rounded">Input</span> ถ้าพบ → ได้ Sub-Class Code → นำไป look up โครงสร้างสินค้าใน Sheet <span className="font-mono bg-slate-100 px-1 rounded">Sh_ProdStructure</span> เพื่อเอา F/G/H/I และได้ค่า N (MBC Forecast) จากคอลัมน์ DF
+            </p>
+          </section>
+
+          <section>
+            <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
+              <span className="bg-[#FFD100] text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">3</span>
+              ค้นหาใน DATA_SPACEMAN
+            </h3>
+            <p className="text-slate-600 leading-relaxed pl-7">
+              ใช้ Sub-Class Code prefix (6 หลักแรก) หา PLANOGRAM ที่พบบ่อยที่สุด → ใส่คอลัมน์ J และเอาบาร์โค้ดไปหา TOTAL_UNITS → ใส่คอลัมน์ O (Piece 100%)
+            </p>
+          </section>
+
+          {/* Priority table */}
+          <section>
+            <h3 className="font-bold text-slate-800 mb-3">Priority การหาข้อมูล F/G/H/I</h3>
+            <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600">
+                    <th className="px-3 py-2 text-left font-semibold w-12">ลำดับ</th>
+                    <th className="px-3 py-2 text-left font-semibold">เงื่อนไข</th>
+                    <th className="px-3 py-2 text-left font-semibold">ผลลัพธ์</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  <tr className="bg-green-50">
+                    <td className="px-3 py-2.5">
+                      <span className="flex items-center gap-1 text-green-700 font-bold">
+                        <CheckCircle className="w-3.5 h-3.5" /> 1
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-700">พบบาร์โค้ดในไฟล์ 100 ช่อง</td>
+                    <td className="px-3 py-2.5 text-slate-600">F/G/H/I จาก Sub-Class Structure, N จาก MBC Forecast, J จาก DATA_SPACEMAN</td>
+                  </tr>
+                  <tr className="bg-blue-50">
+                    <td className="px-3 py-2.5">
+                      <span className="flex items-center gap-1 text-blue-700 font-bold">
+                        <Database className="w-3.5 h-3.5" /> 2
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-700">ไม่พบใน 100 ช่อง แต่พบใน DATA_SPACEMAN</td>
+                    <td className="px-3 py-2.5 text-slate-600">F/G/H/I จาก DESC_A/B/C/CATEGORY, <span className="font-semibold text-blue-700">N = ว่าง</span></td>
+                  </tr>
+                  <tr className="bg-red-50">
+                    <td className="px-3 py-2.5">
+                      <span className="flex items-center gap-1 text-red-500 font-bold">
+                        <XCircle className="w-3.5 h-3.5" /> 3
+                      </span>
+                    </td>
+                    <td className="px-3 py-2.5 text-slate-700">ไม่พบในทั้งสองแหล่ง</td>
+                    <td className="px-3 py-2.5 text-slate-600">กรอกเองด้วยปุ่มแก้ไข ✏️</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Columns */}
+          <section>
+            <h3 className="font-bold text-slate-800 mb-3">คอลัมน์ที่ระบบเติมให้</h3>
+            <div className="rounded-xl border border-slate-200 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-slate-50 text-slate-600">
+                    <th className="px-3 py-2 text-left font-semibold w-10">คอล</th>
+                    <th className="px-3 py-2 text-left font-semibold">ชื่อ</th>
+                    <th className="px-3 py-2 text-left font-semibold">แหล่งข้อมูล</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 text-slate-700">
+                  {[
+                    ["F", "DIVISION",       "Sub-Class Structure (Priority 1) / DESC_A จาก DATA_SPACEMAN (Priority 2)"],
+                    ["G", "DEPT",            "Sub-Class Structure / DESC_B"],
+                    ["H", "SUB-DEPT",        "Sub-Class Structure / DESC_C"],
+                    ["I", "Class",           "Sub-Class Structure / CATEGORY"],
+                    ["J", "PLANOGRAM",       "DATA_SPACEMAN — ค่าที่พบบ่อยที่สุดตาม Sub-Class prefix 6 หลัก"],
+                    ["N", "MBC Forecast",    "ไฟล์ 100 ช่อง คอลัมน์ DF (ว่างถ้าใช้ Priority 2)"],
+                    ["O", "Piece 100%",      "DATA_SPACEMAN คอลัมน์ TOTAL_UNITS"],
+                    ["P", "%",               "Config Rules (ตรง CATEGORY/SUBCATEGORY/DESC_C) — default 100%"],
+                    ["Q", "Net",             "P% × O คำนวณอัตโนมัติ ไม่ต้องกรอก"],
+                  ].map(([col, name, src]) => (
+                    <tr key={col}>
+                      <td className="px-3 py-2">
+                        <span className="font-mono font-bold text-[#E91E8C]">{col}</span>
+                      </td>
+                      <td className="px-3 py-2 font-medium">{name}</td>
+                      <td className="px-3 py-2 text-slate-500">{src}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Status legend */}
+          <section>
+            <h3 className="font-bold text-slate-800 mb-3">สถานะแถวในตารางผลลัพธ์</h3>
+            <div className="space-y-2">
+              {[
+                { badge: "bg-green-100 text-green-700",  icon: <CheckCircle className="w-3.5 h-3.5" />, label: "ยืนยันแล้ว",     desc: "พบในไฟล์ 100 ช่อง และมี PLANOGRAM ใน DATA_SPACEMAN" },
+                { badge: "bg-amber-100 text-amber-700",  icon: <AlertTriangle className="w-3.5 h-3.5" />, label: "ไม่มี Planogram", desc: "พบในไฟล์ 100 ช่อง แต่ PLANOGRAM ไม่พบใน DATA_SPACEMAN (คอลัมน์ J จะว่าง)" },
+                { badge: "bg-blue-100 text-blue-700",    icon: <Database className="w-3.5 h-3.5" />, label: "จาก Spaceman",    desc: "ไม่พบในไฟล์ 100 ช่อง แต่พบใน DATA_SPACEMAN — F/G/H/I ได้มา คอลัมน์ N ว่าง" },
+                { badge: "bg-red-100 text-red-500",      icon: <XCircle className="w-3.5 h-3.5" />, label: "ไม่พบ",           desc: "ไม่พบทั้งในไฟล์ 100 ช่อง และ DATA_SPACEMAN — กรอกเองด้วยปุ่ม ✏️" },
+              ].map(({ badge, icon, label, desc }) => (
+                <div key={label} className="flex items-start gap-3">
+                  <span className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${badge}`}>
+                    {icon}{label}
+                  </span>
+                  <span className="text-slate-500 text-xs pt-1">{desc}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Config Rules */}
+          <section>
+            <h3 className="font-bold text-slate-800 mb-2">Config Rules (คอลัมน์ P)</h3>
+            <p className="text-slate-600 leading-relaxed">
+              ตั้งค่าเปอร์เซ็นต์สำหรับสินค้าบางกลุ่ม โดย filter ด้วย CATEGORY / SUBCATEGORY / DESC_C
+              (ใช้ &quot;ทั้งหมด&quot; เพื่อ match ทุกค่า) — Rule แรกที่ตรงชนะ หากไม่มี Rule ใดตรง → ใช้ค่า default 100%
+            </p>
+          </section>
+
+        </div>
+      </div>
+    </div>
   );
 }
 
