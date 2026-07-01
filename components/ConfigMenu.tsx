@@ -20,6 +20,8 @@ interface Props {
   categories: string[];
   subcategories: string[];
   descCList: string[];
+  descCToCategory: Record<string, string[]>;       // DESC_C → filtered CATEGORY list
+  categoryToSubcategory: Record<string, string[]>; // CATEGORY → filtered SUBCATEGORY list
   spacemanLoaded: boolean;
   syncStatus: SyncStatus;
   lastSaved: string | null;
@@ -243,6 +245,7 @@ function ConflictCard({ conflict }: { conflict: ConflictResult }) {
 export default function ConfigMenu({
   config, onChange, onClose,
   categories, subcategories, descCList,
+  descCToCategory, categoryToSubcategory,
   spacemanLoaded, syncStatus, lastSaved, syncError,
 }: Props) {
   const [draft, setDraft] = useState<DraftFields>(emptyDraft());
@@ -259,6 +262,16 @@ export default function ConfigMenu({
 
   const isEditing = editId !== null;
   const set = (k: keyof DraftFields, v: string) => setDraft((d) => ({ ...d, [k]: v }));
+
+  // Cascade-filtered dropdown options: DESC_C → CATEGORY → SUBCATEGORY
+  const filteredCategories =
+    draft.descC && draft.descC !== ALL && descCToCategory[draft.descC]?.length
+      ? descCToCategory[draft.descC]
+      : categories;
+  const filteredSubcategories =
+    draft.category && draft.category !== ALL && categoryToSubcategory[draft.category]?.length
+      ? categoryToSubcategory[draft.category]
+      : subcategories;
 
   // Live conflict detection (computed every render when draft is complete)
   const draftComplete = Boolean(draft.category && draft.subcategory && draft.descC && draft.percentage);
@@ -427,9 +440,15 @@ export default function ConfigMenu({
             )}
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <SearchSelect label="DESC_C" value={draft.descC} options={descCList} onChange={(v) => set("descC", v)} loading={!spacemanLoaded} />
-              <SearchSelect label="CATEGORY" value={draft.category} options={categories} onChange={(v) => set("category", v)} loading={!spacemanLoaded} />
-              <SearchSelect label="SUBCATEGORY" value={draft.subcategory} options={subcategories} onChange={(v) => set("subcategory", v)} loading={!spacemanLoaded} />
+              <SearchSelect label="DESC_C" value={draft.descC} options={descCList}
+                onChange={(v) => setDraft((d) => ({ ...d, descC: v, category: "", subcategory: "" }))}
+                loading={!spacemanLoaded} />
+              <SearchSelect label="CATEGORY" value={draft.category} options={filteredCategories}
+                onChange={(v) => setDraft((d) => ({ ...d, category: v, subcategory: "" }))}
+                loading={!spacemanLoaded} />
+              <SearchSelect label="SUBCATEGORY" value={draft.subcategory} options={filteredSubcategories}
+                onChange={(v) => set("subcategory", v)}
+                loading={!spacemanLoaded} />
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-medium text-slate-500">Percentage (%)</label>
                 <input

@@ -125,6 +125,7 @@ export default function Home() {
     descBList: [],
     descCList: [],
     hierarchyMap: { divToDept: {}, deptToSub: {}, subToCls: {} },
+    catToSub: {},
   });
   const [spacemanLoaded, setSpacemanLoaded] = useState(false);
 
@@ -791,6 +792,8 @@ export default function Home() {
           categories={spacemanValues.categories}
           subcategories={spacemanValues.subcategories}
           descCList={spacemanValues.descCList}
+          descCToCategory={spacemanValues.hierarchyMap.subToCls}
+          categoryToSubcategory={spacemanValues.catToSub}
           spacemanLoaded={spacemanLoaded}
           syncStatus={configSyncStatus}
           lastSaved={configLastSaved}

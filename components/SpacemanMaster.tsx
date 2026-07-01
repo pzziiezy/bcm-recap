@@ -25,6 +25,7 @@ export interface SpacemanValues {
   descBList: string[];
   descCList: string[];
   hierarchyMap: { divToDept: Record<string, string[]>; deptToSub: Record<string, string[]>; subToCls: Record<string, string[]> };
+  catToSub: Record<string, string[]>; // CATEGORY → SUBCATEGORY (for Config Rules cascade)
 }
 
 interface Props {
@@ -202,7 +203,7 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
       worker.onmessage = (e: MessageEvent) => {
         const msg = e.data as
           | { type: "progress"; pct: number }
-          | { type: "done"; headers: string[]; rows: DataRow[]; totalRows: number; uniqueCategories: string[]; uniqueSubcategories: string[]; uniqueDescA: string[]; uniqueDescB: string[]; uniqueDescC: string[]; hierarchyMap: { divToDept: Record<string, string[]>; deptToSub: Record<string, string[]>; subToCls: Record<string, string[]> } }
+          | { type: "done"; headers: string[]; rows: DataRow[]; totalRows: number; uniqueCategories: string[]; uniqueSubcategories: string[]; uniqueDescA: string[]; uniqueDescB: string[]; uniqueDescC: string[]; hierarchyMap: { divToDept: Record<string, string[]>; deptToSub: Record<string, string[]>; subToCls: Record<string, string[]> }; catToSub: Record<string, string[]> }
           | { type: "error"; message: string };
 
         if (msg.type === "progress") {
@@ -222,6 +223,7 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
               descBList:     msg.uniqueDescB         ?? [],
               descCList:     msg.uniqueDescC         ?? [],
               hierarchyMap:  msg.hierarchyMap        ?? { divToDept: {}, deptToSub: {}, subToCls: {} },
+              catToSub:      msg.catToSub            ?? {},
             });
           }
         } else if (msg.type === "error") {
