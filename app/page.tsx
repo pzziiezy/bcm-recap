@@ -41,6 +41,12 @@ import {
   buildStructureLookup,
   parsePlanogramLookup,
   processRows,
+  parseCheckSpace,
+  parseFileIndex,
+  buildXlsbExtraInfoMap,
+  fillNewDeleteIM,
+  fillNewSCM,
+  fillDelSCM,
 } from "@/lib/processor";
 import type { ProcessedRow, ExceptionConfig } from "@/lib/types";
 import { makeEntry, sendLog } from "@/lib/logger";
@@ -48,10 +54,12 @@ import { makeEntry, sendLog } from "@/lib/logger";
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 const STEPS = [
-  { id: 1, label: "RECAP" },
-  { id: 2, label: "100 ช่อง" },
-  { id: 3, label: "ตรวจสอบ" },
-  { id: 4, label: "ดาวน์โหลด" },
+  { id: 1, label: "Check Space" },
+  { id: 2, label: "FILE_INDEX" },
+  { id: 3, label: "RECAP" },
+  { id: 4, label: "100 ช่อง" },
+  { id: 5, label: "ตรวจสอบ" },
+  { id: 6, label: "ดาวน์โหลด" },
 ];
 
 const MAX_CONCURRENT = 2;
@@ -97,6 +105,8 @@ export default function Home() {
   const [statusMsg, setStatusMsg] = useState("");
   const [pct, setPct] = useState(0);
 
+  const [checkSpaceFile, setCheckSpaceFile] = useState<File | null>(null);
+  const [fileIndexFile, setFileIndexFile] = useState<File | null>(null);
   const [recapFiles, setRecapFiles] = useState<File[]>([]);
   const [xlsbFiles, setXlsbFiles] = useState<File[]>([]);
   const [driveFileInfo, setDriveFileInfo] = useState<DriveFileInfo | null>(null);
@@ -295,7 +305,7 @@ export default function Home() {
       { id, label, status: "queued", createdAt: new Date(), progress: 0 },
     ]);
     setQueuePanelOpen(true);
-    setStep(4);
+    setStep(6);
   };
 
   const terminateJob = (id: string) => {
@@ -348,7 +358,7 @@ export default function Home() {
     const t0 = Date.now();
 
     setStatus("processing");
-    setStep(3);
+    setStep(5);
     setPct(0);
 
     sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
@@ -363,10 +373,45 @@ export default function Home() {
 
     try {
       setStatusMsg("อ่านไฟล์ RECAP...");
-      setPct(10);
+      setPct(5);
       const recapBuf = await recapFiles[0].arrayBuffer();
       recapBufRef.current = recapBuf.slice(0);
       const wb = XLSX.read(recapBuf, { type: "array" });
+
+      // ── Check Space pre-fill (runs BEFORE parseMissingRows so new rows are included) ──
+      if (checkSpaceFile && fileIndexFile) {
+        setStatusMsg("อ่านไฟล์ Check Space และ FILE_INDEX...");
+        setPct(8);
+        try {
+          const [csItems, indexLookup, xlsbExtraInfo] = await Promise.all([
+            parseCheckSpace(checkSpaceFile),
+            parseFileIndex(fileIndexFile),
+            buildXlsbExtraInfoMap(xlsbFiles),
+          ]);
+          if (csItems.length > 0) {
+            setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เติมข้อมูลลงชีต...`);
+            fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
+            fillNewSCM(wb, csItems, indexLookup);
+            fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
+            // Serialize modified wb so download worker receives pre-filled sheets
+            const modBuf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+            recapBufRef.current = modBuf;
+            sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
+              `Check Space: เพิ่ม ${csItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length} NEW / ${csItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length} DELETE items`,
+              { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: csItems.length }
+            )]);
+          }
+        } catch (csErr) {
+          // Non-fatal: log and continue without Check Space fills
+          sendLog([makeEntry(sessionId, "ERROR", "WARN",
+            `Check Space/FILE_INDEX parse failed (ข้ามขั้นตอนนี้): ${String(csErr)}`,
+            { error: String(csErr) }
+          )]);
+        }
+      }
+
+      setStatusMsg("อ่านไฟล์ RECAP...");
+      setPct(10);
       const { rows: missing, totalScanned, alreadyFilled } = parseMissingRows(wb);
 
       const recapLevel = missing.length === 0 && totalScanned > 0 ? "WARN" : "INFO";
@@ -452,6 +497,8 @@ export default function Home() {
     setStatus("idle");
     setStatusMsg("");
     setPct(0);
+    setCheckSpaceFile(null);
+    setFileIndexFile(null);
     setRecapFiles([]);
     setXlsbFiles([]);
     setResults([]);
@@ -603,9 +650,59 @@ export default function Home() {
               <>
                 <StepIndicator steps={STEPS} current={step} />
 
-                {/* Step 1 — Upload RECAP */}
+                {/* Step 1 — Upload Check Space */}
                 {step === 1 && (
-                  <Card title="Step 1 - อัปโหลดไฟล์ RECAP">
+                  <Card title="Step 1 - อัปโหลดไฟล์ Check Space (ไม่บังคับ)">
+                    <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+                      <strong>ไฟล์นี้ใช้สำหรับ:</strong> เติมข้อมูลชีต NEW_DELETE_IM, NEW SCM (แถวใหม่ + store flags), DEL SCM
+                      โดยอ่าน Barcode/POG จาก Check Space.xlsx (Sheet2)
+                      <br />
+                      <span className="text-blue-600 text-xs">ถ้าไม่มีไฟล์นี้ กด "ข้าม" เพื่อใช้งาน RECAP Auto-Filler ตามปกติ</span>
+                    </div>
+                    <DropZone
+                      label="Check Space.xlsx"
+                      accept=".xlsx,.xls"
+                      files={checkSpaceFile ? [checkSpaceFile] : []}
+                      onFiles={(files) => setCheckSpaceFile(files[0] ?? null)}
+                      hint="Sheet2 — header row 5, col A=Barcode, B=Name, C=Status, D=Remark, E+=POG matrix"
+                    />
+                    <div className="flex gap-3">
+                      <NavBtn variant="outline" onClick={() => setStep(3)}>ข้าม →</NavBtn>
+                      <NavBtn onClick={() => setStep(2)} disabled={!checkSpaceFile}>
+                        ถัดไป →
+                      </NavBtn>
+                    </div>
+                  </Card>
+                )}
+
+                {/* Step 2 — Upload FILE_INDEX */}
+                {step === 2 && (
+                  <Card title="Step 2 - อัปโหลดไฟล์ FILE_INDEX_1 (ไม่บังคับ)">
+                    <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+                      <strong>ไฟล์นี้ใช้สำหรับ:</strong> หา BY_CODE (Attribute Code) และ store flags จาก sheet INDX_BCM
+                      <br />
+                      <span className="text-blue-600 text-xs">ต้องอัปโหลดคู่กับ Check Space เพื่อให้ระบบเติม store flags ได้ถูกต้อง</span>
+                    </div>
+                    <DropZone
+                      label="FILE_INDEX_1.xlsx"
+                      accept=".xlsx,.xls"
+                      files={fileIndexFile ? [fileIndexFile] : []}
+                      onFiles={(files) => setFileIndexFile(files[0] ?? null)}
+                      hint="Sheet INDX_BCM — row 13=store codes, row 14=headers (col C=POG NAME, col I=BY_CODE), row 15+=data"
+                    />
+                    <div className="flex gap-3">
+                      <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
+                      <NavBtn variant="outline" onClick={() => setStep(3)}>ข้าม →</NavBtn>
+                      <NavBtn onClick={() => setStep(3)} disabled={!fileIndexFile}>
+                        ถัดไป →
+                      </NavBtn>
+                    </div>
+                  </Card>
+                )}
+
+                {/* Step 3 — Upload RECAP */}
+                {step === 3 && (
+                  <Card title="Step 3 - อัปโหลดไฟล์ RECAP">
                     <DropZone
                       label="ไฟล์ RECAP.xlsx"
                       accept=".xlsx,.xls"
@@ -613,15 +710,18 @@ export default function Home() {
                       onFiles={setRecapFiles}
                       hint="ไฟล์ที่ต้องการเติมข้อมูลในคอลัมน์ F-J ของ Sheet 'NEW SCM'"
                     />
-                    <NavBtn onClick={() => setStep(2)} disabled={recapFiles.length !== 1}>
-                      ถัดไป →
-                    </NavBtn>
+                    <div className="flex gap-3">
+                      <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
+                      <NavBtn onClick={() => setStep(4)} disabled={recapFiles.length !== 1}>
+                        ถัดไป →
+                      </NavBtn>
+                    </div>
                   </Card>
                 )}
 
-                {/* Step 2 — Upload 100 ช่อง */}
-                {step === 2 && (
-                  <Card title="Step 2 - อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
+                {/* Step 4 — Upload 100 ช่อง */}
+                {step === 4 && (
+                  <Card title="Step 4 - อัปโหลดไฟล์ 100 ช่อง (.xlsb)">
                     <DropZone
                       label="ไฟล์ 100 ช่อง (เลือกได้หลายไฟล์)"
                       accept=".xlsb,.xlsx,.xls"
@@ -672,7 +772,7 @@ export default function Home() {
                     </div>
 
                     <div className="flex gap-3">
-                      <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
+                      <NavBtn variant="outline" onClick={() => setStep(3)}>← ย้อนกลับ</NavBtn>
                       <NavBtn onClick={handleProcess} disabled={!canProcess()}>
                         <Zap className="w-4 h-4" />
                         ประมวลผลทันที
@@ -681,9 +781,9 @@ export default function Home() {
                   </Card>
                 )}
 
-                {/* Step 3 — Review & enqueue */}
-                {step === 3 && (
-                  <Card title="Step 3 - ตรวจสอบผลลัพธ์">
+                {/* Step 5 — Review & enqueue */}
+                {step === 5 && (
+                  <Card title="Step 5 - ตรวจสอบผลลัพธ์">
                     {status === "processing" && (
                       <div className="space-y-4 py-8">
                         <div className="flex items-center justify-center">
@@ -736,8 +836,8 @@ export default function Home() {
                   </Card>
                 )}
 
-                {/* Step 4 — Queued confirmation */}
-                {step === 4 && (
+                {/* Step 6 — Queued confirmation */}
+                {step === 6 && (
                   <Card title="เพิ่มเข้าคิวสำเร็จ!">
                     <div className="text-center py-10 space-y-4">
                       <div className="flex justify-center">

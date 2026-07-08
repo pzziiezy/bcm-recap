@@ -79,3 +79,19 @@ export interface PlanogramLookupResult {
   subcategories: string[];
   descCList: string[];
 }
+
+/** One item row from Check Space.xlsx (Sheet2) */
+export interface CheckSpaceItem {
+  barcode: string;
+  name: string;
+  status: string;   // Check Space col C (e.g. "NEW ADD SOME STORE", "DELETE ALL STORE")
+  remark: string;   // Check Space col D
+  pogs: string[];   // POG names from unpivot of matrix col E+
+}
+
+/** Lookup tables built from FILE_INDEX_1.xlsx (INDX_BCM) */
+export interface IndexLookup {
+  pogToByCode: Map<string, string>;        // POG name → BY_CODE (Attribute Code)
+  pogToStores: Map<string, Set<string>>;   // POG name → Set of store codes that have the POG
+  storeList: string[];                     // ordered store codes from row 13
+}
