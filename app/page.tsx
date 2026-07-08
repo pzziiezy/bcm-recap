@@ -348,10 +348,14 @@ export default function Home() {
   // ── Main processing flow ────────────────────────────────────────────────
 
   const canProcess = () =>
-    recapFiles.length === 1 && xlsbFiles.length > 0 && driveFileInfo !== null;
+    checkSpaceFile !== null &&
+    fileIndexFile !== null &&
+    recapFiles.length === 1 &&
+    xlsbFiles.length > 0 &&
+    driveFileInfo !== null;
 
   const handleProcess = async () => {
-    if (!recapFiles[0] || xlsbFiles.length === 0 || !driveFileInfo) return;
+    if (!checkSpaceFile || !fileIndexFile || !recapFiles[0] || xlsbFiles.length === 0 || !driveFileInfo) return;
 
     const sessionId = crypto.randomUUID();
     sessionIdRef.current = sessionId;
@@ -379,35 +383,33 @@ export default function Home() {
       const wb = XLSX.read(recapBuf, { type: "array" });
 
       // ── Check Space pre-fill (runs BEFORE parseMissingRows so new rows are included) ──
-      if (checkSpaceFile && fileIndexFile) {
-        setStatusMsg("อ่านไฟล์ Check Space และ FILE_INDEX...");
-        setPct(8);
-        try {
-          const [csItems, indexLookup, xlsbExtraInfo] = await Promise.all([
-            parseCheckSpace(checkSpaceFile),
-            parseFileIndex(fileIndexFile),
-            buildXlsbExtraInfoMap(xlsbFiles),
-          ]);
-          if (csItems.length > 0) {
-            setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เติมข้อมูลลงชีต...`);
-            fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
-            fillNewSCM(wb, csItems, indexLookup);
-            fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
-            // Serialize modified wb so download worker receives pre-filled sheets
-            const modBuf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
-            recapBufRef.current = modBuf;
-            sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
-              `Check Space: เพิ่ม ${csItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length} NEW / ${csItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length} DELETE items`,
-              { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: csItems.length }
-            )]);
-          }
-        } catch (csErr) {
-          // Non-fatal: log and continue without Check Space fills
-          sendLog([makeEntry(sessionId, "ERROR", "WARN",
-            `Check Space/FILE_INDEX parse failed (ข้ามขั้นตอนนี้): ${String(csErr)}`,
-            { error: String(csErr) }
+      setStatusMsg("อ่านไฟล์ Check Space และ FILE_INDEX...");
+      setPct(8);
+      try {
+        const [csItems, indexLookup, xlsbExtraInfo] = await Promise.all([
+          parseCheckSpace(checkSpaceFile),
+          parseFileIndex(fileIndexFile),
+          buildXlsbExtraInfoMap(xlsbFiles),
+        ]);
+        if (csItems.length > 0) {
+          setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เติมข้อมูลลงชีต...`);
+          fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
+          fillNewSCM(wb, csItems, indexLookup);
+          fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
+          // Serialize modified wb so download worker receives pre-filled sheets
+          const modBuf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+          recapBufRef.current = modBuf;
+          sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
+            `Check Space: เพิ่ม ${csItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length} NEW / ${csItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length} DELETE items`,
+            { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: csItems.length }
           )]);
         }
+      } catch (csErr) {
+        // Non-fatal: log and continue without Check Space fills
+        sendLog([makeEntry(sessionId, "ERROR", "WARN",
+          `Check Space/FILE_INDEX parse failed (ข้ามขั้นตอนนี้): ${String(csErr)}`,
+          { error: String(csErr) }
+        )]);
       }
 
       setStatusMsg("อ่านไฟล์ RECAP...");
@@ -652,12 +654,10 @@ export default function Home() {
 
                 {/* Step 1 — Upload Check Space */}
                 {step === 1 && (
-                  <Card title="Step 1 - อัปโหลดไฟล์ Check Space (ไม่บังคับ)">
+                  <Card title="Step 1 - อัปโหลดไฟล์ Check Space">
                     <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
                       <strong>ไฟล์นี้ใช้สำหรับ:</strong> เติมข้อมูลชีต NEW_DELETE_IM, NEW SCM (แถวใหม่ + store flags), DEL SCM
                       โดยอ่าน Barcode/POG จาก Check Space.xlsx (Sheet2)
-                      <br />
-                      <span className="text-blue-600 text-xs">ถ้าไม่มีไฟล์นี้ กด "ข้าม" เพื่อใช้งาน RECAP Auto-Filler ตามปกติ</span>
                     </div>
                     <DropZone
                       label="Check Space.xlsx"
@@ -667,7 +667,6 @@ export default function Home() {
                       hint="Sheet2 — header row 5, col A=Barcode, B=Name, C=Status, D=Remark, E+=POG matrix"
                     />
                     <div className="flex gap-3">
-                      <NavBtn variant="outline" onClick={() => setStep(3)}>ข้าม →</NavBtn>
                       <NavBtn onClick={() => setStep(2)} disabled={!checkSpaceFile}>
                         ถัดไป →
                       </NavBtn>
@@ -677,7 +676,7 @@ export default function Home() {
 
                 {/* Step 2 — Upload FILE_INDEX */}
                 {step === 2 && (
-                  <Card title="Step 2 - อัปโหลดไฟล์ FILE_INDEX_1 (ไม่บังคับ)">
+                  <Card title="Step 2 - อัปโหลดไฟล์ FILE_INDEX_1">
                     <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
                       <strong>ไฟล์นี้ใช้สำหรับ:</strong> หา BY_CODE (Attribute Code) และ store flags จาก sheet INDX_BCM
                       <br />
@@ -692,7 +691,6 @@ export default function Home() {
                     />
                     <div className="flex gap-3">
                       <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
-                      <NavBtn variant="outline" onClick={() => setStep(3)}>ข้าม →</NavBtn>
                       <NavBtn onClick={() => setStep(3)} disabled={!fileIndexFile}>
                         ถัดไป →
                       </NavBtn>
