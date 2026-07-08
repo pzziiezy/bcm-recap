@@ -11,7 +11,7 @@
  */
 
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
-import type { DownloadRow } from "./download";
+import type { DownloadRow, CheckSpaceFillPlan, FillRow } from "./download";
 
 const ctx = self as unknown as {
   postMessage(msg: unknown, transfer?: Transferable[]): void;
@@ -19,7 +19,7 @@ const ctx = self as unknown as {
 
 type InMsg =
   | { type: "init"; buffer: ArrayBuffer }
-  | { type: "build"; rows: DownloadRow[] };
+  | { type: "build"; rows: DownloadRow[]; checkSpacePlan?: CheckSpaceFillPlan };
 
 let template: ArrayBuffer | null = null;
 
@@ -277,6 +277,68 @@ function patchCell(
     : inner + newCell;
 }
 
+// ── Check Space fill — insert new rows via ZIP-patch ─────────────────────────
+
+/**
+ * Insert new rows (from Check Space fills) directly into sheet XML.
+ * Appends before </sheetData> so existing rows and their styles are untouched.
+ * Strings are added to the working SST accumulator (same pattern as applyRows).
+ */
+function insertFillRows(
+  sheetXml: string,
+  rows: FillRow[],
+  sstStrings: string[]
+): { sheetXml: string; newStrings: string[] } {
+  if (!rows || rows.length === 0) return { sheetXml, newStrings: [] };
+
+  const allStrings = [...sstStrings];
+  const ssIdx = (v: string): number => {
+    let i = allStrings.indexOf(v);
+    if (i < 0) { i = allStrings.length; allStrings.push(v); }
+    return i;
+  };
+
+  const sorted = [...rows]
+    .filter(r => r.cells && r.cells.length > 0)
+    .sort((a, b) => a.rowIndex - b.rowIndex);
+
+  if (sorted.length === 0) return { sheetXml, newStrings: [] };
+
+  const insertXml = sorted.map(({ rowIndex, cells }) => {
+    const rowNum = rowIndex + 1;
+    const cellsXml = [...cells]
+      .filter(c => c.value !== "")
+      .sort((a, b) => a.col - b.col)
+      .map(({ col, value }) =>
+        `<c r="${colLetter(col)}${rowNum}" t="s"><v>${ssIdx(value)}</v></c>`
+      )
+      .join("");
+    return `<row r="${rowNum}">${cellsXml}</row>`;
+  }).join("");
+
+  // Append new rows just before </sheetData> — preserves order of existing rows
+  const sdEnd = sheetXml.lastIndexOf("</sheetData>");
+  let result = sdEnd >= 0
+    ? sheetXml.slice(0, sdEnd) + insertXml + sheetXml.slice(sdEnd)
+    : sheetXml + insertXml;
+
+  // Extend <dimension ref="..."> end-row if needed
+  const maxRowNum = sorted[sorted.length - 1].rowIndex + 1;
+  result = result.replace(
+    /(<dimension\b[^>]*ref=")([^"]+)(")/,
+    (m, pre, ref, post) => {
+      const parts = ref.split(":");
+      if (parts.length < 2) return m;
+      const endMatch = /^([A-Z]+)(\d+)$/.exec(parts[1]);
+      if (!endMatch) return m;
+      const newEnd = Math.max(parseInt(endMatch[2]), maxRowNum);
+      return `${pre}${parts[0]}:${endMatch[1]}${newEnd}${post}`;
+    }
+  );
+
+  return { sheetXml: result, newStrings: allStrings.slice(sstStrings.length) };
+}
+
 // ── Worker message handler ───────────────────────────────────────────────────
 
 addEventListener("message", (e: MessageEvent<InMsg>) => {
@@ -305,35 +367,68 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const relsXml  = strFromU8(files["xl/_rels/workbook.xml.rels"]);
       const sheetPath = findSheetPath(wbXml, relsXml, "NEW SCM");
       if (!sheetPath || !files[sheetPath]) throw new Error('Sheet "NEW SCM" not found');
-      ctx.postMessage({ type: "progress", pct: 40 });
+      ctx.postMessage({ type: "progress", pct: 35 });
 
       // 3. Parse the shared strings table
       const sstPath    = "xl/sharedStrings.xml";
       const sstStrings = files[sstPath] ? parseSST(strFromU8(files[sstPath])) : [];
-      ctx.postMessage({ type: "progress", pct: 55 });
 
-      // 4. Patch cell values in the sheet XML
-      const { sheetXml, newStrings } = applyRows(
-        strFromU8(files[sheetPath]),
+      // Working SST accumulator — grows as Check Space fills and F-J fills add strings.
+      // All operations share the same index space so cell references stay consistent.
+      const workingStrings = [...sstStrings];
+
+      // 4. Apply Check Space fills via ZIP-patch (no XLSX.write — format preserved)
+      let newScmXml = strFromU8(files[sheetPath]);
+
+      if (msg.checkSpacePlan) {
+        // 4a. Insert new rows into NEW SCM (A,D,E,K,L,M,R+ columns)
+        //     These rows will then have F-J patched by applyRows in step 5.
+        if (msg.checkSpacePlan.newScmRows.length > 0) {
+          const r1 = insertFillRows(newScmXml, msg.checkSpacePlan.newScmRows, workingStrings);
+          newScmXml = r1.sheetXml;
+          workingStrings.push(...r1.newStrings);
+        }
+        ctx.postMessage({ type: "progress", pct: 50 });
+
+        // 4b. Write NEW_DELETE_IM and DEL SCM sheets
+        for (const sf of msg.checkSpacePlan.extraSheets) {
+          if (!sf.rows.length) continue;
+          const p = findSheetPath(wbXml, relsXml, sf.sheetName);
+          if (!p || !files[p]) continue;
+          const r2 = insertFillRows(strFromU8(files[p]), sf.rows, workingStrings);
+          files[p] = strToU8(r2.sheetXml);
+          workingStrings.push(...r2.newStrings);
+        }
+      }
+      ctx.postMessage({ type: "progress", pct: 60 });
+
+      // 5. Patch F-J / N-Q in NEW SCM for all rows (existing + newly inserted CS rows).
+      //    Pass workingStrings so new indices continue from where CS fills left off.
+      const { sheetXml: patchedXml, newStrings: fjStrings } = applyRows(
+        newScmXml,
         msg.rows,
-        sstStrings
+        workingStrings
       );
-      files[sheetPath] = strToU8(sheetXml);
-      ctx.postMessage({ type: "progress", pct: 70 });
+      files[sheetPath] = strToU8(patchedXml);
+      ctx.postMessage({ type: "progress", pct: 75 });
 
-      // 5. Append any new strings to the SST (existing entries untouched)
-      if (newStrings.length > 0) {
+      // 6. Append ALL new strings to the SST in one pass
+      //    = strings added by CS fills + strings added by F-J patches
+      const allNewStrings = [
+        ...workingStrings.slice(sstStrings.length),
+        ...fjStrings,
+      ];
+      if (allNewStrings.length > 0) {
         files[sstPath] = strToU8(
           files[sstPath]
-            ? appendSST(strFromU8(files[sstPath]), newStrings)
-            : buildSST([...sstStrings, ...newStrings])
+            ? appendSST(strFromU8(files[sstPath]), allNewStrings)
+            : buildSST([...sstStrings, ...allNewStrings])
         );
       }
-      ctx.postMessage({ type: "progress", pct: 85 });
+      ctx.postMessage({ type: "progress", pct: 88 });
 
-      // 6. Rezip — styles.xml, workbook.xml, relationships, etc. unchanged
+      // 7. Rezip — styles.xml, workbook.xml, relationships, etc. unchanged
       const out = zipSync(files);
-      // Ensure we hand off a clean ArrayBuffer slice (fflate may over-allocate)
       const outBuf = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
       ctx.postMessage({ type: "progress", pct: 95 });
       ctx.postMessage({ type: "done", buffer: outBuf }, [outBuf]);

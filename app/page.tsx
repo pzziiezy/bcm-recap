@@ -34,7 +34,7 @@ import SpacemanMaster, {
   type SpacemanValues,
 } from "@/components/SpacemanMaster";
 import ConfigMenu, { EXCEPTION_CONFIG_KEY, type SyncStatus } from "@/components/ConfigMenu";
-import { toDownloadRows, type DownloadRow } from "@/lib/download";
+import { toDownloadRows, type DownloadRow, type CheckSpaceFillPlan } from "@/lib/download";
 import {
   parseMissingRows,
   parseXlsbFiles,
@@ -145,9 +145,10 @@ export default function Home() {
 
   // Refs — not in React state to avoid re-render overhead and serialization issues
   const recapBufRef = useRef<ArrayBuffer | null>(null);
+  const checkSpacePlanRef = useRef<CheckSpaceFillPlan | null>(null);
   const sessionIdRef = useRef<string>("");
   const workersRef = useRef<Map<string, Worker>>(new Map());
-  const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[] }>>(new Map());
+  const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[]; checkSpacePlan?: CheckSpaceFillPlan }>>(new Map());
   const jobCounterRef = useRef(0);
   const autoDownloadedRef = useRef<Set<string>>(new Set());
 
@@ -186,7 +187,7 @@ export default function Home() {
 
   // ── Core job starter (stable — only touches refs + functional setJobs) ──
 
-  const startJobFn = useCallback((id: string, recapBuf: ArrayBuffer, rows: DownloadRow[]) => {
+  const startJobFn = useCallback((id: string, recapBuf: ArrayBuffer, rows: DownloadRow[], checkSpacePlan?: CheckSpaceFillPlan) => {
     const buildSid = `build-${id.slice(0, 8)}`;
     const buildStart = Date.now();
 
@@ -203,7 +204,7 @@ export default function Home() {
       const msg = e.data as { type: string; pct?: number; buffer?: ArrayBuffer; message?: string };
       switch (msg.type) {
         case "init_ok":
-          worker.postMessage({ type: "build", rows });
+          worker.postMessage({ type: "build", rows, checkSpacePlan });
           break;
         case "progress":
           setJobs((prev) =>
@@ -277,7 +278,7 @@ export default function Home() {
     if (!next) return;
     const data = jobDataRef.current.get(next.id);
     if (!data) return;
-    startJobFn(next.id, data.recapBuf, data.rows);
+    startJobFn(next.id, data.recapBuf, data.rows, data.checkSpacePlan);
   }, [jobs, startJobFn]);
 
   // ── Queue actions ───────────────────────────────────────────────────────
@@ -292,6 +293,7 @@ export default function Home() {
     jobDataRef.current.set(id, {
       recapBuf: recapBufRef.current.slice(0),
       rows: toDownloadRows(results),
+      checkSpacePlan: checkSpacePlanRef.current ?? undefined,
     });
 
     sendLog([makeEntry(
@@ -383,8 +385,11 @@ export default function Home() {
       const wb = XLSX.read(recapBuf, { type: "array" });
 
       // ── Check Space pre-fill (runs BEFORE parseMissingRows so new rows are included) ──
+      // Fill functions write to wb in-memory (needed for parseMissingRows) AND
+      // return FillRow[] that the download worker uses for ZIP-patch — no XLSX.write needed.
       setStatusMsg("อ่านไฟล์ Check Space และ FILE_INDEX...");
       setPct(8);
+      checkSpacePlanRef.current = null;
       try {
         const [csItems, indexLookup, xlsbExtraInfo] = await Promise.all([
           parseCheckSpace(checkSpaceFile),
@@ -392,22 +397,29 @@ export default function Home() {
           buildXlsbExtraInfoMap(xlsbFiles),
         ]);
         if (csItems.length > 0) {
-          setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เติมข้อมูลลงชีต...`);
-          fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
-          fillNewSCM(wb, csItems, indexLookup);
-          fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
-          // Serialize modified wb so download worker receives pre-filled sheets
-          const modBuf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
-          recapBufRef.current = modBuf;
+          setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เตรียมข้อมูล...`);
+          const newDeleteIMRows = fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
+          const newScmRows      = fillNewSCM(wb, csItems, indexLookup);
+          const delScmRows      = fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
+          // Store plan — worker will ZIP-patch these into the ORIGINAL buffer (format preserved)
+          checkSpacePlanRef.current = {
+            newScmRows,
+            extraSheets: [
+              { sheetName: "NEW_DELETE_IM", rows: newDeleteIMRows },
+              { sheetName: "DEL SCM",       rows: delScmRows },
+            ],
+          };
+          // recapBufRef.current stays as the ORIGINAL buffer — no XLSX.write
+          const newCount = csItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length;
+          const delCount = csItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length;
           sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
-            `Check Space: เพิ่ม ${csItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length} NEW / ${csItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length} DELETE items`,
+            `Check Space: ${newCount} NEW / ${delCount} DELETE items — ส่งไป ZIP-patch ที่ worker`,
             { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: csItems.length }
           )]);
         }
       } catch (csErr) {
-        // Non-fatal: log and continue without Check Space fills
         sendLog([makeEntry(sessionId, "ERROR", "WARN",
-          `Check Space/FILE_INDEX parse failed (ข้ามขั้นตอนนี้): ${String(csErr)}`,
+          `Check Space/FILE_INDEX parse failed: ${String(csErr)}`,
           { error: String(csErr) }
         )]);
       }
@@ -495,6 +507,7 @@ export default function Home() {
   const reset = () => {
     // Jobs persist across resets — do NOT clear them
     recapBufRef.current = null;
+    checkSpacePlanRef.current = null;
     setStep(1);
     setStatus("idle");
     setStatusMsg("");

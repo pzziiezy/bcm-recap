@@ -12,6 +12,7 @@ import type {
   CheckSpaceItem,
   IndexLookup,
 } from "./types";
+import type { FillCell, FillRow } from "./download";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -926,9 +927,9 @@ export function fillNewDeleteIM(
   items: CheckSpaceItem[],
   indexLookup: IndexLookup,
   xlsbExtraInfo: Map<string, string>,
-): void {
+): FillRow[] {
   const ws = wb.Sheets["NEW_DELETE_IM"];
-  if (!ws) return;
+  if (!ws) return [];
 
   const HEADER_ROW = 3; // index → Excel row 4
   const DATA_START = 4; // index → Excel row 5
@@ -967,32 +968,36 @@ export function fillNewDeleteIM(
   const newRows = expand(newItems, existingNew, true);
   const delRows = expand(delItems, existingDel, false);
   const totalRows = Math.max(newRows.length, delRows.length);
-  if (totalRows === 0) return;
+  if (totalRows === 0) return [];
+
+  const fillRows: FillRow[] = [];
 
   for (let i = 0; i < totalRows; i++) {
     const nr = newRows[i];
     const dr = delRows[i];
     const r = appendRow + i;
+    const cells: FillCell[] = [];
+    const push = (col: number, v: string) => { if (v) cells.push({ col, value: v }); };
 
     if (nr) {
-      writeCell(ws, r, 0, nr.seqNo);  // A = NO.
-      // B(1), C(2) = empty (header labels only)
-      writeCell(ws, r, 3, "MBC1");    // D = Attribute Class
-      writeCell(ws, r, 4, nr.byCode); // E = Attribute Code
-      writeCell(ws, r, 5, nr.status); // F = Status
-      writeCell(ws, r, 6, nr.remark); // G = Remark
+      writeCell(ws, r, 0, nr.seqNo);   push(0,  nr.seqNo);
+      writeCell(ws, r, 3, "MBC1");     push(3,  "MBC1");
+      writeCell(ws, r, 4, nr.byCode);  push(4,  nr.byCode);
+      writeCell(ws, r, 5, nr.status);  push(5,  nr.status);
+      writeCell(ws, r, 6, nr.remark);  push(6,  nr.remark);
     }
     if (dr) {
-      writeCell(ws, r, 8,  dr.seqNo);     // I = NO.
-      // J(9), K(10) = empty
-      writeCell(ws, r, 11, "MBC1");        // L = Attribute Class
-      writeCell(ws, r, 12, dr.byCode);    // M = Attribute Code
-      writeCell(ws, r, 13, dr.status);    // N = REMARK (Check Space col C: DELETE…)
-      writeCell(ws, r, 14, dr.extraInfo); // O = Extra_Info
+      writeCell(ws, r, 8,  dr.seqNo);      push(8,  dr.seqNo);
+      writeCell(ws, r, 11, "MBC1");         push(11, "MBC1");
+      writeCell(ws, r, 12, dr.byCode);     push(12, dr.byCode);
+      writeCell(ws, r, 13, dr.status);     push(13, dr.status);
+      writeCell(ws, r, 14, dr.extraInfo);  push(14, dr.extraInfo);
     }
+    if (cells.length > 0) fillRows.push({ rowIndex: r, cells });
   }
 
   extendRef(ws, appendRow + totalRows - 1, 14);
+  return fillRows;
 }
 
 // ─── Fill NEW SCM sheet (non-F-J columns only) ────────────────────────────
@@ -1010,9 +1015,9 @@ export function fillNewSCM(
   wb: XLSX.WorkBook,
   items: CheckSpaceItem[],
   indexLookup: IndexLookup,
-): void {
+): FillRow[] {
   const ws = wb.Sheets["NEW SCM"];
-  if (!ws) return;
+  if (!ws) return [];
 
   const HEADER_ROW = 3;  // index → Excel row 4
   const DATA_START = 4;  // index → Excel row 5
@@ -1020,7 +1025,7 @@ export function fillNewSCM(
   const STORE_START_COL = 17; // col R
 
   const newItems = items.filter((i) => !i.status.toUpperCase().startsWith("DELETE"));
-  if (newItems.length === 0) return;
+  if (newItems.length === 0) return [];
 
   // Build store → colIdx map from existing header (or from storeList fallback)
   const storeColMap = buildStoreColMap(ws, HEADER_ROW, STORE_START_COL, indexLookup.storeList, true);
@@ -1031,16 +1036,20 @@ export function fillNewSCM(
   let maxCol = STORE_START_COL - 1;
   for (const col of storeColMap.values()) maxCol = Math.max(maxCol, col);
 
+  const fillRows: FillRow[] = [];
+
   newItems.forEach((item, i) => {
     const r = appendRow + i;
-    writeCell(ws, r, 0,  String(seq));  // A = NO.
-    // B(1), C(2) = empty
-    writeCell(ws, r, 3,  item.barcode); // D = Barcode
-    writeCell(ws, r, 4,  item.name);    // E = NAME
-    // F-J (5-9) = empty → processRows() will fill
-    writeCell(ws, r, 10, item.status);  // K = Status
-    writeCell(ws, r, 11, item.remark);  // L = Remark
-    writeCell(ws, r, 12, "7.2");        // M = POG ROUND
+    const cells: FillCell[] = [];
+    const push = (col: number, v: string) => { if (v) cells.push({ col, value: v }); };
+
+    writeCell(ws, r, 0,  String(seq));  push(0,  String(seq));
+    writeCell(ws, r, 3,  item.barcode); push(3,  item.barcode);
+    writeCell(ws, r, 4,  item.name);    push(4,  item.name);
+    // F-J (5-9) = empty → processRows() will fill (via download worker applyRows)
+    writeCell(ws, r, 10, item.status);  push(10, item.status);
+    writeCell(ws, r, 11, item.remark);  push(11, item.remark);
+    writeCell(ws, r, 12, "7.2");        push(12, "7.2");
     // N-Q (13-16) = empty → processRows() will fill
 
     // Store flags
@@ -1048,12 +1057,15 @@ export function fillNewSCM(
     for (const [storeCode, col] of storeColMap) {
       if (storeUnion.has(storeCode)) {
         ws[XLSX.utils.encode_cell({ r, c: col })] = { t: "s", v: "1" };
+        cells.push({ col, value: "1" });
       }
     }
+    if (cells.length > 0) fillRows.push({ rowIndex: r, cells });
     seq++;
   });
 
   extendRef(ws, appendRow + newItems.length - 1, maxCol);
+  return fillRows;
 }
 
 // ─── Fill DEL SCM sheet ────────────────────────────────────────────────────
@@ -1075,9 +1087,9 @@ export function fillDelSCM(
   items: CheckSpaceItem[],
   indexLookup: IndexLookup,
   xlsbExtraInfo: Map<string, string>,
-): void {
+): FillRow[] {
   const ws = wb.Sheets["DEL SCM"];
-  if (!ws) return;
+  if (!ws) return [];
 
   const HEADER_ROW  = 4;  // index → Excel row 5
   const DATA_START  = 5;  // index → Excel row 6
@@ -1085,7 +1097,7 @@ export function fillDelSCM(
   const STORE_START_COL = 14; // col O
 
   const delItems = items.filter((i) => i.status.toUpperCase().startsWith("DELETE"));
-  if (delItems.length === 0) return;
+  if (delItems.length === 0) return [];
 
   const storeColMap = buildStoreColMap(ws, HEADER_ROW, STORE_START_COL, indexLookup.storeList, true);
   const appendRow = findAppendRow(ws, BARCODE_COL, DATA_START);
@@ -1096,20 +1108,23 @@ export function fillDelSCM(
   let maxCol = STORE_START_COL - 1;
   for (const col of storeColMap.values()) maxCol = Math.max(maxCol, col);
 
+  const fillRows: FillRow[] = [];
+
   delItems.forEach((item, i) => {
     const r = appendRow + i;
     const extraInfo = xlsbExtraInfo.get(item.barcode) || item.remark;
     const firstPog = item.pogs[0] ?? "";
+    const cells: FillCell[] = [];
+    const push = (col: number, v: string) => { if (v) cells.push({ col, value: v }); };
 
-    writeCell(ws, r, 0, String(seq));            // A = NO.
-    // B(1), C(2) = empty
-    writeCell(ws, r, 3, item.barcode);           // D = Barcode
-    writeCell(ws, r, 4, item.name);              // E = NAME
-    writeCell(ws, r, 5, "04: DRY FOOD");         // F = DIVISION (hardcoded)
-    writeCell(ws, r, 6, pogRootName(firstPog));  // G = PLANOGRAM root
-    writeCell(ws, r, 7, "7.2");                  // H = POG ROUND
-    writeCell(ws, r, 8, item.status);            // I = REMARK (Check Space col C)
-    writeCell(ws, r, 9, extraInfo);              // J = Extra_Info
+    writeCell(ws, r, 0, String(seq));           push(0, String(seq));
+    writeCell(ws, r, 3, item.barcode);          push(3, item.barcode);
+    writeCell(ws, r, 4, item.name);             push(4, item.name);
+    writeCell(ws, r, 5, "04: DRY FOOD");        push(5, "04: DRY FOOD");
+    writeCell(ws, r, 6, pogRootName(firstPog)); push(6, pogRootName(firstPog));
+    writeCell(ws, r, 7, "7.2");                 push(7, "7.2");
+    writeCell(ws, r, 8, item.status);           push(8, item.status);
+    writeCell(ws, r, 9, extraInfo);             push(9, extraInfo);
     // K-N (10-13) = week 1-4 → empty (Buyer fills)
 
     // Store flags
@@ -1118,11 +1133,14 @@ export function fillDelSCM(
       for (const [storeCode, col] of storeColMap) {
         if (storeUnion.has(storeCode)) {
           ws[XLSX.utils.encode_cell({ r, c: col })] = { t: "s", v: "1" };
+          cells.push({ col, value: "1" });
         }
       }
     }
+    if (cells.length > 0) fillRows.push({ rowIndex: r, cells });
     seq++;
   });
 
   extendRef(ws, appendRow + delItems.length - 1, maxCol);
+  return fillRows;
 }
