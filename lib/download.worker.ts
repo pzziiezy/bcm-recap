@@ -283,12 +283,18 @@ function patchCell(
     : inner + newCell;
 }
 
-// ── Check Space fill — insert new rows via ZIP-patch ─────────────────────────
+// ── Check Space fill — upsert rows via ZIP-patch ─────────────────────────────
 
 /**
- * Insert new rows (from Check Space fills) directly into sheet XML.
- * Appends before </sheetData> so existing rows and their styles are untouched.
- * Strings are added to the working SST accumulator (same pattern as applyRows).
+ * Write Check Space fill data into sheet XML using upsert logic:
+ *   • If a <row r="N"> already exists (self-closing or with content), PATCH it —
+ *     preserving existing row/cell styles while adding our values.
+ *   • Only INSERT a new <row> for positions that have no XML element at all.
+ *
+ * This is critical for styled RECAP templates that pre-format empty rows with
+ * borders/colours.  The old "always-append" approach created duplicate row
+ * numbers; Excel silently uses the first occurrence and ignores the later one,
+ * so data never appeared in the downloaded file.
  */
 function insertFillRows(
   sheetXml: string,
@@ -310,40 +316,83 @@ function insertFillRows(
 
   if (sorted.length === 0) return { sheetXml, newStrings: [] };
 
-  const insertXml = sorted.map(({ rowIndex, cells }) => {
-    const rowNum = rowIndex + 1;
-    const cellsXml = [...cells]
+  // rowNum (1-based) → FillRow for quick lookup
+  const rowMap = new Map<number, FillRow>();
+  for (const r of sorted) rowMap.set(r.rowIndex + 1, r);
+
+  const patchedRows = new Set<number>();
+
+  // Build cell XML for a row (used when INSERTING a brand-new row)
+  const buildCells = (fillRow: FillRow, rowNum: number) =>
+    fillRow.cells
       .filter(c => c.value !== "")
       .sort((a, b) => a.col - b.col)
-      .map(({ col, value }) =>
-        `<c r="${colLetter(col)}${rowNum}" t="s"><v>${ssIdx(value)}</v></c>`
-      )
+      .map(({ col, value }) => `<c r="${colLetter(col)}${rowNum}" t="s"><v>${ssIdx(value)}</v></c>`)
       .join("");
-    return `<row r="${rowNum}">${cellsXml}</row>`;
-  }).join("");
 
-  // Insert rows into sheetData — handle all three cases:
-  //   1. <sheetData>…</sheetData>  — normal (has existing rows or empty-but-open)
-  //   2. <sheetData/>              — self-closing (completely empty sheet)
-  //   3. neither                   — malformed; fall back to inserting before </worksheet>
-  const sdClose = sheetXml.lastIndexOf("</sheetData>");
-  const sdSelf  = sheetXml.indexOf("<sheetData/>");
-  let result: string;
-  if (sdClose >= 0) {
-    result = sheetXml.slice(0, sdClose) + insertXml + sheetXml.slice(sdClose);
-  } else if (sdSelf >= 0) {
-    // Replace <sheetData/> with <sheetData>rows</sheetData>
-    result = sheetXml.slice(0, sdSelf)
-      + `<sheetData>${insertXml}</sheetData>`
-      + sheetXml.slice(sdSelf + 12); // 12 = "<sheetData/>".length
-  } else {
-    const wsEnd = sheetXml.lastIndexOf("</worksheet>");
-    result = wsEnd >= 0
-      ? sheetXml.slice(0, wsEnd) + `<sheetData>${insertXml}</sheetData>` + sheetXml.slice(wsEnd)
-      : sheetXml;
+  // Pass 1 — patch self-closing rows: <row r="N" ... />
+  // These are pre-formatted empty rows common in styled RECAP templates.
+  // We expand them to open/close form and inject our cell data.
+  let result = sheetXml.replace(
+    /<row\b([^>]*?)\/>/g,
+    (full, attrs) => {
+      const rm = /\br="(\d+)"/.exec(attrs);
+      if (!rm) return full;
+      const rowNum = +rm[1];
+      const fillRow = rowMap.get(rowNum);
+      if (!fillRow) return full;
+      patchedRows.add(rowNum);
+      return `<row${attrs}>${buildCells(fillRow, rowNum)}</row>`;
+    }
+  );
+
+  // Pass 2 — patch open/close rows: <row r="N" ...>...</row>
+  // Use patchCell so any existing styled cells keep their s= attribute.
+  result = result.replace(
+    /(<row\b[^>]*>)([\s\S]*?)(<\/row>)/g,
+    (full, open, inner, close) => {
+      const rm = /\br="(\d+)"/.exec(open);
+      if (!rm) return full;
+      const rowNum = +rm[1];
+      const fillRow = rowMap.get(rowNum);
+      if (!fillRow) return full;
+      patchedRows.add(rowNum);
+      let cells = inner;
+      for (const { col, value } of fillRow.cells) {
+        if (!value) continue;
+        cells = patchCell(cells, colLetter(col), rowNum, ssIdx(value), col);
+      }
+      return open + cells + close;
+    }
+  );
+
+  // Pass 3 — insert rows that had no XML element at all
+  const newRowXml = sorted
+    .filter(r => !patchedRows.has(r.rowIndex + 1))
+    .map(({ rowIndex, cells: _ }) => {
+      const rowNum = rowIndex + 1;
+      const fr = rowMap.get(rowNum)!;
+      return `<row r="${rowNum}">${buildCells(fr, rowNum)}</row>`;
+    })
+    .join("");
+
+  if (newRowXml) {
+    const sdClose = result.lastIndexOf("</sheetData>");
+    const sdSelf  = result.indexOf("<sheetData/>");
+    if (sdClose >= 0) {
+      result = result.slice(0, sdClose) + newRowXml + result.slice(sdClose);
+    } else if (sdSelf >= 0) {
+      result = result.slice(0, sdSelf)
+        + `<sheetData>${newRowXml}</sheetData>`
+        + result.slice(sdSelf + 12);
+    } else {
+      const wsEnd = result.lastIndexOf("</worksheet>");
+      if (wsEnd >= 0)
+        result = result.slice(0, wsEnd) + `<sheetData>${newRowXml}</sheetData>` + result.slice(wsEnd);
+    }
   }
 
-  // Extend <dimension ref="…"> end-row — handles both "A1" and "A1:Z100" forms
+  // Extend <dimension ref="…"> end-row
   const maxRowNum = sorted[sorted.length - 1].rowIndex + 1;
   result = result.replace(
     /(<dimension\b[^>]*ref=")([^"]+)(")/,

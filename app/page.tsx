@@ -35,6 +35,12 @@ import SpacemanMaster, {
 } from "@/components/SpacemanMaster";
 import ConfigMenu, { EXCEPTION_CONFIG_KEY, type SyncStatus } from "@/components/ConfigMenu";
 import { toDownloadRows, type DownloadRow, type CheckSpaceFillPlan, type FillRow } from "@/lib/download";
+import FillEditTable, {
+  type TabColDef,
+  type EditableFillRow,
+  convertToEditableRows,
+  convertFromEditableRows,
+} from "@/components/FillEditTable";
 import {
   parseMissingRows,
   parseXlsbFiles,
@@ -96,6 +102,55 @@ function triggerBrowserDownload(label: string, buffer: ArrayBuffer) {
   URL.revokeObjectURL(url);
 }
 
+// ─── Check Space fill table definitions ────────────────────────────────────
+
+const NEW_STATUS_OPTIONS = [
+  "NEW ADD SOME STORE",
+  "NEW ADD ALL STORE",
+  "NEW DELETE SOME STORE",
+  "NEW DELETE ALL STORE",
+];
+
+const DEL_STATUS_OPTIONS = [
+  "DELETE SOME STORE",
+  "DELETE ALL STORE",
+  "DELETE ALL STORE (IN/OUT)",
+  "DELETE SOME STORE (IN/OUT)",
+];
+
+const NDIM_COLDEFS: TabColDef[] = [
+  { field: "seqNew",    col: 0,  label: "ลำดับ(New)",  editable: false },
+  { field: "dcNew",     col: 3,  label: "DC",           editable: false },
+  { field: "byCodeNew", col: 4,  label: "BY_CODE(New)", editable: true },
+  { field: "statusNew", col: 5,  label: "Status(New)",  editable: true },
+  { field: "remark",    col: 6,  label: "Remark",       editable: true },
+  { field: "seqDel",   col: 8,  label: "ลำดับ(Del)",  editable: false },
+  { field: "dcDel",    col: 11, label: "DC(Del)",      editable: false },
+  { field: "byCodeDel",col: 12, label: "BY_CODE(Del)", editable: true },
+  { field: "statusDel",col: 13, label: "Status(Del)",  editable: true },
+  { field: "extraInfo",col: 14, label: "Extra_Info",   editable: true },
+];
+
+const NSCM_COLDEFS: TabColDef[] = [
+  { field: "seq",       col: 0,  label: "ลำดับ",       editable: false },
+  { field: "barcode",   col: 3,  label: "Barcode",      editable: false },
+  { field: "name",      col: 4,  label: "ชื่อสินค้า",  editable: false },
+  { field: "status",    col: 10, label: "Status",       editable: true },
+  { field: "remark",    col: 11, label: "Remark",       editable: true },
+  { field: "implement", col: 12, label: "Implement",    editable: true },
+];
+
+const DSCM_COLDEFS: TabColDef[] = [
+  { field: "seq",       col: 0, label: "ลำดับ",        editable: false },
+  { field: "barcode",   col: 3, label: "Barcode",       editable: false },
+  { field: "name",      col: 4, label: "ชื่อสินค้า",   editable: false },
+  { field: "division",  col: 5, label: "Division",      editable: true },
+  { field: "category",  col: 6, label: "Category",      editable: true, cascade: "division" },
+  { field: "implement", col: 7, label: "Implement",     editable: true },
+  { field: "status",    col: 8, label: "Status",        editable: true },
+  { field: "extraInfo", col: 9, label: "Extra_Info",    editable: true },
+];
+
 // ─── Home ──────────────────────────────────────────────────────────────────
 
 export default function Home() {
@@ -113,10 +168,16 @@ export default function Home() {
   const [driveLoading, setDriveLoading] = useState(true);
   const [results, setResults] = useState<ProcessedRow[]>([]);
 
-  // Check Space fill preview (shown as 3 tabs in Step 5)
-  interface SheetPreview { name: string; rowCount: number; headers: string[]; sampleRows: string[][]; }
-  const [fillPreview, setFillPreview] = useState<SheetPreview[] | null>(null);
-  const [previewTab, setPreviewTab]   = useState(0);
+  // Check Space fill tables (3 editable tabs in Step 5)
+  interface FillTabData {
+    sheetName: string;
+    displayName: string;
+    colDefs: TabColDef[];
+    rows: EditableFillRow[];
+    originalFillRows: FillRow[];
+  }
+  const [fillTabs, setFillTabs]     = useState<FillTabData[] | null>(null);
+  const [previewTab, setPreviewTab] = useState(0);
 
   // Exception config — loaded from Google Sheets on mount; localStorage is fallback cache
   const [exceptionConfig, setExceptionConfig] = useState<ExceptionConfig[]>(() => {
@@ -447,20 +508,29 @@ export default function Home() {
             }
           )]);
 
-          // Build preview for 3-tab UI in Step 5
-          const toPreview = (rows: FillRow[], colDefs: [number, string][]) => ({
-            headers:    colDefs.map(([, h]) => h),
-            sampleRows: rows.slice(0, 5).map(r =>
-              colDefs.map(([col]) => r.cells.find(c => c.col === col)?.value ?? "")
-            ),
-          });
-          setFillPreview([
-            { name: `NEW_DELETE_IM (${ndimActual})`, rowCount: newDeleteIMRows.length,
-              ...toPreview(newDeleteIMRows, [[0,"ลำดับ(New)"],[3,"DC"],[4,"BY_CODE"],[5,"Status(New)"],[6,"Remark"],[8,"ลำดับ(Del)"],[12,"BY_CODE"],[13,"Status(Del)"],[14,"Extra_Info"]]) },
-            { name: `NEW SCM (${newScmActual})`, rowCount: newScmRows.length,
-              ...toPreview(newScmRows, [[0,"ลำดับ"],[3,"Barcode"],[4,"ชื่อสินค้า"],[10,"Status"],[11,"Remark"],[12,"Implement"]]) },
-            { name: `DEL SCM (${dscmActual})`, rowCount: delScmRows.length,
-              ...toPreview(delScmRows, [[0,"ลำดับ"],[3,"Barcode"],[4,"ชื่อสินค้า"],[5,"Division"],[6,"Category"],[8,"Status"],[9,"Extra_Info"]]) },
+          // Build editable fill tables for 3-tab UI in Step 5
+          setFillTabs([
+            {
+              sheetName: ndimActual,
+              displayName: `NEW_DELETE_IM (${ndimActual})`,
+              colDefs: NDIM_COLDEFS,
+              rows: convertToEditableRows(newDeleteIMRows, NDIM_COLDEFS),
+              originalFillRows: newDeleteIMRows,
+            },
+            {
+              sheetName: newScmActual,
+              displayName: `NEW SCM (${newScmActual})`,
+              colDefs: NSCM_COLDEFS,
+              rows: convertToEditableRows(newScmRows, NSCM_COLDEFS),
+              originalFillRows: newScmRows,
+            },
+            {
+              sheetName: dscmActual,
+              displayName: `DEL SCM (${dscmActual})`,
+              colDefs: DSCM_COLDEFS,
+              rows: convertToEditableRows(delScmRows, DSCM_COLDEFS),
+              originalFillRows: delScmRows,
+            },
           ]);
           setPreviewTab(0);
         }
@@ -551,6 +621,37 @@ export default function Home() {
     setResults(updated);
   };
 
+  const handleFillTabChange = (tabIdx: number, updatedRows: EditableFillRow[]) => {
+    setFillTabs(prev => {
+      if (!prev) return prev;
+      const next = [...prev];
+      const tab = next[tabIdx];
+      next[tabIdx] = { ...tab, rows: updatedRows };
+      // Sync edits back to checkSpacePlanRef so the worker uses the updated data
+      if (checkSpacePlanRef.current) {
+        const updatedFillRows = convertFromEditableRows(updatedRows, tab.originalFillRows, tab.colDefs);
+        if (tabIdx === 0) {
+          checkSpacePlanRef.current = {
+            ...checkSpacePlanRef.current,
+            extraSheets: checkSpacePlanRef.current.extraSheets.map(
+              (sf, i) => i === 0 ? { ...sf, rows: updatedFillRows } : sf
+            ),
+          };
+        } else if (tabIdx === 1) {
+          checkSpacePlanRef.current = { ...checkSpacePlanRef.current, newScmRows: updatedFillRows };
+        } else if (tabIdx === 2) {
+          checkSpacePlanRef.current = {
+            ...checkSpacePlanRef.current,
+            extraSheets: checkSpacePlanRef.current.extraSheets.map(
+              (sf, i) => i === 1 ? { ...sf, rows: updatedFillRows } : sf
+            ),
+          };
+        }
+      }
+      return next;
+    });
+  };
+
   const reset = () => {
     // Jobs persist across resets — do NOT clear them
     recapBufRef.current = null;
@@ -564,7 +665,7 @@ export default function Home() {
     setRecapFiles([]);
     setXlsbFiles([]);
     setResults([]);
-    setFillPreview(null);
+    setFillTabs(null);
     setPreviewTab(0);
   };
 
@@ -868,12 +969,12 @@ export default function Home() {
 
                     {status === "done" && (
                       <>
-                        {/* ─── Check Space fill preview (3 tabs) ─────────────── */}
-                        {fillPreview && (
+                        {/* ─── Check Space fill tables (3 editable tabs) ────── */}
+                        {fillTabs && (
                           <div className="border border-slate-200 rounded-xl overflow-hidden mb-6">
                             {/* Tab bar */}
                             <div className="flex border-b border-slate-200 bg-slate-50">
-                              {fillPreview.map((sheet, i) => (
+                              {fillTabs.map((tab, i) => (
                                 <button
                                   key={i}
                                   onClick={() => setPreviewTab(i)}
@@ -883,55 +984,53 @@ export default function Home() {
                                       : "text-slate-500 hover:text-slate-700"
                                   }`}
                                 >
-                                  <span className="truncate">{sheet.name}</span>
+                                  <span className="truncate">{tab.displayName}</span>
                                   <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                                    sheet.rowCount > 0 ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
+                                    tab.rows.length > 0
+                                      ? "bg-green-100 text-green-700"
+                                      : "bg-amber-100 text-amber-700"
                                   }`}>
-                                    {sheet.rowCount} แถว
+                                    {tab.rows.length} แถว
                                   </span>
                                 </button>
                               ))}
                             </div>
                             {/* Tab content */}
-                            <div className="p-4 bg-white">
-                              {fillPreview[previewTab].rowCount === 0 ? (
+                            <div className="p-3 bg-white">
+                              {(fillTabs[previewTab]?.rows.length ?? 0) === 0 ? (
                                 <p className="text-center text-amber-600 text-sm py-3 flex items-center justify-center gap-2">
                                   <AlertTriangle className="w-4 h-4" />
                                   ไม่มีข้อมูลที่จะเติมในชีทนี้
                                 </p>
-                              ) : (
-                                <div className="overflow-x-auto">
-                                  <table className="text-xs w-full border-collapse">
-                                    <thead>
-                                      <tr>
-                                        {fillPreview[previewTab].headers.map((h, j) => (
-                                          <th key={j} className="px-2 py-1.5 text-left font-semibold text-slate-600 bg-slate-50 border-b border-slate-200 whitespace-nowrap">
-                                            {h}
-                                          </th>
-                                        ))}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {fillPreview[previewTab].sampleRows.map((row, j) => (
-                                        <tr key={j} className={j % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
-                                          {row.map((v, k) => (
-                                            <td key={k} className="px-2 py-1.5 text-slate-700 border-b border-slate-100 whitespace-nowrap max-w-[140px] truncate">
-                                              {v || <span className="text-slate-300">—</span>}
-                                            </td>
-                                          ))}
-                                        </tr>
-                                      ))}
-                                      {fillPreview[previewTab].rowCount > 5 && (
-                                        <tr>
-                                          <td colSpan={fillPreview[previewTab].headers.length} className="px-2 py-2 text-center text-slate-400 text-xs italic">
-                                            ...และอีก {fillPreview[previewTab].rowCount - 5} แถว
-                                          </td>
-                                        </tr>
-                                      )}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
+                              ) : fillTabs[previewTab] ? (
+                                <FillEditTable
+                                  colDefs={fillTabs[previewTab].colDefs}
+                                  rows={fillTabs[previewTab].rows}
+                                  onChange={(updated) => handleFillTabChange(previewTab, updated)}
+                                  getOptions={(field, draft) => {
+                                    const tab = fillTabs[previewTab];
+                                    if (!tab) return [];
+                                    const allVals = (f: string) =>
+                                      [...new Set(tab.rows.map(r => r.fields[f]).filter(Boolean))];
+                                    switch (field) {
+                                      case "statusNew":  return NEW_STATUS_OPTIONS;
+                                      case "statusDel":  return DEL_STATUS_OPTIONS;
+                                      case "status":     return previewTab === 2 ? DEL_STATUS_OPTIONS : NEW_STATUS_OPTIONS;
+                                      case "division":   return spacemanValues.descAList;
+                                      case "category": {
+                                        const cats = allVals("category");
+                                        if (draft.division) {
+                                          const pfx = draft.division.split(":")[0].trim();
+                                          const filtered = cats.filter(c => c.startsWith(pfx));
+                                          return filtered.length > 0 ? filtered : cats;
+                                        }
+                                        return cats;
+                                      }
+                                      default: return allVals(field);
+                                    }
+                                  }}
+                                />
+                              ) : null}
                             </div>
                           </div>
                         )}
