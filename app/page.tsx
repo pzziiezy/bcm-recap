@@ -54,7 +54,7 @@ import {
   fillNewSCM,
   fillDelSCM,
 } from "@/lib/processor";
-import type { ProcessedRow, ExceptionConfig } from "@/lib/types";
+import type { ProcessedRow, ExceptionConfig, FilledData } from "@/lib/types";
 import { makeEntry, sendLog } from "@/lib/logger";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -132,12 +132,20 @@ const NDIM_COLDEFS: TabColDef[] = [
 ];
 
 const NSCM_COLDEFS: TabColDef[] = [
-  { field: "seq",       col: 0,  label: "ลำดับ",       editable: false },
-  { field: "barcode",   col: 3,  label: "Barcode",      editable: false },
-  { field: "name",      col: 4,  label: "ชื่อสินค้า",  editable: false },
-  { field: "status",    col: 10, label: "Status",       editable: true },
-  { field: "remark",    col: 11, label: "Remark",       editable: true },
-  { field: "implement", col: 12, label: "Implement",    editable: true },
+  { field: "seq",       col: 0,  label: "ลำดับ",            editable: false },
+  { field: "barcode",   col: 3,  label: "Barcode",           editable: false },
+  { field: "name",      col: 4,  label: "ชื่อสินค้า",       editable: false },
+  { field: "division",  col: 5,  label: "F — DIVISION",      editable: true },
+  { field: "dept",      col: 6,  label: "G — DEPT",          editable: true, cascade: "division" },
+  { field: "subDept",   col: 7,  label: "H — SUB-DEPT",      editable: true, cascade: "dept" },
+  { field: "cls",       col: 8,  label: "I — Class",         editable: true, cascade: "subDept" },
+  { field: "planogram", col: 9,  label: "J — PLANOGRAM",     editable: true },
+  { field: "status",    col: 10, label: "Status",            editable: true },
+  { field: "remark",    col: 11, label: "Remark",            editable: true },
+  { field: "implement", col: 12, label: "Implement",         editable: true },
+  { field: "colN",      col: 13, label: "N — MBC Forecast",  editable: true },
+  { field: "colPiece",  col: 14, label: "O — Piece 100%",    editable: true },
+  { field: "colO",      col: 15, label: "P — %",             editable: true },
 ];
 
 const DSCM_COLDEFS: TabColDef[] = [
@@ -469,6 +477,11 @@ export default function Home() {
       // return FillRow[] that the download worker uses for ZIP-patch — no XLSX.write needed.
       setStatusMsg("อ่านไฟล์ Check Space และ FILE_INDEX...");
       setPct(8);
+      // Captured outside the CS try block so they're accessible after processRows
+      let csNdimRows: FillRow[] = [];
+      let csNewScmRows: FillRow[] = [];
+      let csDscmRows: FillRow[] = [];
+
       checkSpacePlanRef.current = null;
       try {
         const [csItems, indexLookup, xlsbExtraInfo] = await Promise.all([
@@ -481,6 +494,9 @@ export default function Home() {
           const newDeleteIMRows = fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
           const newScmRows      = fillNewSCM(wb, csItems, indexLookup);
           const delScmRows      = fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
+          csNdimRows    = newDeleteIMRows;
+          csNewScmRows  = newScmRows;
+          csDscmRows    = delScmRows;
           // Store plan — use ACTUAL names resolved from the RECAP file (avoids name-mismatch in worker)
           checkSpacePlanRef.current = {
             newScmRows,
@@ -508,31 +524,7 @@ export default function Home() {
             }
           )]);
 
-          // Build editable fill tables for 3-tab UI in Step 5
-          setFillTabs([
-            {
-              sheetName: ndimActual,
-              displayName: `NEW_DELETE_IM (${ndimActual})`,
-              colDefs: NDIM_COLDEFS,
-              rows: convertToEditableRows(newDeleteIMRows, NDIM_COLDEFS),
-              originalFillRows: newDeleteIMRows,
-            },
-            {
-              sheetName: newScmActual,
-              displayName: `NEW SCM (${newScmActual})`,
-              colDefs: NSCM_COLDEFS,
-              rows: convertToEditableRows(newScmRows, NSCM_COLDEFS),
-              originalFillRows: newScmRows,
-            },
-            {
-              sheetName: dscmActual,
-              displayName: `DEL SCM (${dscmActual})`,
-              colDefs: DSCM_COLDEFS,
-              rows: convertToEditableRows(delScmRows, DSCM_COLDEFS),
-              originalFillRows: delScmRows,
-            },
-          ]);
-          setPreviewTab(0);
+          // setFillTabs is called AFTER processRows below so NEW SCM tab has planogram data
         }
       } catch (csErr) {
         sendLog([makeEntry(sessionId, "ERROR", "WARN",
@@ -604,6 +596,58 @@ export default function Home() {
       )]);
 
       setResults(processed);
+
+      // Build fillTabs now that processRows has run — NEW SCM needs planogram data from `processed`
+      if (csNdimRows.length > 0 || csNewScmRows.length > 0 || csDscmRows.length > 0) {
+        const nscmEditableRows: EditableFillRow[] = csNewScmRows.map(fr => {
+          const pr = processed.find(r => r.rowIndex === fr.rowIndex);
+          const pdata = pr ? { ...pr.filled, ...pr.override } as Record<string, string> : {};
+          return {
+            rowIndex: fr.rowIndex,
+            fields: {
+              seq:       fr.cells.find(c => c.col === 0)?.value  ?? "",
+              barcode:   fr.cells.find(c => c.col === 3)?.value  ?? "",
+              name:      fr.cells.find(c => c.col === 4)?.value  ?? "",
+              division:  pdata.division  ?? "",
+              dept:      pdata.dept      ?? "",
+              subDept:   pdata.subDept   ?? "",
+              cls:       pdata.cls       ?? "",
+              planogram: pdata.planogram ?? "",
+              status:    fr.cells.find(c => c.col === 10)?.value ?? "",
+              remark:    fr.cells.find(c => c.col === 11)?.value ?? "",
+              implement: fr.cells.find(c => c.col === 12)?.value ?? "",
+              colN:      pdata.colN      ?? "",
+              colPiece:  pdata.colPiece  ?? "",
+              colO:      pdata.colO      ?? "",
+            },
+          };
+        });
+        setFillTabs([
+          {
+            sheetName: ndimActual,
+            displayName: `NEW_DELETE_IM (${ndimActual})`,
+            colDefs: NDIM_COLDEFS,
+            rows: convertToEditableRows(csNdimRows, NDIM_COLDEFS),
+            originalFillRows: csNdimRows,
+          },
+          {
+            sheetName: newScmActual,
+            displayName: `NEW SCM (${newScmActual})`,
+            colDefs: NSCM_COLDEFS,
+            rows: nscmEditableRows,
+            originalFillRows: csNewScmRows,
+          },
+          {
+            sheetName: dscmActual,
+            displayName: `DEL SCM (${dscmActual})`,
+            colDefs: DSCM_COLDEFS,
+            rows: convertToEditableRows(csDscmRows, DSCM_COLDEFS),
+            originalFillRows: csDscmRows,
+          },
+        ]);
+        setPreviewTab(0);
+      }
+
       setPct(100);
       setStatusMsg("เสร็จสิ้น!");
       setStatus("done");
@@ -650,6 +694,27 @@ export default function Home() {
       }
       return next;
     });
+    // For NEW SCM: sync F-J/N-Q edits to results so applyRows (worker) uses updated planogram values
+    if (tabIdx === 1) {
+      setResults(prevResults =>
+        prevResults.map(pr => {
+          const er = updatedRows.find(r => r.rowIndex === pr.rowIndex);
+          if (!er) return pr;
+          const override: Partial<FilledData> = {
+            ...(pr.override ?? {}),
+            division:  er.fields.division  ?? "",
+            dept:      er.fields.dept      ?? "",
+            subDept:   er.fields.subDept   ?? "",
+            cls:       er.fields.cls       ?? "",
+            planogram: er.fields.planogram ?? "",
+            colN:      er.fields.colN      ?? "",
+            colPiece:  er.fields.colPiece  ?? "",
+            colO:      er.fields.colO      ?? "",
+          };
+          return { ...pr, override };
+        })
+      );
+    }
   };
 
   const reset = () => {
@@ -1012,6 +1077,22 @@ export default function Home() {
                                     if (!tab) return [];
                                     const allVals = (f: string) =>
                                       [...new Set(tab.rows.map(r => r.fields[f]).filter(Boolean))];
+                                    const hm = spacemanValues.hierarchyMap;
+                                    // NEW SCM tab — use full Division→Dept→SubDept→Class cascade
+                                    if (previewTab === 1) {
+                                      switch (field) {
+                                        case "division":  return spacemanValues.descAList;
+                                        case "dept":      return draft.division && hm.divToDept[draft.division]
+                                          ? hm.divToDept[draft.division] : spacemanValues.descBList;
+                                        case "subDept":   return draft.dept && hm.deptToSub[draft.dept]
+                                          ? hm.deptToSub[draft.dept] : spacemanValues.descCList;
+                                        case "cls":       return draft.subDept && hm.subToCls[draft.subDept]
+                                          ? hm.subToCls[draft.subDept] : spacemanValues.categories;
+                                        case "planogram": return allVals("planogram");
+                                        case "status":    return NEW_STATUS_OPTIONS;
+                                        default:          return allVals(field);
+                                      }
+                                    }
                                     switch (field) {
                                       case "statusNew":  return NEW_STATUS_OPTIONS;
                                       case "statusDel":  return DEL_STATUS_OPTIONS;
