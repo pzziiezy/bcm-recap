@@ -47,6 +47,7 @@ import {
   fillNewDeleteIM,
   fillNewSCM,
   fillDelSCM,
+  resolveSheetName,
 } from "@/lib/processor";
 import type { ProcessedRow, ExceptionConfig } from "@/lib/types";
 import { makeEntry, sendLog } from "@/lib/logger";
@@ -398,6 +399,9 @@ export default function Home() {
         ]);
         if (csItems.length > 0) {
           setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เตรียมข้อมูล...`);
+          // Resolve actual sheet names (handles case/whitespace differences in RECAP file)
+          const newDeleteIMName = resolveSheetName(wb, "NEW_DELETE_IM");
+          const delScmName      = resolveSheetName(wb, "DEL SCM");
           const newDeleteIMRows = fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
           const newScmRows      = fillNewSCM(wb, csItems, indexLookup);
           const delScmRows      = fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
@@ -405,8 +409,8 @@ export default function Home() {
           checkSpacePlanRef.current = {
             newScmRows,
             extraSheets: [
-              { sheetName: "NEW_DELETE_IM", rows: newDeleteIMRows },
-              { sheetName: "DEL SCM",       rows: delScmRows },
+              { sheetName: newDeleteIMName, rows: newDeleteIMRows },
+              { sheetName: delScmName,      rows: delScmRows },
             ],
           };
           // recapBufRef.current stays as the ORIGINAL buffer — no XLSX.write
@@ -415,6 +419,17 @@ export default function Home() {
           sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
             `Check Space: ${newCount} NEW / ${delCount} DELETE items — ส่งไป ZIP-patch ที่ worker`,
             { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: csItems.length }
+          )]);
+          // Diagnostic: log fill plan to surface sheet-name mismatches and zero-row issues
+          sendLog([makeEntry(sessionId, "CS_FILL_DIAG", "INFO",
+            `Fill rows — NEW SCM: ${newScmRows.length} | NEW_DELETE_IM (${newDeleteIMName}): ${newDeleteIMRows.length} | DEL SCM (${delScmName}): ${delScmRows.length}`,
+            {
+              availableSheets: wb.SheetNames,
+              newDeleteIMName, delScmName,
+              newScmRows: newScmRows.length,
+              newDeleteIMRows: newDeleteIMRows.length,
+              delScmRows: delScmRows.length,
+            }
           )]);
         }
       } catch (csErr) {

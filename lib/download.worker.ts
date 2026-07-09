@@ -414,12 +414,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
         // 4b. Write NEW_DELETE_IM and DEL SCM sheets
         for (const sf of msg.checkSpacePlan.extraSheets) {
-          if (!sf.rows.length) continue;
+          if (!sf.rows.length) {
+            console.warn(`[worker] SKIP ${sf.sheetName}: 0 rows`);
+            continue;
+          }
           const p = findSheetPath(wbXml, relsXml, sf.sheetName);
-          if (!p || !files[p]) continue;
+          if (!p) {
+            console.warn(`[worker] findSheetPath FAILED for "${sf.sheetName}" — sheet not found in workbook.xml`);
+            continue;
+          }
+          if (!files[p]) {
+            console.warn(`[worker] ZIP has no entry for path "${p}" (sheet "${sf.sheetName}")`);
+            continue;
+          }
           const r2 = insertFillRows(strFromU8(files[p]), sf.rows, workingStrings);
           files[p] = strToU8(r2.sheetXml);
           workingStrings.push(...r2.newStrings);
+          console.info(`[worker] OK: inserted ${sf.rows.length} rows into "${sf.sheetName}" at ${p}`);
         }
       }
       ctx.postMessage({ type: "progress", pct: 60 });

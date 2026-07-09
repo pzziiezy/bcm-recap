@@ -16,6 +16,21 @@ import type { FillCell, FillRow } from "./download";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
+/** Find a worksheet by name — tries exact match first, then case-insensitive trim. */
+function findWbSheet(wb: XLSX.WorkBook, name: string): XLSX.WorkSheet | null {
+  if (wb.Sheets[name]) return wb.Sheets[name];
+  const lower = name.trim().toLowerCase();
+  const actual = wb.SheetNames.find(n => n.trim().toLowerCase() === lower);
+  return actual ? wb.Sheets[actual] : null;
+}
+
+/** Resolve the actual sheet name in wb (for passing to the download worker). */
+export function resolveSheetName(wb: XLSX.WorkBook, name: string): string {
+  if (wb.Sheets[name]) return name;
+  const lower = name.trim().toLowerCase();
+  return wb.SheetNames.find(n => n.trim().toLowerCase() === lower) ?? name;
+}
+
 function cellVal(ws: XLSX.WorkSheet, r: number, c: number): string {
   const cell = ws[XLSX.utils.encode_cell({ r, c })];
   if (!cell) return "";
@@ -928,7 +943,7 @@ export function fillNewDeleteIM(
   indexLookup: IndexLookup,
   xlsbExtraInfo: Map<string, string>,
 ): FillRow[] {
-  const ws = wb.Sheets["NEW_DELETE_IM"];
+  const ws = findWbSheet(wb, "NEW_DELETE_IM");
   if (!ws) return [];
 
   const HEADER_ROW = 3; // index → Excel row 4
@@ -1016,7 +1031,7 @@ export function fillNewSCM(
   items: CheckSpaceItem[],
   indexLookup: IndexLookup,
 ): FillRow[] {
-  const ws = wb.Sheets["NEW SCM"];
+  const ws = findWbSheet(wb, "NEW SCM");
   if (!ws) return [];
 
   const HEADER_ROW = 3;  // index → Excel row 4
@@ -1088,7 +1103,7 @@ export function fillDelSCM(
   indexLookup: IndexLookup,
   xlsbExtraInfo: Map<string, string>,
 ): FillRow[] {
-  const ws = wb.Sheets["DEL SCM"];
+  const ws = findWbSheet(wb, "DEL SCM");
   if (!ws) return [];
 
   const HEADER_ROW  = 4;  // index → Excel row 5

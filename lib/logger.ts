@@ -7,7 +7,8 @@ export type LogEvent =
   | "BUILD_QUEUED"
   | "BUILD_COMPLETE"
   | "BUILD_FAILED"
-  | "ERROR";
+  | "ERROR"
+  | "CS_FILL_DIAG";
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";
 
