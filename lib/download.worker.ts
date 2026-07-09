@@ -109,14 +109,20 @@ function buildSST(strings: string[]): string {
 function findSheetPath(wbXml: string, relsXml: string, name: string): string | null {
   // Encode the sheet name for XML attribute matching
   const xmlName = encodeXml(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const sm = new RegExp(
-    `<sheet\\b[^>]+name="${xmlName}"[^>]+r:id="([^"]+)"`,
+
+  // Step 1: find the <sheet> element with this name (attribute-order independent)
+  const sheetMatch = new RegExp(
+    `<sheet\\b[^>]*name="${xmlName}"[^>]*/?>`,
     "i"
   ).exec(wbXml);
-  if (!sm) return null;
+  if (!sheetMatch) return null;
+
+  // Step 2: extract r:id from the matched element (regardless of attribute order)
+  const ridMatch = /\br:id="([^"]+)"/.exec(sheetMatch[0]);
+  if (!ridMatch) return null;
 
   const rm = new RegExp(
-    `<Relationship\\b[^>]+Id="${sm[1]}"[^>]+Target="([^"]+)"`,
+    `<Relationship\\b[^>]+Id="${ridMatch[1]}"[^>]+Target="([^"]+)"`,
     "i"
   ).exec(relsXml);
   if (!rm) return null;
@@ -316,23 +322,39 @@ function insertFillRows(
     return `<row r="${rowNum}">${cellsXml}</row>`;
   }).join("");
 
-  // Append new rows just before </sheetData> — preserves order of existing rows
-  const sdEnd = sheetXml.lastIndexOf("</sheetData>");
-  let result = sdEnd >= 0
-    ? sheetXml.slice(0, sdEnd) + insertXml + sheetXml.slice(sdEnd)
-    : sheetXml + insertXml;
+  // Insert rows into sheetData — handle all three cases:
+  //   1. <sheetData>…</sheetData>  — normal (has existing rows or empty-but-open)
+  //   2. <sheetData/>              — self-closing (completely empty sheet)
+  //   3. neither                   — malformed; fall back to inserting before </worksheet>
+  const sdClose = sheetXml.lastIndexOf("</sheetData>");
+  const sdSelf  = sheetXml.indexOf("<sheetData/>");
+  let result: string;
+  if (sdClose >= 0) {
+    result = sheetXml.slice(0, sdClose) + insertXml + sheetXml.slice(sdClose);
+  } else if (sdSelf >= 0) {
+    // Replace <sheetData/> with <sheetData>rows</sheetData>
+    result = sheetXml.slice(0, sdSelf)
+      + `<sheetData>${insertXml}</sheetData>`
+      + sheetXml.slice(sdSelf + 12); // 12 = "<sheetData/>".length
+  } else {
+    const wsEnd = sheetXml.lastIndexOf("</worksheet>");
+    result = wsEnd >= 0
+      ? sheetXml.slice(0, wsEnd) + `<sheetData>${insertXml}</sheetData>` + sheetXml.slice(wsEnd)
+      : sheetXml;
+  }
 
-  // Extend <dimension ref="..."> end-row if needed
+  // Extend <dimension ref="…"> end-row — handles both "A1" and "A1:Z100" forms
   const maxRowNum = sorted[sorted.length - 1].rowIndex + 1;
   result = result.replace(
     /(<dimension\b[^>]*ref=")([^"]+)(")/,
     (m, pre, ref, post) => {
       const parts = ref.split(":");
-      if (parts.length < 2) return m;
-      const endMatch = /^([A-Z]+)(\d+)$/.exec(parts[1]);
+      const startRef = parts[0];
+      const endRef   = parts.length >= 2 ? parts[1] : parts[0];
+      const endMatch = /^([A-Z]+)(\d+)$/.exec(endRef);
       if (!endMatch) return m;
       const newEnd = Math.max(parseInt(endMatch[2]), maxRowNum);
-      return `${pre}${parts[0]}:${endMatch[1]}${newEnd}${post}`;
+      return `${pre}${startRef}:${endMatch[1]}${newEnd}${post}`;
     }
   );
 
