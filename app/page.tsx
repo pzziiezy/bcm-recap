@@ -1069,6 +1069,7 @@ export default function Home() {
                                 </p>
                               ) : fillTabs[previewTab] ? (
                                 <FillEditTable
+                                  key={previewTab}
                                   colDefs={fillTabs[previewTab].colDefs}
                                   rows={fillTabs[previewTab].rows}
                                   onChange={(updated) => handleFillTabChange(previewTab, updated)}
