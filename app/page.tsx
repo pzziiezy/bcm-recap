@@ -1123,17 +1123,6 @@ export default function Home() {
                           <StatCard label="จาก DATA_SPACEMAN" value={fromSpaceman} color="blue" />
                           <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
                         </div>
-                        <ResultsTable
-                          rows={results}
-                          onChange={handleResultsChange}
-                          externalSuggestions={{
-                            division: spacemanValues.descAList,
-                            dept:     spacemanValues.descBList,
-                            subDept:  spacemanValues.descCList,
-                            cls:      spacemanValues.categories,
-                          }}
-                          hierarchyMap={spacemanValues.hierarchyMap}
-                        />
                         <div className="flex gap-3 pt-4 border-t border-slate-100">
                           <NavBtn onClick={enqueueJob}>
                             <Plus className="w-4 h-4" />
