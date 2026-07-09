@@ -34,7 +34,7 @@ import SpacemanMaster, {
   type SpacemanValues,
 } from "@/components/SpacemanMaster";
 import ConfigMenu, { EXCEPTION_CONFIG_KEY, type SyncStatus } from "@/components/ConfigMenu";
-import { toDownloadRows, type DownloadRow, type CheckSpaceFillPlan } from "@/lib/download";
+import { toDownloadRows, type DownloadRow, type CheckSpaceFillPlan, type FillRow } from "@/lib/download";
 import {
   parseMissingRows,
   parseXlsbFiles,
@@ -47,7 +47,6 @@ import {
   fillNewDeleteIM,
   fillNewSCM,
   fillDelSCM,
-  resolveSheetName,
 } from "@/lib/processor";
 import type { ProcessedRow, ExceptionConfig } from "@/lib/types";
 import { makeEntry, sendLog } from "@/lib/logger";
@@ -113,6 +112,11 @@ export default function Home() {
   const [driveFileInfo, setDriveFileInfo] = useState<DriveFileInfo | null>(null);
   const [driveLoading, setDriveLoading] = useState(true);
   const [results, setResults] = useState<ProcessedRow[]>([]);
+
+  // Check Space fill preview (shown as 3 tabs in Step 5)
+  interface SheetPreview { name: string; rowCount: number; headers: string[]; sampleRows: string[][]; }
+  const [fillPreview, setFillPreview] = useState<SheetPreview[] | null>(null);
+  const [previewTab, setPreviewTab]   = useState(0);
 
   // Exception config — loaded from Google Sheets on mount; localStorage is fallback cache
   const [exceptionConfig, setExceptionConfig] = useState<ExceptionConfig[]>(() => {
@@ -383,7 +387,21 @@ export default function Home() {
       setPct(5);
       const recapBuf = await recapFiles[0].arrayBuffer();
       recapBufRef.current = recapBuf.slice(0);
-      const wb = XLSX.read(recapBuf, { type: "array" });
+
+      // Pass 1: read sheet names only (fast — no cell parsing)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wbMeta = XLSX.read(recapBuf, { type: "array", bookSheets: true } as any);
+      const findActualName = (target: string) => {
+        const lo = target.toLowerCase().trim();
+        return wbMeta.SheetNames.find((n: string) => n.toLowerCase().trim() === lo) ?? target;
+      };
+      const newScmActual = findActualName("NEW SCM");
+      const ndimActual   = findActualName("NEW_DELETE_IM");
+      const dscmActual   = findActualName("DEL SCM");
+
+      // Pass 2: parse only the 3 sheets we need (avoids loading 165k+ cells in unused sheets)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const wb = XLSX.read(recapBuf, { type: "array", sheets: [newScmActual, ndimActual, dscmActual] } as any);
 
       // ── Check Space pre-fill (runs BEFORE parseMissingRows so new rows are included) ──
       // Fill functions write to wb in-memory (needed for parseMissingRows) AND
@@ -399,38 +417,52 @@ export default function Home() {
         ]);
         if (csItems.length > 0) {
           setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เตรียมข้อมูล...`);
-          // Resolve actual sheet names (handles case/whitespace differences in RECAP file)
-          const newDeleteIMName = resolveSheetName(wb, "NEW_DELETE_IM");
-          const delScmName      = resolveSheetName(wb, "DEL SCM");
           const newDeleteIMRows = fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
           const newScmRows      = fillNewSCM(wb, csItems, indexLookup);
           const delScmRows      = fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
-          // Store plan — worker will ZIP-patch these into the ORIGINAL buffer (format preserved)
+          // Store plan — use ACTUAL names resolved from the RECAP file (avoids name-mismatch in worker)
           checkSpacePlanRef.current = {
             newScmRows,
             extraSheets: [
-              { sheetName: newDeleteIMName, rows: newDeleteIMRows },
-              { sheetName: delScmName,      rows: delScmRows },
+              { sheetName: ndimActual, rows: newDeleteIMRows },
+              { sheetName: dscmActual, rows: delScmRows },
             ],
           };
           // recapBufRef.current stays as the ORIGINAL buffer — no XLSX.write
           const newCount = csItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length;
           const delCount = csItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length;
           sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
-            `Check Space: ${newCount} NEW / ${delCount} DELETE items — ส่งไป ZIP-patch ที่ worker`,
+            `Check Space: ${newCount} NEW / ${delCount} DELETE items`,
             { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: csItems.length }
           )]);
-          // Diagnostic: log fill plan to surface sheet-name mismatches and zero-row issues
           sendLog([makeEntry(sessionId, "CS_FILL_DIAG", "INFO",
-            `Fill rows — NEW SCM: ${newScmRows.length} | NEW_DELETE_IM (${newDeleteIMName}): ${newDeleteIMRows.length} | DEL SCM (${delScmName}): ${delScmRows.length}`,
+            `SheetNames: [${wbMeta.SheetNames.join(", ")}] → loaded: [${wb.SheetNames.join(", ")}] | NEW_DELETE_IM(${ndimActual}): ${newDeleteIMRows.length}r | DEL SCM(${dscmActual}): ${delScmRows.length}r | NEW SCM(${newScmActual}): ${newScmRows.length}r`,
             {
-              availableSheets: wb.SheetNames,
-              newDeleteIMName, delScmName,
-              newScmRows: newScmRows.length,
-              newDeleteIMRows: newDeleteIMRows.length,
-              delScmRows: delScmRows.length,
+              allSheetNames: wbMeta.SheetNames,
+              loadedSheets:  wb.SheetNames,
+              ndimActual, dscmActual, newScmActual,
+              ndimRows: newDeleteIMRows.length,
+              nscmRows: newScmRows.length,
+              dscmRows: delScmRows.length,
             }
           )]);
+
+          // Build preview for 3-tab UI in Step 5
+          const toPreview = (rows: FillRow[], colDefs: [number, string][]) => ({
+            headers:    colDefs.map(([, h]) => h),
+            sampleRows: rows.slice(0, 5).map(r =>
+              colDefs.map(([col]) => r.cells.find(c => c.col === col)?.value ?? "")
+            ),
+          });
+          setFillPreview([
+            { name: `NEW_DELETE_IM (${ndimActual})`, rowCount: newDeleteIMRows.length,
+              ...toPreview(newDeleteIMRows, [[0,"ลำดับ(New)"],[3,"DC"],[4,"BY_CODE"],[5,"Status(New)"],[6,"Remark"],[8,"ลำดับ(Del)"],[12,"BY_CODE"],[13,"Status(Del)"],[14,"Extra_Info"]]) },
+            { name: `NEW SCM (${newScmActual})`, rowCount: newScmRows.length,
+              ...toPreview(newScmRows, [[0,"ลำดับ"],[3,"Barcode"],[4,"ชื่อสินค้า"],[10,"Status"],[11,"Remark"],[12,"Implement"]]) },
+            { name: `DEL SCM (${dscmActual})`, rowCount: delScmRows.length,
+              ...toPreview(delScmRows, [[0,"ลำดับ"],[3,"Barcode"],[4,"ชื่อสินค้า"],[5,"Division"],[6,"Category"],[8,"Status"],[9,"Extra_Info"]]) },
+          ]);
+          setPreviewTab(0);
         }
       } catch (csErr) {
         sendLog([makeEntry(sessionId, "ERROR", "WARN",
@@ -532,6 +564,8 @@ export default function Home() {
     setRecapFiles([]);
     setXlsbFiles([]);
     setResults([]);
+    setFillPreview(null);
+    setPreviewTab(0);
   };
 
   const handleConfigChange = (updated: ExceptionConfig[]) => {
@@ -834,6 +868,74 @@ export default function Home() {
 
                     {status === "done" && (
                       <>
+                        {/* ─── Check Space fill preview (3 tabs) ─────────────── */}
+                        {fillPreview && (
+                          <div className="border border-slate-200 rounded-xl overflow-hidden mb-6">
+                            {/* Tab bar */}
+                            <div className="flex border-b border-slate-200 bg-slate-50">
+                              {fillPreview.map((sheet, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => setPreviewTab(i)}
+                                  className={`flex-1 py-2.5 px-3 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
+                                    previewTab === i
+                                      ? "bg-white text-[#E91E8C] border-b-2 border-[#E91E8C]"
+                                      : "text-slate-500 hover:text-slate-700"
+                                  }`}
+                                >
+                                  <span className="truncate">{sheet.name}</span>
+                                  <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
+                                    sheet.rowCount > 0 ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
+                                  }`}>
+                                    {sheet.rowCount} แถว
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                            {/* Tab content */}
+                            <div className="p-4 bg-white">
+                              {fillPreview[previewTab].rowCount === 0 ? (
+                                <p className="text-center text-amber-600 text-sm py-3 flex items-center justify-center gap-2">
+                                  <AlertTriangle className="w-4 h-4" />
+                                  ไม่มีข้อมูลที่จะเติมในชีทนี้
+                                </p>
+                              ) : (
+                                <div className="overflow-x-auto">
+                                  <table className="text-xs w-full border-collapse">
+                                    <thead>
+                                      <tr>
+                                        {fillPreview[previewTab].headers.map((h, j) => (
+                                          <th key={j} className="px-2 py-1.5 text-left font-semibold text-slate-600 bg-slate-50 border-b border-slate-200 whitespace-nowrap">
+                                            {h}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {fillPreview[previewTab].sampleRows.map((row, j) => (
+                                        <tr key={j} className={j % 2 === 0 ? "bg-white" : "bg-slate-50/50"}>
+                                          {row.map((v, k) => (
+                                            <td key={k} className="px-2 py-1.5 text-slate-700 border-b border-slate-100 whitespace-nowrap max-w-[140px] truncate">
+                                              {v || <span className="text-slate-300">—</span>}
+                                            </td>
+                                          ))}
+                                        </tr>
+                                      ))}
+                                      {fillPreview[previewTab].rowCount > 5 && (
+                                        <tr>
+                                          <td colSpan={fillPreview[previewTab].headers.length} className="px-2 py-2 text-center text-slate-400 text-xs italic">
+                                            ...และอีก {fillPreview[previewTab].rowCount - 5} แถว
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-4 gap-4 mb-6">
                           <StatCard label="ยืนยันแล้ว" value={confirmed} color="green" />
                           <StatCard label="ไม่มี Planogram" value={inferred} color="amber" />
