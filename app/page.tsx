@@ -760,10 +760,26 @@ export default function Home() {
       });
   };
 
-  const confirmed = results.filter((r) => r.confidence === "confirmed").length;
-  const inferred = results.filter((r) => r.confidence === "inferred").length;
-  const notFound = results.filter((r) => r.confidence === "not_found").length;
-  const fromSpaceman = results.filter((r) => r.confidence === "from_spaceman").length;
+  // ─── Fill-tab summary stats ─────────────────────────────────────────────────
+  const ndimRows  = fillTabs?.[0]?.rows ?? [];
+  const nscmRows  = fillTabs?.[1]?.rows ?? [];
+  const dscmRows  = fillTabs?.[2]?.rows ?? [];
+
+  const ndimNewCount = new Set(ndimRows.map(r => r.fields.seqNew).filter(Boolean)).size;
+  const ndimDelCount = new Set(ndimRows.map(r => r.fields.seqDel).filter(Boolean)).size;
+
+  const nscmFilled    = nscmRows.filter(r => {
+    const pr = results.find(p => p.rowIndex === r.rowIndex);
+    return pr?.confidence === "confirmed" || pr?.confidence === "from_spaceman";
+  }).length;
+  const nscmNotFilled = nscmRows.length - nscmFilled;
+
+  const pendingNdim  = ndimRows.filter(r =>
+    (r.fields.seqNew && !r.fields.statusNew) || (r.fields.seqDel && !r.fields.statusDel)
+  ).length;
+  const pendingNscm  = nscmRows.filter(r => !r.fields.division).length;
+  const pendingDscm  = dscmRows.filter(r => !r.fields.status).length;
+  const pendingTotal = pendingNdim + pendingNscm + pendingDscm;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -1034,99 +1050,201 @@ export default function Home() {
 
                     {status === "done" && (
                       <>
-                        {/* ─── Check Space fill tables (3 editable tabs) ────── */}
                         {fillTabs && (
-                          <div className="border border-slate-200 rounded-xl overflow-hidden mb-6">
-                            {/* Tab bar */}
-                            <div className="flex border-b border-slate-200 bg-slate-50">
-                              {fillTabs.map((tab, i) => (
-                                <button
-                                  key={i}
-                                  onClick={() => setPreviewTab(i)}
-                                  className={`flex-1 py-2.5 px-3 text-xs font-medium transition-colors flex items-center justify-center gap-1.5 ${
-                                    previewTab === i
-                                      ? "bg-white text-[#E91E8C] border-b-2 border-[#E91E8C]"
-                                      : "text-slate-500 hover:text-slate-700"
-                                  }`}
-                                >
-                                  <span className="truncate">{tab.displayName}</span>
-                                  <span className={`shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold ${
-                                    tab.rows.length > 0
-                                      ? "bg-green-100 text-green-700"
-                                      : "bg-amber-100 text-amber-700"
-                                  }`}>
-                                    {tab.rows.length} แถว
-                                  </span>
-                                </button>
-                              ))}
+                          <>
+                            {/* ── KPI Summary Cards (also serve as tab nav) ─── */}
+                            <div className="grid grid-cols-4 gap-3 mb-4">
+                              {/* Card 0 — NEW_DELETE_IM */}
+                              {(() => {
+                                const active = previewTab === 0;
+                                return (
+                                  <button
+                                    onClick={() => setPreviewTab(0)}
+                                    className={`rounded-xl border-2 p-4 flex flex-col items-center gap-1.5 text-center transition-all ${
+                                      active
+                                        ? "border-[#E91E8C] bg-pink-50 shadow-sm"
+                                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    <span className="text-[11px] font-semibold text-slate-500 truncate w-full text-center">NEW_DELETE_IM</span>
+                                    <span className={`text-3xl font-bold ${active ? "text-[#E91E8C]" : "text-slate-700"}`}>
+                                      {ndimRows.length}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">แถวทั้งหมด</span>
+                                    <div className="flex gap-1 flex-wrap justify-center mt-0.5">
+                                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-semibold">
+                                        NEW {ndimNewCount}
+                                      </span>
+                                      <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 text-[10px] font-semibold">
+                                        DEL {ndimDelCount}
+                                      </span>
+                                    </div>
+                                  </button>
+                                );
+                              })()}
+
+                              {/* Card 1 — NEW SCM */}
+                              {(() => {
+                                const active = previewTab === 1;
+                                return (
+                                  <button
+                                    onClick={() => setPreviewTab(1)}
+                                    className={`rounded-xl border-2 p-4 flex flex-col items-center gap-1.5 text-center transition-all ${
+                                      active
+                                        ? "border-blue-400 bg-blue-50 shadow-sm"
+                                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    <span className="text-[11px] font-semibold text-slate-500">NEW SCM</span>
+                                    <span className={`text-3xl font-bold ${active ? "text-blue-600" : "text-slate-700"}`}>
+                                      {nscmRows.length}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">แถวทั้งหมด</span>
+                                    <div className="flex gap-1 flex-wrap justify-center mt-0.5">
+                                      <span className="px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-semibold">
+                                        เจอ {nscmFilled}
+                                      </span>
+                                      {nscmNotFilled > 0 && (
+                                        <span className="px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 text-[10px] font-semibold">
+                                          กรอกเอง {nscmNotFilled}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })()}
+
+                              {/* Card 2 — DEL SCM */}
+                              {(() => {
+                                const active = previewTab === 2;
+                                return (
+                                  <button
+                                    onClick={() => setPreviewTab(2)}
+                                    className={`rounded-xl border-2 p-4 flex flex-col items-center gap-1.5 text-center transition-all ${
+                                      active
+                                        ? "border-orange-400 bg-orange-50 shadow-sm"
+                                        : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    <span className="text-[11px] font-semibold text-slate-500">DEL SCM</span>
+                                    <span className={`text-3xl font-bold ${active ? "text-orange-500" : "text-slate-700"}`}>
+                                      {dscmRows.length}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400">แถวทั้งหมด</span>
+                                    <div className="flex gap-1 flex-wrap justify-center mt-0.5">
+                                      <span className="px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-semibold">
+                                        ลบสินค้า {dscmRows.length}
+                                      </span>
+                                    </div>
+                                  </button>
+                                );
+                              })()}
+
+                              {/* Card 3 — รอแก้ไข (info, not a tab) */}
+                              <div className={`rounded-xl border-2 p-4 flex flex-col items-center gap-1.5 text-center ${
+                                pendingTotal > 0
+                                  ? "border-amber-300 bg-amber-50"
+                                  : "border-green-300 bg-green-50"
+                              }`}>
+                                <span className="text-[11px] font-semibold text-slate-500">รอแก้ไข</span>
+                                <span className={`text-3xl font-bold ${pendingTotal > 0 ? "text-amber-600" : "text-green-600"}`}>
+                                  {pendingTotal}
+                                </span>
+                                <span className="text-[10px] text-slate-400">แถวที่ยังไม่สมบูรณ์</span>
+                                {pendingTotal > 0 ? (
+                                  <div className="flex flex-col gap-0.5 mt-0.5">
+                                    {pendingNdim > 0 && (
+                                      <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold">
+                                        NDIM {pendingNdim}
+                                      </span>
+                                    )}
+                                    {pendingNscm > 0 && (
+                                      <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold">
+                                        SCM {pendingNscm}
+                                      </span>
+                                    )}
+                                    {pendingDscm > 0 && (
+                                      <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold">
+                                        DEL {pendingDscm}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-green-600 font-semibold mt-0.5">พร้อม Download ✓</span>
+                                )}
+                              </div>
                             </div>
-                            {/* Tab content */}
-                            <div className="p-3 bg-white">
-                              {(fillTabs[previewTab]?.rows.length ?? 0) === 0 ? (
-                                <p className="text-center text-amber-600 text-sm py-3 flex items-center justify-center gap-2">
-                                  <AlertTriangle className="w-4 h-4" />
-                                  ไม่มีข้อมูลที่จะเติมในชีทนี้
-                                </p>
-                              ) : fillTabs[previewTab] ? (
-                                <FillEditTable
-                                  key={previewTab}
-                                  colDefs={fillTabs[previewTab].colDefs}
-                                  rows={fillTabs[previewTab].rows}
-                                  onChange={(updated) => handleFillTabChange(previewTab, updated)}
-                                  isKeyRow={previewTab === 0
-                                    ? (row) => !!(row.fields.seqNew || row.fields.seqDel)
-                                    : undefined
-                                  }
-                                  getOptions={(field, draft) => {
-                                    const tab = fillTabs[previewTab];
-                                    if (!tab) return [];
-                                    const allVals = (f: string) =>
-                                      [...new Set(tab.rows.map(r => r.fields[f]).filter(Boolean))];
-                                    const hm = spacemanValues.hierarchyMap;
-                                    // NEW SCM tab — use full Division→Dept→SubDept→Class cascade
-                                    if (previewTab === 1) {
-                                      switch (field) {
-                                        case "division":  return spacemanValues.descAList;
-                                        case "dept":      return draft.division && hm.divToDept[draft.division]
-                                          ? hm.divToDept[draft.division] : spacemanValues.descBList;
-                                        case "subDept":   return draft.dept && hm.deptToSub[draft.dept]
-                                          ? hm.deptToSub[draft.dept] : spacemanValues.descCList;
-                                        case "cls":       return draft.subDept && hm.subToCls[draft.subDept]
-                                          ? hm.subToCls[draft.subDept] : spacemanValues.categories;
-                                        case "planogram": return allVals("planogram");
-                                        case "status":    return NEW_STATUS_OPTIONS;
-                                        default:          return allVals(field);
-                                      }
+
+                            {/* ── Table content ─────────────────────────────── */}
+                            <div className="border border-slate-200 rounded-xl overflow-hidden mb-6">
+                              <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+                                <span className="text-xs font-semibold text-slate-700">
+                                  {fillTabs[previewTab]?.displayName}
+                                </span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold">
+                                  {fillTabs[previewTab]?.rows.length ?? 0} แถว
+                                </span>
+                              </div>
+                              <div className="p-3 bg-white">
+                                {(fillTabs[previewTab]?.rows.length ?? 0) === 0 ? (
+                                  <p className="text-center text-amber-600 text-sm py-3 flex items-center justify-center gap-2">
+                                    <AlertTriangle className="w-4 h-4" />
+                                    ไม่มีข้อมูลที่จะเติมในชีทนี้
+                                  </p>
+                                ) : fillTabs[previewTab] ? (
+                                  <FillEditTable
+                                    key={previewTab}
+                                    colDefs={fillTabs[previewTab].colDefs}
+                                    rows={fillTabs[previewTab].rows}
+                                    onChange={(updated) => handleFillTabChange(previewTab, updated)}
+                                    isKeyRow={previewTab === 0
+                                      ? (row) => !!(row.fields.seqNew || row.fields.seqDel)
+                                      : undefined
                                     }
-                                    switch (field) {
-                                      case "statusNew":  return NEW_STATUS_OPTIONS;
-                                      case "statusDel":  return DEL_STATUS_OPTIONS;
-                                      case "status":     return previewTab === 2 ? DEL_STATUS_OPTIONS : NEW_STATUS_OPTIONS;
-                                      case "division":   return spacemanValues.descAList;
-                                      case "category": {
-                                        const cats = allVals("category");
-                                        if (draft.division) {
-                                          const pfx = draft.division.split(":")[0].trim();
-                                          const filtered = cats.filter(c => c.startsWith(pfx));
-                                          return filtered.length > 0 ? filtered : cats;
+                                    getOptions={(field, draft) => {
+                                      const tab = fillTabs[previewTab];
+                                      if (!tab) return [];
+                                      const allVals = (f: string) =>
+                                        [...new Set(tab.rows.map(r => r.fields[f]).filter(Boolean))];
+                                      const hm = spacemanValues.hierarchyMap;
+                                      if (previewTab === 1) {
+                                        switch (field) {
+                                          case "division":  return spacemanValues.descAList;
+                                          case "dept":      return draft.division && hm.divToDept[draft.division]
+                                            ? hm.divToDept[draft.division] : spacemanValues.descBList;
+                                          case "subDept":   return draft.dept && hm.deptToSub[draft.dept]
+                                            ? hm.deptToSub[draft.dept] : spacemanValues.descCList;
+                                          case "cls":       return draft.subDept && hm.subToCls[draft.subDept]
+                                            ? hm.subToCls[draft.subDept] : spacemanValues.categories;
+                                          case "planogram": return allVals("planogram");
+                                          case "status":    return NEW_STATUS_OPTIONS;
+                                          default:          return allVals(field);
                                         }
-                                        return cats;
                                       }
-                                      default: return allVals(field);
-                                    }
-                                  }}
-                                />
-                              ) : null}
+                                      switch (field) {
+                                        case "statusNew":  return NEW_STATUS_OPTIONS;
+                                        case "statusDel":  return DEL_STATUS_OPTIONS;
+                                        case "status":     return previewTab === 2 ? DEL_STATUS_OPTIONS : NEW_STATUS_OPTIONS;
+                                        case "division":   return spacemanValues.descAList;
+                                        case "category": {
+                                          const cats = allVals("category");
+                                          if (draft.division) {
+                                            const pfx = draft.division.split(":")[0].trim();
+                                            const filtered = cats.filter(c => c.startsWith(pfx));
+                                            return filtered.length > 0 ? filtered : cats;
+                                          }
+                                          return cats;
+                                        }
+                                        default: return allVals(field);
+                                      }
+                                    }}
+                                  />
+                                ) : null}
+                              </div>
                             </div>
-                          </div>
+                          </>
                         )}
 
-                        <div className="grid grid-cols-4 gap-4 mb-6">
-                          <StatCard label="ยืนยันแล้ว" value={confirmed} color="green" />
-                          <StatCard label="ไม่มี Planogram" value={inferred} color="amber" />
-                          <StatCard label="จาก DATA_SPACEMAN" value={fromSpaceman} color="blue" />
-                          <StatCard label="ไม่พบ / กรอกเอง" value={notFound} color="red" />
-                        </div>
                         <div className="flex gap-3 pt-4 border-t border-slate-100">
                           <NavBtn onClick={enqueueJob}>
                             <Plus className="w-4 h-4" />
