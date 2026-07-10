@@ -119,16 +119,16 @@ const DEL_STATUS_OPTIONS = [
 ];
 
 const NDIM_COLDEFS: TabColDef[] = [
-  { field: "seqNew",    col: 0,  label: "ลำดับ(New)",  editable: false },
-  { field: "dcNew",     col: 3,  label: "DC",           editable: false },
-  { field: "byCodeNew", col: 4,  label: "BY_CODE(New)", editable: true },
-  { field: "statusNew", col: 5,  label: "Status(New)",  editable: true },
-  { field: "remark",    col: 6,  label: "Remark",       editable: true },
-  { field: "seqDel",   col: 8,  label: "ลำดับ(Del)",  editable: false },
-  { field: "dcDel",    col: 11, label: "DC(Del)",      editable: false },
-  { field: "byCodeDel",col: 12, label: "BY_CODE(Del)", editable: true },
-  { field: "statusDel",col: 13, label: "Status(Del)",  editable: true },
-  { field: "extraInfo",col: 14, label: "Extra_Info",   editable: true },
+  { field: "seqNew",    col: 0,  label: "ลำดับ(New)",  editable: false, zone: "new" },
+  { field: "dcNew",     col: 3,  label: "DC",           editable: false, zone: "new" },
+  { field: "byCodeNew", col: 4,  label: "BY_CODE(New)", editable: true,  zone: "new" },
+  { field: "statusNew", col: 5,  label: "Status(New)",  editable: true,  zone: "new" },
+  { field: "remark",    col: 6,  label: "Remark",       editable: true,  zone: "new" },
+  { field: "seqDel",   col: 8,  label: "ลำดับ(Del)",  editable: false, zone: "del" },
+  { field: "dcDel",    col: 11, label: "DC(Del)",      editable: false, zone: "del" },
+  { field: "byCodeDel",col: 12, label: "BY_CODE(Del)", editable: true,  zone: "del" },
+  { field: "statusDel",col: 13, label: "Status(Del)",  editable: true,  zone: "del" },
+  { field: "extraInfo",col: 14, label: "Extra_Info",   editable: true,  zone: "del" },
 ];
 
 const NSCM_COLDEFS: TabColDef[] = [
@@ -1073,6 +1073,10 @@ export default function Home() {
                                   colDefs={fillTabs[previewTab].colDefs}
                                   rows={fillTabs[previewTab].rows}
                                   onChange={(updated) => handleFillTabChange(previewTab, updated)}
+                                  isKeyRow={previewTab === 0
+                                    ? (row) => !!(row.fields.seqNew || row.fields.seqDel)
+                                    : undefined
+                                  }
                                   getOptions={(field, draft) => {
                                     const tab = fillTabs[previewTab];
                                     if (!tab) return [];

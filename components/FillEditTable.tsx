@@ -12,6 +12,8 @@ export interface TabColDef {
   editable: boolean;
   /** Field name this column's options should be filtered by (cascade parent) */
   cascade?: string;
+  /** Column group for visual zone coloring, e.g. "new" | "del" */
+  zone?: string;
 }
 
 export interface EditableFillRow {
@@ -50,6 +52,18 @@ export function convertFromEditableRows(
   });
 }
 
+// ─── Zone style maps ─────────────────────────────────────────────────────────
+
+const ZONE_TH: Record<string, string> = {
+  new: "bg-emerald-50 text-emerald-700",
+  del: "bg-rose-50 text-rose-700",
+};
+// Cell tints — only applied on non-key rows (key rows let the tr bg show through)
+const ZONE_TD: Record<string, string> = {
+  new: "bg-emerald-50/40",
+  del: "bg-rose-50/40",
+};
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 interface Props {
@@ -58,9 +72,11 @@ interface Props {
   onChange: (updated: EditableFillRow[]) => void;
   /** Returns dropdown options for a field given the current draft values (for cascading). */
   getOptions: (field: string, draft: Record<string, string>) => string[];
+  /** When true, row gets a distinct highlight (e.g. rows with a sequence number). */
+  isKeyRow?: (row: EditableFillRow) => boolean;
 }
 
-export default function FillEditTable({ colDefs, rows, onChange, getOptions }: Props) {
+export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyRow }: Props) {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
 
@@ -82,25 +98,40 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions }: P
         <thead>
           <tr>
             <th className="w-14 px-2 py-1.5 bg-slate-50 border-b border-slate-200" />
-            {colDefs.map(({ field, label, editable }) => (
-              <th
-                key={field}
-                className={`px-2 py-1.5 text-left font-semibold border-b border-slate-200 whitespace-nowrap ${
-                  editable ? "text-slate-700 bg-slate-50" : "text-slate-400 bg-slate-50"
-                }`}
-              >
-                {label}
-              </th>
-            ))}
+            {colDefs.map(({ field, label, editable, zone }, i) => {
+              const isZoneStart = zone !== undefined && zone !== colDefs[i - 1]?.zone;
+              return (
+                <th
+                  key={field}
+                  className={[
+                    "px-2 py-1.5 text-left font-semibold border-b border-slate-200 whitespace-nowrap",
+                    zone ? ZONE_TH[zone] : (editable ? "text-slate-700 bg-slate-50" : "text-slate-400 bg-slate-50"),
+                    isZoneStart ? "border-l-2 border-l-slate-300" : "",
+                  ].filter(Boolean).join(" ")}
+                >
+                  {label}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
           {rows.map((row, i) => {
             const isEditing = editIdx === i;
+            const isKey = isKeyRow ? isKeyRow(row) : false;
+            // Key rows: tr bg shows through td (no td bg applied below)
+            // Non-key rows: alternating white/slate, td gets subtle zone tint
+            const trClass = isKey
+              ? "bg-amber-50/70"
+              : i % 2 === 0 ? "bg-white" : "bg-slate-50/40";
+
             return (
-              <tr key={row.rowIndex} className={i % 2 === 0 ? "bg-white" : "bg-slate-50/40"}>
-                {/* Action cell */}
-                <td className="px-1 py-1 border-b border-slate-100 text-center align-middle">
+              <tr key={row.rowIndex} className={trClass}>
+                {/* Action cell — left accent border on key rows */}
+                <td className={[
+                  "px-1 py-1 border-b border-slate-100 text-center align-middle",
+                  isKey ? "border-l-[3px] border-l-[#E91E8C]" : "",
+                ].filter(Boolean).join(" ")}>
                   {isEditing ? (
                     <div className="flex gap-0.5 justify-center">
                       <button
@@ -129,11 +160,20 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions }: P
                   )}
                 </td>
                 {/* Data cells */}
-                {colDefs.map(({ field, editable }) => {
+                {colDefs.map(({ field, editable, zone }, ci) => {
+                  const isZoneStart = zone !== undefined && zone !== colDefs[ci - 1]?.zone;
                   const val = isEditing ? (draft[field] ?? "") : (row.fields[field] ?? "");
                   const dlId = `dl-fill-${i}-${field}`;
                   return (
-                    <td key={field} className="px-2 py-1 border-b border-slate-100 align-middle">
+                    <td
+                      key={field}
+                      className={[
+                        "px-2 py-1 border-b border-slate-100 align-middle",
+                        // Zone tint only on non-key rows (key rows use tr bg instead)
+                        !isKey && zone ? ZONE_TD[zone] : "",
+                        isZoneStart ? "border-l-2 border-l-slate-200" : "",
+                      ].filter(Boolean).join(" ")}
+                    >
                       {isEditing && editable ? (
                         <>
                           <input
@@ -152,7 +192,11 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions }: P
                         </>
                       ) : (
                         <span
-                          className={`whitespace-nowrap ${val ? "text-slate-700" : "text-slate-300"}`}
+                          className={[
+                            "whitespace-nowrap",
+                            val ? "text-slate-700" : "text-slate-300",
+                            isKey && val ? "font-medium" : "",
+                          ].filter(Boolean).join(" ")}
                         >
                           {val || "—"}
                         </span>
