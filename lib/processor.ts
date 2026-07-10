@@ -889,7 +889,12 @@ export async function buildXlsbExtraInfoMap(files: File[]): Promise<Map<string, 
       continue;
     }
 
-    for (const sheetName of ["Base", "Input"]) {
+    // Try known sheet names first; fall back to scanning every sheet so any XLSB format works.
+    const sheetOrder = [
+      "Base", "Input",
+      ...wb.SheetNames.filter(n => n !== "Base" && n !== "Input"),
+    ];
+    for (const sheetName of sheetOrder) {
       const ws = wb.Sheets[sheetName];
       if (!ws || !ws["!ref"]) continue;
 

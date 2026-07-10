@@ -155,7 +155,7 @@ const DSCM_COLDEFS: TabColDef[] = [
   { field: "name",      col: 4, label: "ชื่อสินค้า",   editable: false },
   { field: "division",  col: 5, label: "Division",      editable: true },
   { field: "category",  col: 6, label: "Category",      editable: true, cascade: "division" },
-  { field: "implement", col: 7, label: "Implement",     editable: true },
+  { field: "implement", col: 7, label: "POG ROUND",     editable: true },
   { field: "status",    col: 8, label: "Status",        editable: true },
   { field: "extraInfo", col: 9, label: "Extra_Info",    editable: true },
 ];
@@ -621,9 +621,11 @@ export default function Home() {
               colPiece:  pdata.colPiece  ?? "",
               colO:      pdata.colO      ?? "",
               colNet:    (() => {
-                const piece = parseFloat(pdata.colPiece ?? "");
-                const pct   = parseFloat(pdata.colO    ?? "");
-                return (!isNaN(piece) && !isNaN(pct)) ? String(Math.round(piece * pct / 100)) : "";
+                const pct   = parseFloat(pdata.colO    ?? "") || 0;
+                const piece = parseFloat(pdata.colPiece ?? "") || 0;
+                return (pct > 0 && piece > 0)
+                  ? (Math.round((pct / 100) * piece * 100) / 100).toFixed(2)
+                  : "";
               })(),
             },
           };
@@ -631,21 +633,21 @@ export default function Home() {
         setFillTabs([
           {
             sheetName: ndimActual,
-            displayName: `NEW_DELETE_IM (${ndimActual})`,
+            displayName: "NEW_DELETE_IM",
             colDefs: NDIM_COLDEFS,
             rows: convertToEditableRows(csNdimRows, NDIM_COLDEFS),
             originalFillRows: csNdimRows,
           },
           {
             sheetName: newScmActual,
-            displayName: `NEW SCM (${newScmActual})`,
+            displayName: "NEW SCM",
             colDefs: NSCM_COLDEFS,
             rows: nscmEditableRows,
             originalFillRows: csNewScmRows,
           },
           {
             sheetName: dscmActual,
-            displayName: `DEL SCM (${dscmActual})`,
+            displayName: "DEL SCM",
             colDefs: DSCM_COLDEFS,
             rows: convertToEditableRows(csDscmRows, DSCM_COLDEFS),
             originalFillRows: csDscmRows,
@@ -676,7 +678,18 @@ export default function Home() {
       if (!prev) return prev;
       const next = [...prev];
       const tab = next[tabIdx];
-      next[tabIdx] = { ...tab, rows: updatedRows };
+      // For NSCM: recompute colNet whenever colPiece or colO change
+      const rowsToStore = tabIdx === 1
+        ? updatedRows.map(r => {
+            const pct   = parseFloat(r.fields.colO    ?? "") || 0;
+            const piece = parseFloat(r.fields.colPiece ?? "") || 0;
+            const colNet = (pct > 0 && piece > 0)
+              ? (Math.round((pct / 100) * piece * 100) / 100).toFixed(2)
+              : "";
+            return colNet === r.fields.colNet ? r : { ...r, fields: { ...r.fields, colNet } };
+          })
+        : updatedRows;
+      next[tabIdx] = { ...tab, rows: rowsToStore };
       // Sync edits back to checkSpacePlanRef so the worker uses the updated data
       if (checkSpacePlanRef.current) {
         const updatedFillRows = convertFromEditableRows(updatedRows, tab.originalFillRows, tab.colDefs);
@@ -1182,7 +1195,7 @@ export default function Home() {
                             </div>
 
                             {/* ── Table content ─────────────────────────────── */}
-                            <div className="border border-slate-200 rounded-xl overflow-hidden mb-6">
+                            <div className="border border-slate-200 rounded-xl mb-6">
                               <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
                                 <span className="text-xs font-semibold text-slate-700">
                                   {fillTabs[previewTab]?.displayName}
