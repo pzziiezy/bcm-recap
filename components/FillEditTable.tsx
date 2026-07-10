@@ -299,7 +299,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                   {/* Action cell */}
                   <td className={[
                     "px-1 py-1 border-b border-slate-100 text-center align-middle",
-                    anyZoneKey ? "border-l-[3px] border-l-[#E91E8C]" : "",
+                    isEditing ? "border-l-[3px] border-l-[#E91E8C] bg-pink-50" : (anyZoneKey ? "border-l-[3px] border-l-[#E91E8C]" : ""),
                   ].filter(Boolean).join(" ")}>
                     {isEditing ? (
                       <div className="flex gap-0.5 justify-center">
@@ -340,7 +340,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                         key={field}
                         className={[
                           "px-2 py-1 border-b border-slate-100 align-middle",
-                          zoneIsKey ? "bg-amber-50" : (zone ? ZONE_TD[zone] : ""),
+                          isEditing ? "bg-pink-50" : (zoneIsKey ? "bg-amber-50" : (zone ? ZONE_TD[zone] : "")),
                           isZoneStart ? "border-l-2 border-l-slate-200" : "",
                         ].filter(Boolean).join(" ")}
                       >
