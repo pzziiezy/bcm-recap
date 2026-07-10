@@ -143,11 +143,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
         <button
           onClick={toggleReplace}
           title="Find & Replace"
-          className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded transition-colors ${
-            showReplace
-              ? "bg-[#E91E8C] text-white"
-              : "text-slate-500 hover:bg-slate-200 hover:text-slate-700"
-          }`}
+          className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded transition-colors bg-[#E91E8C] text-white hover:bg-[#d01879]"
         >
           <ArrowLeftRight className="w-3 h-3" />
           Replace
