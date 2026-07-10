@@ -1197,8 +1197,11 @@ export default function Home() {
                                     colDefs={fillTabs[previewTab].colDefs}
                                     rows={fillTabs[previewTab].rows}
                                     onChange={(updated) => handleFillTabChange(previewTab, updated)}
-                                    isKeyRow={previewTab === 0
-                                      ? (row) => !!(row.fields.seqNew || row.fields.seqDel)
+                                    isKeyZone={previewTab === 0
+                                      ? (row, zone) =>
+                                          zone === "new" ? !!row.fields.seqNew
+                                          : zone === "del" ? !!row.fields.seqDel
+                                          : false
                                       : undefined
                                     }
                                     getOptions={(field, draft) => {

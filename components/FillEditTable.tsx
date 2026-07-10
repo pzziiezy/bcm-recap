@@ -72,11 +72,14 @@ interface Props {
   onChange: (updated: EditableFillRow[]) => void;
   /** Returns dropdown options for a field given the current draft values (for cascading). */
   getOptions: (field: string, draft: Record<string, string>) => string[];
-  /** When true, row gets a distinct highlight (e.g. rows with a sequence number). */
-  isKeyRow?: (row: EditableFillRow) => boolean;
+  /**
+   * Per-zone key highlight: return true if cells in `zone` should be highlighted for this row.
+   * Enables independent highlighting per zone (e.g. seqNew drives "new" zone, seqDel drives "del" zone).
+   */
+  isKeyZone?: (row: EditableFillRow, zone: string) => boolean;
 }
 
-export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyRow }: Props) {
+export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyZone }: Props) {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
 
@@ -118,19 +121,17 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
         <tbody>
           {rows.map((row, i) => {
             const isEditing = editIdx === i;
-            const isKey = isKeyRow ? isKeyRow(row) : false;
-            // Key rows: tr bg shows through td (no td bg applied below)
-            // Non-key rows: alternating white/slate, td gets subtle zone tint
-            const trClass = isKey
-              ? "bg-amber-50/70"
-              : i % 2 === 0 ? "bg-white" : "bg-slate-50/40";
+            // Any zone in this row is a key → show left accent border on action cell
+            const anyZoneKey = isKeyZone
+              ? colDefs.some(cd => cd.zone && isKeyZone(row, cd.zone))
+              : false;
 
             return (
-              <tr key={row.rowIndex} className={trClass}>
-                {/* Action cell — left accent border on key rows */}
+              <tr key={row.rowIndex} className={i % 2 === 0 ? "bg-white" : "bg-slate-50/40"}>
+                {/* Action cell — left accent border if any zone is key */}
                 <td className={[
                   "px-1 py-1 border-b border-slate-100 text-center align-middle",
-                  isKey ? "border-l-[3px] border-l-[#E91E8C]" : "",
+                  anyZoneKey ? "border-l-[3px] border-l-[#E91E8C]" : "",
                 ].filter(Boolean).join(" ")}>
                   {isEditing ? (
                     <div className="flex gap-0.5 justify-center">
@@ -162,6 +163,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                 {/* Data cells */}
                 {colDefs.map(({ field, editable, zone }, ci) => {
                   const isZoneStart = zone !== undefined && zone !== colDefs[ci - 1]?.zone;
+                  const zoneIsKey = isKeyZone && zone ? isKeyZone(row, zone) : false;
                   const val = isEditing ? (draft[field] ?? "") : (row.fields[field] ?? "");
                   const dlId = `dl-fill-${i}-${field}`;
                   return (
@@ -169,8 +171,8 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                       key={field}
                       className={[
                         "px-2 py-1 border-b border-slate-100 align-middle",
-                        // Zone tint only on non-key rows (key rows use tr bg instead)
-                        !isKey && zone ? ZONE_TD[zone] : "",
+                        // Per-zone key highlight takes priority over normal zone tint
+                        zoneIsKey ? "bg-amber-50" : (zone ? ZONE_TD[zone] : ""),
                         isZoneStart ? "border-l-2 border-l-slate-200" : "",
                       ].filter(Boolean).join(" ")}
                     >
@@ -195,7 +197,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                           className={[
                             "whitespace-nowrap",
                             val ? "text-slate-700" : "text-slate-300",
-                            isKey && val ? "font-medium" : "",
+                            zoneIsKey && val ? "font-medium" : "",
                           ].filter(Boolean).join(" ")}
                         >
                           {val || "—"}
