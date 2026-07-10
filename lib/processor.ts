@@ -967,7 +967,7 @@ export function fillNewDeleteIM(
   const delItems = items.filter((i) => i.status.toUpperCase().startsWith("DELETE"));
 
   // Expand each group into write rows (one row per unique BY_CODE)
-  type ExpandedRow = { seqNo: string; byCode: string; status: string; remark: string; extraInfo: string };
+  type ExpandedRow = { seqNo: string; barcode: string; name: string; byCode: string; status: string; remark: string; extraInfo: string };
   const expand = (group: CheckSpaceItem[], existingCount: number, isNew: boolean): ExpandedRow[] => {
     const rows: ExpandedRow[] = [];
     let seq = existingCount + 1;
@@ -978,10 +978,12 @@ export function fillNewDeleteIM(
       codes.forEach((code, i) => {
         rows.push({
           seqNo:     i === 0 ? String(seq) : "",
+          barcode:   i === 0 ? item.barcode : "",
+          name:      i === 0 ? item.name    : "",
           byCode:    code,
-          status:    i === 0 ? item.status : "",
-          remark:    i === 0 ? item.remark : "",
-          extraInfo: i === 0 ? extraInfo : "",
+          status:    i === 0 ? item.status  : "",
+          remark:    i === 0 ? item.remark  : "",
+          extraInfo: i === 0 ? extraInfo    : "",
         });
       });
       seq++;
@@ -1004,18 +1006,22 @@ export function fillNewDeleteIM(
     const push = (col: number, v: string) => { if (v) cells.push({ col, value: v }); };
 
     if (nr) {
-      writeCell(ws, r, 0, nr.seqNo);   push(0,  nr.seqNo);
-      writeCell(ws, r, 3, "MBC1");     push(3,  "MBC1");
-      writeCell(ws, r, 4, nr.byCode);  push(4,  nr.byCode);
-      writeCell(ws, r, 5, nr.status);  push(5,  nr.status);
-      writeCell(ws, r, 6, nr.remark);  push(6,  nr.remark);
+      writeCell(ws, r, 0,  nr.seqNo);   push(0,  nr.seqNo);
+      writeCell(ws, r, 1,  nr.barcode); push(1,  nr.barcode);
+      writeCell(ws, r, 2,  nr.name);    push(2,  nr.name);
+      writeCell(ws, r, 3,  "MBC1");     push(3,  "MBC1");
+      writeCell(ws, r, 4,  nr.byCode);  push(4,  nr.byCode);
+      writeCell(ws, r, 5,  nr.status);  push(5,  nr.status);
+      writeCell(ws, r, 6,  nr.remark);  push(6,  nr.remark);
     }
     if (dr) {
-      writeCell(ws, r, 8,  dr.seqNo);      push(8,  dr.seqNo);
-      writeCell(ws, r, 11, "MBC1");         push(11, "MBC1");
-      writeCell(ws, r, 12, dr.byCode);     push(12, dr.byCode);
-      writeCell(ws, r, 13, dr.status);     push(13, dr.status);
-      writeCell(ws, r, 14, dr.extraInfo);  push(14, dr.extraInfo);
+      writeCell(ws, r, 8,  dr.seqNo);     push(8,  dr.seqNo);
+      writeCell(ws, r, 9,  dr.barcode);   push(9,  dr.barcode);
+      writeCell(ws, r, 10, dr.name);      push(10, dr.name);
+      writeCell(ws, r, 11, "MBC1");       push(11, "MBC1");
+      writeCell(ws, r, 12, dr.byCode);    push(12, dr.byCode);
+      writeCell(ws, r, 13, dr.status);    push(13, dr.status);
+      writeCell(ws, r, 14, dr.extraInfo); push(14, dr.extraInfo);
     }
     if (cells.length > 0) fillRows.push({ rowIndex: r, cells });
   }

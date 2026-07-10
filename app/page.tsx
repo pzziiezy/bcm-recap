@@ -119,16 +119,20 @@ const DEL_STATUS_OPTIONS = [
 ];
 
 const NDIM_COLDEFS: TabColDef[] = [
-  { field: "seqNew",    col: 0,  label: "ลำดับ(New)",  editable: false, zone: "new" },
-  { field: "dcNew",     col: 3,  label: "DC",           editable: false, zone: "new" },
-  { field: "byCodeNew", col: 4,  label: "BY_CODE(New)", editable: true,  zone: "new" },
-  { field: "statusNew", col: 5,  label: "Status(New)",  editable: true,  zone: "new" },
-  { field: "remark",    col: 6,  label: "Remark",       editable: true,  zone: "new" },
-  { field: "seqDel",   col: 8,  label: "ลำดับ(Del)",  editable: false, zone: "del" },
-  { field: "dcDel",    col: 11, label: "DC(Del)",      editable: false, zone: "del" },
-  { field: "byCodeDel",col: 12, label: "BY_CODE(Del)", editable: true,  zone: "del" },
-  { field: "statusDel",col: 13, label: "Status(Del)",  editable: true,  zone: "del" },
-  { field: "extraInfo",col: 14, label: "Extra_Info",   editable: true,  zone: "del" },
+  { field: "seqNew",     col: 0,  label: "ลำดับ(New)",   editable: false, zone: "new" },
+  { field: "barcodeNew", col: 1,  label: "Barcode(New)",  editable: false, zone: "new" },
+  { field: "nameNew",    col: 2,  label: "Name(New)",     editable: false, zone: "new" },
+  { field: "dcNew",      col: 3,  label: "DC",            editable: false, zone: "new" },
+  { field: "byCodeNew",  col: 4,  label: "BY_CODE(New)",  editable: true,  zone: "new" },
+  { field: "statusNew",  col: 5,  label: "Status(New)",   editable: true,  zone: "new" },
+  { field: "remark",     col: 6,  label: "Remark",        editable: true,  zone: "new" },
+  { field: "seqDel",     col: 8,  label: "ลำดับ(Del)",   editable: false, zone: "del" },
+  { field: "barcodeDel", col: 9,  label: "Barcode(Del)",  editable: false, zone: "del" },
+  { field: "nameDel",    col: 10, label: "Name(Del)",     editable: false, zone: "del" },
+  { field: "dcDel",      col: 11, label: "DC(Del)",       editable: false, zone: "del" },
+  { field: "byCodeDel",  col: 12, label: "BY_CODE(Del)",  editable: true,  zone: "del" },
+  { field: "statusDel",  col: 13, label: "Status(Del)",   editable: true,  zone: "del" },
+  { field: "extraInfo",  col: 14, label: "Extra_Info",    editable: true,  zone: "del" },
 ];
 
 const NSCM_COLDEFS: TabColDef[] = [
