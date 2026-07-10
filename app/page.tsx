@@ -142,10 +142,11 @@ const NSCM_COLDEFS: TabColDef[] = [
   { field: "planogram", col: 9,  label: "J — PLANOGRAM",     editable: true },
   { field: "status",    col: 10, label: "Status",            editable: true },
   { field: "remark",    col: 11, label: "Remark",            editable: true },
-  { field: "implement", col: 12, label: "Implement",         editable: true },
-  { field: "colN",      col: 13, label: "N — MBC Forecast",  editable: true },
-  { field: "colPiece",  col: 14, label: "O — Piece 100%",    editable: true },
-  { field: "colO",      col: 15, label: "P — %",             editable: true },
+  { field: "implement", col: 12, label: "POG ROUND", editable: true },
+  { field: "colN",      col: 13, label: "MBC FCST",  editable: true },
+  { field: "colPiece",  col: 14, label: "Piece",     editable: true },
+  { field: "colO",      col: 15, label: "%",          editable: true },
+  { field: "colNet",    col: 16, label: "Net",        editable: false },
 ];
 
 const DSCM_COLDEFS: TabColDef[] = [
@@ -619,6 +620,11 @@ export default function Home() {
               colN:      pdata.colN      ?? "",
               colPiece:  pdata.colPiece  ?? "",
               colO:      pdata.colO      ?? "",
+              colNet:    (() => {
+                const piece = parseFloat(pdata.colPiece ?? "");
+                const pct   = parseFloat(pdata.colO    ?? "");
+                return (!isNaN(piece) && !isNaN(pct)) ? String(Math.round(piece * pct / 100)) : "";
+              })(),
             },
           };
         });
@@ -1203,6 +1209,15 @@ export default function Home() {
                                           : zone === "del" ? !!row.fields.seqDel
                                           : false
                                       : undefined
+                                    }
+                                    isIncompleteRow={
+                                      previewTab === 0
+                                        ? (row) =>
+                                            (!!row.fields.seqNew && !row.fields.statusNew) ||
+                                            (!!row.fields.seqDel && !row.fields.statusDel)
+                                        : previewTab === 1
+                                        ? (row) => !row.fields.division
+                                        : (row) => !row.fields.status
                                     }
                                     getOptions={(field, draft) => {
                                       const tab = fillTabs[previewTab];

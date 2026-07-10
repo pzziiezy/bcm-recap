@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Pencil, Check, X, ArrowLeftRight } from "lucide-react";
+import { Pencil, Check, X, ArrowLeftRight, Filter } from "lucide-react";
 import type { FillRow } from "@/lib/download";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -76,14 +76,19 @@ interface Props {
    * Enables independent highlighting per zone (e.g. seqNew drives "new" zone, seqDel drives "del" zone).
    */
   isKeyZone?: (row: EditableFillRow, zone: string) => boolean;
+  /** When provided, enables the "แสดงเฉพาะแถวที่ยังไม่สมบูรณ์" filter toggle. */
+  isIncompleteRow?: (row: EditableFillRow) => boolean;
 }
 
 type MatchMode = "exact" | "contains";
 
-export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyZone }: Props) {
-  // ── row edit state ──
-  const [editIdx, setEditIdx] = useState<number | null>(null);
+export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyZone, isIncompleteRow }: Props) {
+  // ── row edit state (tracked by rowIndex, not array index, so filter doesn't break it) ──
+  const [editRowIndex, setEditRowIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
+
+  // ── filter state ──
+  const [showOnlyIncomplete, setShowOnlyIncomplete] = useState(false);
 
   // ── find & replace state ──
   const [showReplace, setShowReplace]   = useState(false);
@@ -93,17 +98,26 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
   const [matchMode, setMatchMode]       = useState<MatchMode>("exact");
   const [replaceMsg, setReplaceMsg]     = useState<string | null>(null);
 
-  const startEdit = (i: number) => {
-    setDraft({ ...rows[i].fields });
-    setEditIdx(i);
+  const displayRows = (showOnlyIncomplete && isIncompleteRow)
+    ? rows.filter(isIncompleteRow)
+    : rows;
+
+  const incompleteCount = isIncompleteRow ? rows.filter(isIncompleteRow).length : 0;
+
+  const startEdit = (rowIndex: number) => {
+    const row = rows.find(r => r.rowIndex === rowIndex);
+    if (!row) return;
+    setDraft({ ...row.fields });
+    setEditRowIndex(rowIndex);
   };
 
-  const saveEdit = (i: number) => {
-    onChange(rows.map((r, idx) => (idx === i ? { ...r, fields: { ...draft } } : r)));
-    setEditIdx(null);
+  const saveEdit = () => {
+    if (editRowIndex === null) return;
+    onChange(rows.map(r => r.rowIndex === editRowIndex ? { ...r, fields: { ...draft } } : r));
+    setEditRowIndex(null);
   };
 
-  const cancelEdit = () => setEditIdx(null);
+  const cancelEdit = () => setEditRowIndex(null);
 
   // ── editable columns (for replace column selector) ──
   const editableCols = colDefs.filter(c => c.editable);
@@ -135,19 +149,40 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
   };
 
   return (
-    <div className="rounded border border-slate-200 overflow-hidden">
+    <div className="rounded border border-slate-200">
 
-      {/* ── Find & Replace toolbar toggle ──────────────────────────────────── */}
+      {/* ── Toolbar ────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-2 py-1.5 bg-slate-50 border-b border-slate-200">
-        <span className="text-[10px] text-slate-400 select-none">{rows.length} แถว</span>
-        <button
-          onClick={toggleReplace}
-          title="Find & Replace"
-          className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded transition-colors bg-[#E91E8C] text-white hover:bg-[#d01879]"
-        >
-          <ArrowLeftRight className="w-3 h-3" />
-          Replace
-        </button>
+        <span className="text-[10px] text-slate-400 select-none">
+          {showOnlyIncomplete
+            ? `${displayRows.length} / ${rows.length} แถว (ยังไม่สมบูรณ์)`
+            : `${rows.length} แถว`}
+        </span>
+        <div className="flex items-center gap-1.5">
+          {isIncompleteRow && (
+            <button
+              onClick={() => setShowOnlyIncomplete(v => !v)}
+              title="แสดงเฉพาะแถวที่ยังไม่สมบูรณ์"
+              className={[
+                "flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded transition-colors",
+                showOnlyIncomplete
+                  ? "bg-amber-500 text-white hover:bg-amber-600"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+              ].join(" ")}
+            >
+              <Filter className="w-3 h-3" />
+              {showOnlyIncomplete ? `ทั้งหมด (${rows.length})` : `ยังไม่สมบูรณ์ (${incompleteCount})`}
+            </button>
+          )}
+          <button
+            onClick={toggleReplace}
+            title="Find & Replace"
+            className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded transition-colors bg-[#E91E8C] text-white hover:bg-[#d01879]"
+          >
+            <ArrowLeftRight className="w-3 h-3" />
+            Replace
+          </button>
+        </div>
       </div>
 
       {/* ── Find & Replace panel ────────────────────────────────────────────── */}
@@ -265,14 +300,14 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
         <table className="text-xs w-full border-collapse">
           <thead>
             <tr>
-              <th className="w-14 px-2 py-1.5 bg-slate-50 border-b border-slate-200" />
+              <th className="w-14 px-2 py-1.5 bg-slate-50 border-b border-slate-200 sticky top-0 z-10" />
               {colDefs.map(({ field, label, editable, zone }, i) => {
                 const isZoneStart = zone !== undefined && zone !== colDefs[i - 1]?.zone;
                 return (
                   <th
                     key={field}
                     className={[
-                      "px-2 py-1.5 text-left font-semibold border-b border-slate-200 whitespace-nowrap",
+                      "px-2 py-1.5 text-left font-semibold border-b border-slate-200 whitespace-nowrap sticky top-0 z-10",
                       zone ? ZONE_TH[zone] : (editable ? "text-slate-700 bg-slate-50" : "text-slate-400 bg-slate-50"),
                       isZoneStart ? "border-l-2 border-l-slate-300" : "",
                     ].filter(Boolean).join(" ")}
@@ -284,8 +319,8 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => {
-              const isEditing = editIdx === i;
+            {displayRows.map((row, i) => {
+              const isEditing = row.rowIndex === editRowIndex;
               const anyZoneKey = isKeyZone
                 ? colDefs.some(cd => cd.zone && isKeyZone(row, cd.zone))
                 : false;
@@ -300,7 +335,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                     {isEditing ? (
                       <div className="flex gap-0.5 justify-center">
                         <button
-                          onClick={() => saveEdit(i)}
+                          onClick={saveEdit}
                           title="บันทึก"
                           className="p-0.5 rounded text-green-600 hover:bg-green-50"
                         >
@@ -316,7 +351,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                       </div>
                     ) : (
                       <button
-                        onClick={() => startEdit(i)}
+                        onClick={() => startEdit(row.rowIndex)}
                         title="แก้ไขแถวนี้"
                         className="p-0.5 rounded text-slate-300 hover:text-[#E91E8C] hover:bg-pink-50 transition-colors"
                       >
@@ -330,7 +365,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                     const isZoneStart = zone !== undefined && zone !== colDefs[ci - 1]?.zone;
                     const zoneIsKey = isKeyZone && zone ? isKeyZone(row, zone) : false;
                     const val = isEditing ? (draft[field] ?? "") : (row.fields[field] ?? "");
-                    const dlId = `dl-fill-${i}-${field}`;
+                    const dlId = `dl-fill-${row.rowIndex}-${field}`;
                     return (
                       <td
                         key={field}
