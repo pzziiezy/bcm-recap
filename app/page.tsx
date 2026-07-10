@@ -918,16 +918,11 @@ export default function Home() {
                 {/* Step 1 — Upload Check Space */}
                 {step === 1 && (
                   <Card title="Step 1 - อัปโหลดไฟล์ Check Space">
-                    <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-                      <strong>ไฟล์นี้ใช้สำหรับ:</strong> เติมข้อมูลชีต NEW_DELETE_IM, NEW SCM (แถวใหม่ + store flags), DEL SCM
-                      โดยอ่าน Barcode/POG จาก Check Space.xlsx (Sheet2)
-                    </div>
                     <DropZone
                       label="Check Space.xlsx"
                       accept=".xlsx,.xls"
                       files={checkSpaceFile ? [checkSpaceFile] : []}
                       onFiles={(files) => setCheckSpaceFile(files[0] ?? null)}
-                      hint="Sheet2 — header row 5, col A=Barcode, B=Name, C=Status, D=Remark, E+=POG matrix"
                     />
                     <div className="flex gap-3">
                       <NavBtn onClick={() => setStep(2)} disabled={!checkSpaceFile}>
@@ -940,17 +935,11 @@ export default function Home() {
                 {/* Step 2 — Upload FILE_INDEX */}
                 {step === 2 && (
                   <Card title="Step 2 - อัปโหลดไฟล์ FILE_INDEX_1">
-                    <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-                      <strong>ไฟล์นี้ใช้สำหรับ:</strong> หา BY_CODE (Attribute Code) และ store flags จาก sheet INDX_BCM
-                      <br />
-                      <span className="text-blue-600 text-xs">ต้องอัปโหลดคู่กับ Check Space เพื่อให้ระบบเติม store flags ได้ถูกต้อง</span>
-                    </div>
                     <DropZone
                       label="FILE_INDEX_1.xlsx"
                       accept=".xlsx,.xls"
                       files={fileIndexFile ? [fileIndexFile] : []}
                       onFiles={(files) => setFileIndexFile(files[0] ?? null)}
-                      hint="Sheet INDX_BCM — row 13=store codes, row 14=headers (col C=POG NAME, col I=BY_CODE), row 15+=data"
                     />
                     <div className="flex gap-3">
                       <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
@@ -969,7 +958,6 @@ export default function Home() {
                       accept=".xlsx,.xls"
                       files={recapFiles}
                       onFiles={setRecapFiles}
-                      hint="ไฟล์ที่ต้องการเติมข้อมูลในคอลัมน์ F-J ของ Sheet 'NEW SCM'"
                     />
                     <div className="flex gap-3">
                       <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
