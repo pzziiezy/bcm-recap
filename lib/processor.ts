@@ -906,13 +906,17 @@ export async function buildXlsbExtraInfoMap(files: File[]): Promise<Map<string, 
       for (let r = 0; r <= Math.min(range.e.r, 70); r++) {
         for (let c = 0; c <= Math.min(range.e.c, 250); c++) {
           const v = cellVal(ws, r, c);
-          if (v.includes("Barcode / PLU")) barcodeCol = c;
-          if (/extra\s*info/i.test(v)) extraInfoCol = c;
+          const lv = v.toLowerCase();
+          // Match "Barcode / PLU", "Barcode", "PLU", "BARCODE" etc.
+          if (lv.includes("barcode") || lv === "plu") barcodeCol = c;
+          // Match "Extra Info", "Extra_Info", "EXTRA_INFO", "ExtraInfo", etc.
+          if (/extra[\s_\-]*info/i.test(v)) extraInfoCol = c;
         }
         if (barcodeCol >= 0) { headerRow = r; break; }
       }
       if (barcodeCol < 0 || headerRow < 0) continue;
-      if (extraInfoCol < 0) extraInfoCol = 21; // fallback: col V
+      // Col V (index 21) is the documented fallback when no header is found
+      if (extraInfoCol < 0) extraInfoCol = 21;
 
       for (let r = headerRow + 1; r <= range.e.r; r++) {
         const bc = normalizeBarcode(cellVal(ws, r, barcodeCol));

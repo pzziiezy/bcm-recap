@@ -296,7 +296,8 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
       )}
 
       {/* ── Table ────────────────────────────────────────────────────────────── */}
-      <div className="overflow-x-auto">
+      {/* overflow-auto + max-h lets position:sticky work on thead th (overflow-x-only would block it) */}
+      <div className="overflow-auto max-h-[68vh]">
         <table className="text-xs w-full border-collapse">
           <thead>
             <tr>
