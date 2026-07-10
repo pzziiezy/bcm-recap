@@ -272,7 +272,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                   </label>
                 </div>
 
-                <div className="ml-auto flex items-center gap-3">
+                <div className="flex items-center gap-3">
                   {replaceMsg ? (
                     <span className="text-[11px] text-green-600 font-semibold">{replaceMsg}</span>
                   ) : (
