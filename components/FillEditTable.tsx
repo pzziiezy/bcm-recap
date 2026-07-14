@@ -78,11 +78,15 @@ interface Props {
   isKeyZone?: (row: EditableFillRow, zone: string) => boolean;
   /** When provided, enables the "แสดงเฉพาะแถวที่ยังไม่สมบูรณ์" filter toggle. */
   isIncompleteRow?: (row: EditableFillRow) => boolean;
+  /** Called after user saves a pencil-edit; receives only the fields that actually changed. */
+  onEditSaved?: (rowIndex: number, changes: Record<string, { from: string; to: string }>) => void;
+  /** Called after user executes a Replace operation. */
+  onReplaceApplied?: (col: string, from: string, to: string, count: number) => void;
 }
 
 type MatchMode = "exact" | "contains";
 
-export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyZone, isIncompleteRow }: Props) {
+export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyZone, isIncompleteRow, onEditSaved, onReplaceApplied }: Props) {
   // ── row edit state (tracked by rowIndex, not array index, so filter doesn't break it) ──
   const [editRowIndex, setEditRowIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -113,6 +117,17 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
 
   const saveEdit = () => {
     if (editRowIndex === null) return;
+    if (onEditSaved) {
+      const original = rows.find(r => r.rowIndex === editRowIndex);
+      if (original) {
+        const changes: Record<string, { from: string; to: string }> = {};
+        for (const [k, v] of Object.entries(draft)) {
+          const from = original.fields[k] ?? "";
+          if (from !== v) changes[k] = { from, to: v };
+        }
+        if (Object.keys(changes).length > 0) onEditSaved(editRowIndex, changes);
+      }
+    }
     onChange(rows.map(r => r.rowIndex === editRowIndex ? { ...r, fields: { ...draft } } : r));
     setEditRowIndex(null);
   };
@@ -139,6 +154,7 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
       return { ...r, fields: { ...r.fields, [replaceCol]: replaceVal } };
     });
     onChange(updated);
+    onReplaceApplied?.(replaceCol, findVal, replaceVal, matchCount);
     setReplaceMsg(`แทนที่ ${matchCount} แถวเรียบร้อย`);
     setTimeout(() => setReplaceMsg(null), 3000);
   };

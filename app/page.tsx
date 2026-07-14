@@ -226,6 +226,7 @@ export default function Home() {
   const recapBufRef = useRef<ArrayBuffer | null>(null);
   const checkSpacePlanRef = useRef<CheckSpaceFillPlan | null>(null);
   const sessionIdRef = useRef<string>("");
+  const pageSessionRef = useRef(`page-${Date.now().toString(36)}`);
   const workersRef = useRef<Map<string, Worker>>(new Map());
   const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[]; checkSpacePlan?: CheckSpaceFillPlan }>>(new Map());
   const jobCounterRef = useRef(0);
@@ -494,11 +495,31 @@ export default function Home() {
           parseFileIndex(fileIndexFile),
           buildXlsbExtraInfoMap(xlsbFiles),
         ]);
+
+        sendLog([makeEntry(sessionId, "INDEX_PARSED", "INFO",
+          `FILE_INDEX: ${indexLookup.storeList.length} stores, ${indexLookup.pogToByCode.size} POG→BY_CODE`,
+          { storeCount: indexLookup.storeList.length, pogByCodeCount: indexLookup.pogToByCode.size }
+        )]);
+
         if (csItems.length > 0) {
           setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เตรียมข้อมูล...`);
           const newDeleteIMRows = fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
           const newScmRows      = fillNewSCM(wb, csItems, indexLookup);
           const delScmRows      = fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
+
+          const delItems = csItems.filter(i => i.status.toUpperCase().startsWith("DELETE"));
+          const extraFromXlsb = delItems.filter(i => xlsbExtraInfo.has(i.barcode)).length;
+          const extraFromCs   = delItems.filter(i => !xlsbExtraInfo.has(i.barcode) && !!i.remark).length;
+          sendLog([makeEntry(sessionId, "EXTRA_INFO_DIAG", "INFO",
+            `Extra_Info (${delItems.length} delete items): จาก 100 ช่อง ${extraFromXlsb} | fallback Check Space ${extraFromCs} | ว่าง ${delItems.length - extraFromXlsb - extraFromCs} | xlsb map: ${xlsbExtraInfo.size} entries`,
+            {
+              xlsbMapSize: xlsbExtraInfo.size,
+              delItemCount: delItems.length,
+              fromXlsb: extraFromXlsb,
+              fromCheckSpace: extraFromCs,
+              blank: delItems.length - extraFromXlsb - extraFromCs,
+            }
+          )]);
           csNdimRows    = newDeleteIMRows;
           csNewScmRows  = newScmRows;
           csDscmRows    = delScmRows;
@@ -926,7 +947,13 @@ export default function Home() {
                       label="Check Space.xlsx"
                       accept=".xlsx,.xls"
                       files={checkSpaceFile ? [checkSpaceFile] : []}
-                      onFiles={(files) => setCheckSpaceFile(files[0] ?? null)}
+                      onFiles={(files) => {
+                        setCheckSpaceFile(files[0] ?? null);
+                        if (files[0]) sendLog([makeEntry(pageSessionRef.current, "FILE_UPLOAD", "INFO",
+                          `อัปโหลด Check Space: ${files[0].name}`,
+                          { fileType: "Check Space", name: files[0].name, sizeMB: (files[0].size / 1048576).toFixed(2) }
+                        )]);
+                      }}
                     />
                     <div className="flex gap-3">
                       <NavBtn onClick={() => setStep(2)} disabled={!checkSpaceFile}>
@@ -943,7 +970,13 @@ export default function Home() {
                       label="FILE_INDEX_1.xlsx"
                       accept=".xlsx,.xls"
                       files={fileIndexFile ? [fileIndexFile] : []}
-                      onFiles={(files) => setFileIndexFile(files[0] ?? null)}
+                      onFiles={(files) => {
+                        setFileIndexFile(files[0] ?? null);
+                        if (files[0]) sendLog([makeEntry(pageSessionRef.current, "FILE_UPLOAD", "INFO",
+                          `อัปโหลด FILE_INDEX: ${files[0].name}`,
+                          { fileType: "FILE_INDEX", name: files[0].name, sizeMB: (files[0].size / 1048576).toFixed(2) }
+                        )]);
+                      }}
                     />
                     <div className="flex gap-3">
                       <NavBtn variant="outline" onClick={() => setStep(1)}>← ย้อนกลับ</NavBtn>
@@ -961,7 +994,13 @@ export default function Home() {
                       label="ไฟล์ RECAP.xlsx"
                       accept=".xlsx,.xls"
                       files={recapFiles}
-                      onFiles={setRecapFiles}
+                      onFiles={(files) => {
+                        setRecapFiles(files);
+                        if (files.length > 0) sendLog([makeEntry(pageSessionRef.current, "FILE_UPLOAD", "INFO",
+                          `อัปโหลด RECAP: ${files.map(f => f.name).join(", ")}`,
+                          { fileType: "RECAP", files: files.map(f => ({ name: f.name, sizeMB: (f.size / 1048576).toFixed(2) })) }
+                        )]);
+                      }}
                     />
                     <div className="flex gap-3">
                       <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
@@ -980,7 +1019,13 @@ export default function Home() {
                       accept=".xlsb,.xlsx,.xls"
                       multiple
                       files={xlsbFiles}
-                      onFiles={setXlsbFiles}
+                      onFiles={(files) => {
+                        setXlsbFiles(files);
+                        if (files.length > 0) sendLog([makeEntry(pageSessionRef.current, "FILE_UPLOAD", "INFO",
+                          `อัปโหลด 100 ช่อง: ${files.length} ไฟล์ (${files.map(f => f.name).join(", ")})`,
+                          { fileType: "100 ช่อง (XLSB)", count: files.length, files: files.map(f => ({ name: f.name, sizeMB: (f.size / 1048576).toFixed(2) })) }
+                        )]);
+                      }}
                       hint="7_2_10_SNACKS, 7_2_50_CONFECTIONARY, 7_2_60_BISCUITS, 7_2_60_WINE ฯลฯ"
                     />
 
@@ -1208,6 +1253,21 @@ export default function Home() {
                                     colDefs={fillTabs[previewTab].colDefs}
                                     rows={fillTabs[previewTab].rows}
                                     onChange={(updated) => handleFillTabChange(previewTab, updated)}
+                                    onEditSaved={(rowIndex, changes) => {
+                                      const tabName = fillTabs[previewTab]?.displayName ?? `tab${previewTab}`;
+                                      sendLog([makeEntry(sessionIdRef.current, "USER_EDIT", "INFO",
+                                        `แก้ไขแถว ${rowIndex} ใน ${tabName}: ${Object.keys(changes).join(", ")}`,
+                                        { tab: tabName, rowIndex, changes }
+                                      )]);
+                                    }}
+                                    onReplaceApplied={(col, from, to, count) => {
+                                      const tabName = fillTabs[previewTab]?.displayName ?? `tab${previewTab}`;
+                                      const colLabel = fillTabs[previewTab]?.colDefs.find(d => d.field === col)?.label ?? col;
+                                      sendLog([makeEntry(sessionIdRef.current, "USER_REPLACE", "INFO",
+                                        `Replace ใน ${tabName} คอลัมน์ "${colLabel}": "${from}" → "${to}" (${count} แถว)`,
+                                        { tab: tabName, col, colLabel, from, to, count }
+                                      )]);
+                                    }}
                                     isKeyZone={previewTab === 0
                                       ? (row, zone) =>
                                           zone === "new" ? !!row.fields.seqNew
@@ -1646,45 +1706,109 @@ function HelpModal({ onClose }: { onClose: () => void }) {
         {/* Content */}
         <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6 text-sm text-slate-700">
 
-          {/* Step-by-step */}
-          <section>
-            <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
-              <span className="bg-[#E91E8C] text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">1</span>
-              อ่านไฟล์ RECAP
-            </h3>
-            <p className="text-slate-600 leading-relaxed pl-7">
-              ระบบสแกนหาแถวใน Sheet <span className="font-mono bg-slate-100 px-1 rounded">NEW SCM</span> ที่มีบาร์โค้ดในคอลัมน์ D แต่คอลัมน์ F (DIVISION) ยังว่างอยู่ — เหล่านี้คือรายการที่ต้องเติมข้อมูล
+          {/* Overview */}
+          <section className="rounded-xl bg-pink-50 border border-pink-100 px-4 py-3">
+            <p className="text-slate-700 leading-relaxed">
+              ระบบนี้ช่วย<strong>เติมข้อมูลลงใน 3 ชีต</strong>ของไฟล์ RECAP โดยอัตโนมัติ
+              โดยดึงข้อมูลจากไฟล์ Check Space, ไฟล์ 100 ช่อง และ DATA_SPACEMAN แล้วให้ผู้ใช้ตรวจสอบ/แก้ไขก่อน Download
             </p>
           </section>
 
+          {/* Upload steps */}
           <section>
-            <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
-              <span className="bg-[#F15A22] text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">2</span>
-              ค้นหาในไฟล์ 100 ช่อง
-            </h3>
-            <p className="text-slate-600 leading-relaxed pl-7">
-              เอาบาร์โค้ดแต่ละตัวไปค้นใน Sheet <span className="font-mono bg-slate-100 px-1 rounded">Base</span> หรือ <span className="font-mono bg-slate-100 px-1 rounded">Input</span> ถ้าพบ → ได้ Sub-Class Code → นำไป look up โครงสร้างสินค้าใน Sheet <span className="font-mono bg-slate-100 px-1 rounded">Sh_ProdStructure</span> เพื่อเอา F/G/H/I และได้ค่า N (MBC Forecast) จากคอลัมน์ DF
-            </p>
+            <h3 className="font-bold text-slate-800 mb-3">ขั้นตอนการใช้งาน</h3>
+            <div className="space-y-2">
+              {[
+                { step: "1", color: "bg-pink-500",   label: "อัปโหลด Check Space",   desc: "ไฟล์ที่มีรายการสินค้า NEW / DELETE พร้อม POG matrix" },
+                { step: "2", color: "bg-orange-400", label: "อัปโหลด FILE_INDEX",    desc: "ไฟล์ที่ map POG NAME → BY_CODE และ store flags" },
+                { step: "3", color: "bg-amber-400",  label: "อัปโหลดไฟล์ RECAP",    desc: "ไฟล์ที่ต้องการเติมข้อมูล (NEW SCM, DEL SCM, NEW_DELETE_IM)" },
+                { step: "4", color: "bg-emerald-500",label: "อัปโหลดไฟล์ 100 ช่อง", desc: "ไฟล์ XLSB สำหรับค้นหา Sub-Class Code และ MBC Forecast" },
+                { step: "5", color: "bg-blue-500",   label: "ตรวจสอบ & แก้ไข",      desc: "ดูข้อมูลที่ระบบเติมให้ แก้ไขได้ทีละแถว หรือใช้ Replace แบบ Bulk" },
+                { step: "6", color: "bg-slate-500",  label: "Download ไฟล์",         desc: "ไฟล์ RECAP ที่เติมข้อมูลครบแล้ว พร้อมใช้งาน" },
+              ].map(({ step, color, label, desc }) => (
+                <div key={step} className="flex items-start gap-3">
+                  <span className={`${color} text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center flex-shrink-0 mt-0.5`}>{step}</span>
+                  <div>
+                    <span className="font-semibold text-slate-800">{label}</span>
+                    <span className="text-slate-500 ml-2">{desc}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </section>
 
+          {/* 3 sheets */}
           <section>
-            <h3 className="font-bold text-slate-800 mb-3 flex items-center gap-2">
-              <span className="bg-[#FFD100] text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center flex-shrink-0">3</span>
-              ค้นหาใน DATA_SPACEMAN
-            </h3>
-            <p className="text-slate-600 leading-relaxed pl-7">
-              ใช้ Sub-Class Code prefix (6 หลักแรก) หา PLANOGRAM ที่พบบ่อยที่สุด → ใส่คอลัมน์ J และเอาบาร์โค้ดไปหา TOTAL_UNITS → ใส่คอลัมน์ O (Piece 100%)
-            </p>
+            <h3 className="font-bold text-slate-800 mb-3">ชีตที่ระบบเติมข้อมูล</h3>
+            <div className="space-y-3">
+
+              {/* NDIM */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 px-4 py-3">
+                <p className="font-semibold text-emerald-800 mb-1.5">📋 NEW_DELETE_IM</p>
+                <p className="text-xs text-slate-600 leading-relaxed mb-2">
+                  เพิ่มแถวสินค้าจาก Check Space แบ่งเป็น 2 ฝั่ง — ฝั่ง New (สินค้าใหม่) และ ฝั่ง Del (สินค้าที่ต้อง Delete)
+                </p>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                    <p className="font-semibold text-emerald-700 mb-1">ฝั่ง New (A–G)</p>
+                    <p className="text-slate-600">ลำดับ · Barcode · Name · DC · BY_CODE · Status · Remark</p>
+                  </div>
+                  <div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                    <p className="font-semibold text-rose-700 mb-1">ฝั่ง Del (I–O)</p>
+                    <p className="text-slate-600">ลำดับ · Barcode · Name · DC · BY_CODE · Status · Extra_Info</p>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 mt-2">
+                  Extra_Info: ดึงจากไฟล์ 100 ช่อง (col Extra Info) → ถ้าไม่พบ ใช้ Check Space col D
+                </p>
+              </div>
+
+              {/* NEW SCM */}
+              <div className="rounded-xl border border-blue-200 bg-blue-50/40 px-4 py-3">
+                <p className="font-semibold text-blue-800 mb-1.5">📝 NEW SCM</p>
+                <p className="text-xs text-slate-600 leading-relaxed mb-2">
+                  เพิ่มแถวสินค้าใหม่จาก Check Space แล้วเติมข้อมูล hierarchy และ planogram โดยอัตโนมัติ
+                </p>
+                <div className="flex flex-wrap gap-1.5 text-xs">
+                  {[
+                    { col: "F", name: "DIVISION" }, { col: "G", name: "DEPT" },
+                    { col: "H", name: "SUB-DEPT" }, { col: "I", name: "Class" },
+                    { col: "J", name: "PLANOGRAM" }, { col: "N", name: "MBC FCST" },
+                    { col: "O", name: "Piece" }, { col: "P", name: "%" },
+                    { col: "Q", name: "Net (คำนวณ)" },
+                  ].map(({ col, name }) => (
+                    <span key={col} className="bg-white border border-blue-200 rounded px-2 py-0.5 text-slate-700">
+                      <span className="font-bold text-[#E91E8C]">{col}</span> {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {/* DEL SCM */}
+              <div className="rounded-xl border border-orange-200 bg-orange-50/40 px-4 py-3">
+                <p className="font-semibold text-orange-800 mb-1.5">🗑 DEL SCM</p>
+                <p className="text-xs text-slate-600 leading-relaxed mb-2">
+                  เพิ่มแถวสินค้าที่ต้อง Delete จาก Check Space พร้อมเติม store flags อัตโนมัติ
+                </p>
+                <p className="text-xs text-slate-600">
+                  ลำดับ · Barcode · Name · Division · POG ROUND (Planogram) · Status · Extra_Info · Store flags
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  DELETE ALL STORE → ไม่เติม store flags | DELETE SOME STORE → เติม store ที่เกี่ยวข้อง
+                </p>
+              </div>
+            </div>
           </section>
 
-          {/* Priority table */}
+          {/* Priority for NEW SCM */}
           <section>
-            <h3 className="font-bold text-slate-800 mb-3">Priority การหาข้อมูล F/G/H/I</h3>
+            <h3 className="font-bold text-slate-800 mb-1.5">Priority การค้นหาข้อมูล (NEW SCM)</h3>
+            <p className="text-xs text-slate-500 mb-3">ระบบค้นหาข้อมูล F/G/H/I ตามลำดับ Priority ดังนี้</p>
             <div className="rounded-xl border border-slate-200 overflow-hidden">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-slate-50 text-slate-600">
-                    <th className="px-3 py-2 text-left font-semibold w-12">ลำดับ</th>
+                    <th className="px-3 py-2 text-left font-semibold w-10">#</th>
                     <th className="px-3 py-2 text-left font-semibold">เงื่อนไข</th>
                     <th className="px-3 py-2 text-left font-semibold">ผลลัพธ์</th>
                   </tr>
@@ -1692,99 +1816,49 @@ function HelpModal({ onClose }: { onClose: () => void }) {
                 <tbody className="divide-y divide-slate-100">
                   <tr className="bg-green-50">
                     <td className="px-3 py-2.5">
-                      <span className="flex items-center gap-1 text-green-700 font-bold">
-                        <CheckCircle className="w-3.5 h-3.5" /> 1
-                      </span>
+                      <span className="flex items-center gap-1 text-green-700 font-bold"><CheckCircle className="w-3.5 h-3.5" />1</span>
                     </td>
-                    <td className="px-3 py-2.5 text-slate-700">พบบาร์โค้ดในไฟล์ 100 ช่อง</td>
-                    <td className="px-3 py-2.5 text-slate-600">F/G/H/I จาก Sub-Class Structure, N จาก MBC Forecast, J จาก DATA_SPACEMAN</td>
+                    <td className="px-3 py-2.5 font-medium">พบใน<strong>ไฟล์ 100 ช่อง</strong></td>
+                    <td className="px-3 py-2.5 text-slate-600">F/G/H/I จาก Sub-Class Structure · J จาก DATA_SPACEMAN · N จาก MBC Forecast</td>
                   </tr>
                   <tr className="bg-blue-50">
                     <td className="px-3 py-2.5">
-                      <span className="flex items-center gap-1 text-blue-700 font-bold">
-                        <Database className="w-3.5 h-3.5" /> 2
-                      </span>
+                      <span className="flex items-center gap-1 text-blue-700 font-bold"><Database className="w-3.5 h-3.5" />2</span>
                     </td>
-                    <td className="px-3 py-2.5 text-slate-700">ไม่พบใน 100 ช่อง แต่พบใน DATA_SPACEMAN</td>
-                    <td className="px-3 py-2.5 text-slate-600">F/G/H/I จาก DESC_A/B/C/CATEGORY, <span className="font-semibold text-blue-700">N = ว่าง</span></td>
+                    <td className="px-3 py-2.5 font-medium">ไม่พบใน 100 ช่อง แต่พบใน<strong>DATA_SPACEMAN</strong></td>
+                    <td className="px-3 py-2.5 text-slate-600">F/G/H/I จาก DESC_A/B/C/CATEGORY · <span className="font-semibold text-blue-700">N = ว่าง</span></td>
                   </tr>
                   <tr className="bg-red-50">
                     <td className="px-3 py-2.5">
-                      <span className="flex items-center gap-1 text-red-500 font-bold">
-                        <XCircle className="w-3.5 h-3.5" /> 3
-                      </span>
+                      <span className="flex items-center gap-1 text-red-500 font-bold"><XCircle className="w-3.5 h-3.5" />3</span>
                     </td>
-                    <td className="px-3 py-2.5 text-slate-700">ไม่พบในทั้งสองแหล่ง</td>
-                    <td className="px-3 py-2.5 text-slate-600">กรอกเองด้วยปุ่มแก้ไข ✏️</td>
+                    <td className="px-3 py-2.5 font-medium">ไม่พบในทั้งสองแหล่ง</td>
+                    <td className="px-3 py-2.5 text-slate-600">กรอกเองด้วยปุ่มแก้ไข ✏️ ใน Step 5</td>
                   </tr>
                 </tbody>
               </table>
             </div>
           </section>
 
-          {/* Columns */}
+          {/* Step 5 edit */}
           <section>
-            <h3 className="font-bold text-slate-800 mb-3">คอลัมน์ที่ระบบเติมให้</h3>
-            <div className="rounded-xl border border-slate-200 overflow-hidden">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-600">
-                    <th className="px-3 py-2 text-left font-semibold w-10">คอล</th>
-                    <th className="px-3 py-2 text-left font-semibold">ชื่อ</th>
-                    <th className="px-3 py-2 text-left font-semibold">แหล่งข้อมูล</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {[
-                    ["F", "DIVISION",       "Sub-Class Structure (Priority 1) / DESC_A จาก DATA_SPACEMAN (Priority 2)"],
-                    ["G", "DEPT",            "Sub-Class Structure / DESC_B"],
-                    ["H", "SUB-DEPT",        "Sub-Class Structure / DESC_C"],
-                    ["I", "Class",           "Sub-Class Structure / CATEGORY"],
-                    ["J", "PLANOGRAM",       "DATA_SPACEMAN — ค่าที่พบบ่อยที่สุดตาม Sub-Class prefix 6 หลัก"],
-                    ["N", "MBC Forecast",    "ไฟล์ 100 ช่อง คอลัมน์ DF (ว่างถ้าใช้ Priority 2)"],
-                    ["O", "Piece 100%",      "DATA_SPACEMAN คอลัมน์ TOTAL_UNITS"],
-                    ["P", "%",               "Config Rules (ตรง CATEGORY/SUBCATEGORY/DESC_C) — default 100%"],
-                    ["Q", "Net",             "P% × O คำนวณอัตโนมัติ ไม่ต้องกรอก"],
-                  ].map(([col, name, src]) => (
-                    <tr key={col}>
-                      <td className="px-3 py-2">
-                        <span className="font-mono font-bold text-[#E91E8C]">{col}</span>
-                      </td>
-                      <td className="px-3 py-2 font-medium">{name}</td>
-                      <td className="px-3 py-2 text-slate-500">{src}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          {/* Status legend */}
-          <section>
-            <h3 className="font-bold text-slate-800 mb-3">สถานะแถวในตารางผลลัพธ์</h3>
-            <div className="space-y-2">
-              {[
-                { badge: "bg-green-100 text-green-700",  icon: <CheckCircle className="w-3.5 h-3.5" />, label: "ยืนยันแล้ว",     desc: "พบในไฟล์ 100 ช่อง และมี PLANOGRAM ใน DATA_SPACEMAN" },
-                { badge: "bg-amber-100 text-amber-700",  icon: <AlertTriangle className="w-3.5 h-3.5" />, label: "ไม่มี Planogram", desc: "พบในไฟล์ 100 ช่อง แต่ PLANOGRAM ไม่พบใน DATA_SPACEMAN (คอลัมน์ J จะว่าง)" },
-                { badge: "bg-blue-100 text-blue-700",    icon: <Database className="w-3.5 h-3.5" />, label: "จาก Spaceman",    desc: "ไม่พบในไฟล์ 100 ช่อง แต่พบใน DATA_SPACEMAN — F/G/H/I ได้มา คอลัมน์ N ว่าง" },
-                { badge: "bg-red-100 text-red-500",      icon: <XCircle className="w-3.5 h-3.5" />, label: "ไม่พบ",           desc: "ไม่พบทั้งในไฟล์ 100 ช่อง และ DATA_SPACEMAN — กรอกเองด้วยปุ่ม ✏️" },
-              ].map(({ badge, icon, label, desc }) => (
-                <div key={label} className="flex items-start gap-3">
-                  <span className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold flex-shrink-0 ${badge}`}>
-                    {icon}{label}
-                  </span>
-                  <span className="text-slate-500 text-xs pt-1">{desc}</span>
-                </div>
-              ))}
+            <h3 className="font-bold text-slate-800 mb-2">การตรวจสอบและแก้ไขใน Step 5</h3>
+            <div className="space-y-1.5 text-xs text-slate-600">
+              <p>• <strong>แก้ไขทีละแถว</strong> — กดปุ่ม ✏️ ที่แถวที่ต้องการ แก้ไข แล้วกด ✓ บันทึก</p>
+              <p>• <strong>Replace แบบ Bulk</strong> — กดปุ่ม Replace เพื่อค้นหาและแทนที่ค่าในคอลัมน์ที่เลือก ทีเดียวหลายแถว</p>
+              <p>• <strong>Filter แถวที่ยังไม่สมบูรณ์</strong> — กดปุ่ม "ยังไม่สมบูรณ์" เพื่อดูเฉพาะแถวที่ยังขาดข้อมูลสำคัญ</p>
+              <p>• ข้อมูลที่แก้ไขใน Step 5 จะถูกบันทึกลงไฟล์ RECAP เมื่อกด Download</p>
             </div>
           </section>
 
           {/* Config Rules */}
           <section>
-            <h3 className="font-bold text-slate-800 mb-2">Config Rules (คอลัมน์ P)</h3>
-            <p className="text-slate-600 leading-relaxed">
-              ตั้งค่าเปอร์เซ็นต์สำหรับสินค้าบางกลุ่ม โดย filter ด้วย CATEGORY / SUBCATEGORY / DESC_C
-              (ใช้ &quot;ทั้งหมด&quot; เพื่อ match ทุกค่า) — Rule แรกที่ตรงชนะ หากไม่มี Rule ใดตรง → ใช้ค่า default 100%
+            <h3 className="font-bold text-slate-800 mb-2">Config Rules (คอลัมน์ P — %)</h3>
+            <p className="text-slate-600 leading-relaxed text-xs">
+              กำหนดเปอร์เซ็นต์ (%) สำหรับสินค้าแต่ละกลุ่มผ่านปุ่ม Config Rules
+              โดย match จาก CATEGORY / SUBCATEGORY / DESC_C (ใช้ "ทั้งหมด" เพื่อ match ทุกค่า)
+              Rule แรกที่ตรงกันจะถูกใช้ — หากไม่มี Rule ใดตรง ระบบใช้ค่า default <strong>100%</strong>
+              และ <strong>คอลัมน์ Q (Net)</strong> จะคำนวณอัตโนมัติจาก O × P%
             </p>
           </section>
 

@@ -8,7 +8,12 @@ export type LogEvent =
   | "BUILD_COMPLETE"
   | "BUILD_FAILED"
   | "ERROR"
-  | "CS_FILL_DIAG";
+  | "CS_FILL_DIAG"
+  | "FILE_UPLOAD"      // user drops/selects a file at any upload step
+  | "INDEX_PARSED"     // FILE_INDEX parse result (store count, POG→BY_CODE count)
+  | "EXTRA_INFO_DIAG"  // Extra_Info hit-rate: xlsb vs Check Space remark vs blank
+  | "USER_EDIT"        // user saves a pencil-edit on a single row
+  | "USER_REPLACE";    // user executes Find & Replace (bulk)
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";
 
