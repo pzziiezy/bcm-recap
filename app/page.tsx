@@ -192,15 +192,9 @@ export default function Home() {
   const [fillTabs, setFillTabs]     = useState<FillTabData[] | null>(null);
   const [previewTab, setPreviewTab] = useState(0);
 
-  // Exception config — loaded from Google Sheets on mount; localStorage is fallback cache
-  const [exceptionConfig, setExceptionConfig] = useState<ExceptionConfig[]>(() => {
-    try {
-      const raw = localStorage.getItem(EXCEPTION_CONFIG_KEY);
-      return raw ? (JSON.parse(raw) as ExceptionConfig[]) : [];
-    } catch {
-      return [];
-    }
-  });
+  // Exception config — start with [] so server and client render identically (no hydration mismatch).
+  // localStorage is loaded in useEffect (client-only, after hydration).
+  const [exceptionConfig, setExceptionConfig] = useState<ExceptionConfig[]>([]);
   const [showConfig, setShowConfig] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [configSyncStatus, setConfigSyncStatus] = useState<SyncStatus>("loading");
@@ -246,7 +240,15 @@ export default function Home() {
       .finally(() => setDriveLoading(false));
   }, []);
 
-  // Load exception config from Google Sheets on mount (localStorage is fallback)
+  // Hydration-safe localStorage read — runs only on client, after initial render is committed.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(EXCEPTION_CONFIG_KEY);
+      if (raw) setExceptionConfig(JSON.parse(raw) as ExceptionConfig[]);
+    } catch { /* ignore */ }
+  }, []);
+
+  // Load exception config from Google Sheets on mount (overwrites localStorage cache with fresh data)
   useEffect(() => {
     setConfigSyncStatus("loading");
     fetch("/api/config/load")
