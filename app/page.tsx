@@ -374,7 +374,7 @@ export default function Home() {
   // ── Queue actions ───────────────────────────────────────────────────────
 
   const enqueueJob = () => {
-    if (!recapBufRef.current || results.length === 0) return;
+    if (!recapBufRef.current || (results.length === 0 && !checkSpacePlanRef.current)) return;
     const id = crypto.randomUUID();
     const num = ++jobCounterRef.current;
     const baseName = recapFiles[0]?.name.replace(/\.[^.]+$/, "") ?? "RECAP";
