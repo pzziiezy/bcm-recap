@@ -228,7 +228,7 @@ export default function Home() {
   const sessionIdRef = useRef<string>("");
   const pageSessionRef = useRef(`page-${Date.now().toString(36)}`);
   const workersRef = useRef<Map<string, Worker>>(new Map());
-  const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[]; checkSpacePlan?: CheckSpaceFillPlan }>>(new Map());
+  const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[]; checkSpacePlan?: CheckSpaceFillPlan; label: string }>>(new Map());
   const jobCounterRef = useRef(0);
   const autoDownloadedRef = useRef<Set<string>>(new Set());
 
@@ -292,56 +292,56 @@ export default function Home() {
           );
           break;
         case "done": {
+          const label = jobDataRef.current.get(id)?.label ?? buildSid;
           workersRef.current.delete(id);
           jobDataRef.current.delete(id);
           const durSec = ((Date.now() - buildStart) / 1000).toFixed(1);
-          setJobs((prev) => {
-            const label = prev.find((j) => j.id === id)?.label ?? id;
-            sendLog([makeEntry(buildSid, "BUILD_COMPLETE", "INFO",
-              `Build ${label} เสร็จในเวลา ${durSec} วินาที`,
-              { jobId: id, label, durationSec: durSec }
-            )]);
-            return prev.map((j) =>
+          sendLog([makeEntry(buildSid, "BUILD_COMPLETE", "INFO",
+            `Build ${label} เสร็จในเวลา ${durSec} วินาที`,
+            { jobId: id, label, durationSec: durSec }
+          )]);
+          setJobs((prev) =>
+            prev.map((j) =>
               j.id === id
                 ? { ...j, status: "done", progress: 100, completedAt: new Date(), buffer: msg.buffer }
                 : j
-            );
-          });
+            )
+          );
           break;
         }
         case "error": {
+          const label = jobDataRef.current.get(id)?.label ?? buildSid;
           workersRef.current.delete(id);
-          setJobs((prev) => {
-            const label = prev.find((j) => j.id === id)?.label ?? id;
-            sendLog([makeEntry(buildSid, "BUILD_FAILED", "ERROR",
-              `Build ${label} ล้มเหลว: ${msg.message ?? "Worker error"}`,
-              { jobId: id, label, error: msg.message }
-            )]);
-            return prev.map((j) =>
+          sendLog([makeEntry(buildSid, "BUILD_FAILED", "ERROR",
+            `Build ${label} ล้มเหลว: ${msg.message ?? "Worker error"}`,
+            { jobId: id, label, error: msg.message }
+          )]);
+          setJobs((prev) =>
+            prev.map((j) =>
               j.id === id
                 ? { ...j, status: "failed", error: msg.message ?? "Worker error", completedAt: new Date() }
                 : j
-            );
-          });
+            )
+          );
           break;
         }
       }
     };
 
     worker.onerror = (e: ErrorEvent) => {
+      const label = jobDataRef.current.get(id)?.label ?? buildSid;
       workersRef.current.delete(id);
-      setJobs((prev) => {
-        const label = prev.find((j) => j.id === id)?.label ?? id;
-        sendLog([makeEntry(buildSid, "BUILD_FAILED", "ERROR",
-          `Build ${label} crash: ${e.message ?? "Worker crashed"}`,
-          { jobId: id, label, error: e.message }
-        )]);
-        return prev.map((j) =>
+      sendLog([makeEntry(buildSid, "BUILD_FAILED", "ERROR",
+        `Build ${label} crash: ${e.message ?? "Worker crashed"}`,
+        { jobId: id, label, error: e.message }
+      )]);
+      setJobs((prev) =>
+        prev.map((j) =>
           j.id === id
             ? { ...j, status: "failed", error: e.message ?? "Worker crashed", completedAt: new Date() }
             : j
-        );
-      });
+        )
+      );
     };
 
     // Transfer buffer to avoid a full copy (slice first to preserve original)
@@ -374,6 +374,7 @@ export default function Home() {
       recapBuf: recapBufRef.current.slice(0),
       rows: toDownloadRows(results),
       checkSpacePlan: checkSpacePlanRef.current ?? undefined,
+      label,
     });
 
     sendLog([makeEntry(
