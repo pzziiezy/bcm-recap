@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, startTransition } from "react";
 import * as XLSX from "xlsx";
 import {
   Download,
@@ -287,9 +287,11 @@ export default function Home() {
           worker.postMessage({ type: "build", rows, checkSpacePlan });
           break;
         case "progress":
-          setJobs((prev) =>
-            prev.map((j) => (j.id === id ? { ...j, progress: msg.pct ?? j.progress } : j))
-          );
+          startTransition(() => {
+            setJobs((prev) =>
+              prev.map((j) => (j.id === id ? { ...j, progress: msg.pct ?? j.progress } : j))
+            );
+          });
           break;
         case "done": {
           const label = jobDataRef.current.get(id)?.label ?? buildSid;
@@ -300,13 +302,15 @@ export default function Home() {
             `Build ${label} เสร็จในเวลา ${durSec} วินาที`,
             { jobId: id, label, durationSec: durSec }
           )]);
-          setJobs((prev) =>
-            prev.map((j) =>
-              j.id === id
-                ? { ...j, status: "done", progress: 100, completedAt: new Date(), buffer: msg.buffer }
-                : j
-            )
-          );
+          startTransition(() => {
+            setJobs((prev) =>
+              prev.map((j) =>
+                j.id === id
+                  ? { ...j, status: "done", progress: 100, completedAt: new Date(), buffer: msg.buffer }
+                  : j
+              )
+            );
+          });
           break;
         }
         case "error": {
@@ -316,13 +320,15 @@ export default function Home() {
             `Build ${label} ล้มเหลว: ${msg.message ?? "Worker error"}`,
             { jobId: id, label, error: msg.message }
           )]);
-          setJobs((prev) =>
-            prev.map((j) =>
-              j.id === id
-                ? { ...j, status: "failed", error: msg.message ?? "Worker error", completedAt: new Date() }
-                : j
-            )
-          );
+          startTransition(() => {
+            setJobs((prev) =>
+              prev.map((j) =>
+                j.id === id
+                  ? { ...j, status: "failed", error: msg.message ?? "Worker error", completedAt: new Date() }
+                  : j
+              )
+            );
+          });
           break;
         }
       }
@@ -335,13 +341,15 @@ export default function Home() {
         `Build ${label} crash: ${e.message ?? "Worker crashed"}`,
         { jobId: id, label, error: e.message }
       )]);
-      setJobs((prev) =>
-        prev.map((j) =>
-          j.id === id
-            ? { ...j, status: "failed", error: e.message ?? "Worker crashed", completedAt: new Date() }
-            : j
-        )
-      );
+      startTransition(() => {
+        setJobs((prev) =>
+          prev.map((j) =>
+            j.id === id
+              ? { ...j, status: "failed", error: e.message ?? "Worker crashed", completedAt: new Date() }
+              : j
+          )
+        );
+      });
     };
 
     // Transfer buffer to avoid a full copy (slice first to preserve original)
