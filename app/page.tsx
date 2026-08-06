@@ -28,6 +28,7 @@ import {
 import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
 import ResultsTable from "@/components/ResultsTable";
+import NewRenovateTab from "@/components/NewRenovateTab";
 import SpacemanMaster, {
   DriveFileInfo,
   formatDateTime,
@@ -71,7 +72,7 @@ const STEPS = [
 const MAX_CONCURRENT = 2;
 
 type Status = "idle" | "processing" | "done" | "error";
-type AppView = "main" | "spaceman";
+type AppView = "main" | "spaceman" | "newrenovate";
 type JobStatus = "queued" | "processing" | "done" | "failed" | "terminated" | "downloaded";
 
 interface BuildJob {
@@ -887,6 +888,10 @@ export default function Home() {
               </svg>
               DATA_SPACEMAN
             </TabBtn>
+            <TabBtn active={view === "newrenovate"} onClick={() => setView("newrenovate")}>
+              <FileSpreadsheet className="w-4 h-4" />
+              New and Renovate
+            </TabBtn>
           </div>
           <div className="flex items-center gap-1">
             {/* Help button */}
@@ -945,6 +950,9 @@ export default function Home() {
                 onSpacemanValues={(v) => { setSpacemanValues(v); setSpacemanLoaded(true); }}
               />
             </div>
+
+            {/* New and Renovate tab */}
+            {view === "newrenovate" && <NewRenovateTab />}
 
             {/* Main upload flow */}
             {view === "main" && (
