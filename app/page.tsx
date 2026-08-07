@@ -29,6 +29,7 @@ import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
 import ResultsTable from "@/components/ResultsTable";
 import NewRenovateTab from "@/components/NewRenovateTab";
+import MasterTab from "@/components/MasterTab";
 import SpacemanMaster, {
   DriveFileInfo,
   formatDateTime,
@@ -72,7 +73,7 @@ const STEPS = [
 const MAX_CONCURRENT = 2;
 
 type Status = "idle" | "processing" | "done" | "error";
-type AppView = "main" | "spaceman" | "newrenovate";
+type AppView = "main" | "spaceman" | "newrenovate" | "master";
 type JobStatus = "queued" | "processing" | "done" | "failed" | "terminated" | "downloaded";
 
 interface BuildJob {
@@ -892,6 +893,10 @@ export default function Home() {
               <FileSpreadsheet className="w-4 h-4" />
               New and Renovate
             </TabBtn>
+            <TabBtn active={view === "master"} onClick={() => setView("master")}>
+              <Database className="w-4 h-4" />
+              Master
+            </TabBtn>
           </div>
           <div className="flex items-center gap-1">
             {/* Help button */}
@@ -953,6 +958,9 @@ export default function Home() {
 
             {/* New and Renovate tab */}
             {view === "newrenovate" && <NewRenovateTab />}
+
+            {/* Master tab */}
+            {view === "master" && <MasterTab />}
 
             {/* Main upload flow */}
             {view === "main" && (
