@@ -1,17 +1,18 @@
 "use client";
 
-import { useRef, useState, useEffect, DragEvent } from "react";
+import { useRef, useState, useEffect, useMemo, DragEvent } from "react";
 import * as XLSX from "xlsx";
 import {
   CloudUpload, CheckCircle, XCircle, Clock, RefreshCw, Search, Database,
   ChevronLeft, ChevronRight, ChevronDown, ChevronUp, X,
+  ArrowUpDown, ArrowUp, ArrowDown, Filter,
 } from "lucide-react";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 
 interface DriveFileInfo { id: string; name: string; createdTime: string; }
 
-type FixtureRow = Record<string, unknown>;
+type DataRow = Record<string, string>;
 
 const PAGE_SIZE = 100;
 
@@ -27,8 +28,8 @@ export default function MasterTab() {
   const [loadingMeta, setLoadingMeta] = useState(true);
 
   // Table data
-  const [rows, setRows] = useState<FixtureRow[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
+  const [tableData, setTableData] = useState<DataRow[]>([]);
   const [sheetUsed, setSheetUsed] = useState("");
   const [loadingData, setLoadingData] = useState(false);
   const [dataError, setDataError] = useState("");
@@ -37,6 +38,10 @@ export default function MasterTab() {
   // Table controls
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [colFilters, setColFilters] = useState<Record<string, string>>({});
+  const [showColFilters, setShowColFilters] = useState(false);
 
   // Upload panel
   const [showUpload, setShowUpload] = useState(false);
@@ -119,11 +124,14 @@ export default function MasterTab() {
     setLoadingData(true);
     setParseProgress(10);
     setDataError("");
-    setRows([]);
+    setTableData([]);
     setHeaders([]);
     setSheetUsed("");
     setSearch("");
     setPage(0);
+    setSortCol(null);
+    setSortDir("asc");
+    setColFilters({});
 
     try {
       setParseProgress(20);
@@ -143,14 +151,15 @@ export default function MasterTab() {
       if (!targetSheet) throw new Error("ไม่พบ sheet ในไฟล์");
 
       const ws = wb.Sheets[targetSheet];
-      const data = XLSX.utils.sheet_to_json<FixtureRow>(ws, { defval: "" });
+
+      // range: 1 = skip the first remark row, use row 2 as header
+      const raw = XLSX.utils.sheet_to_json<DataRow>(ws, { defval: "", range: 1 });
       setParseProgress(90);
 
-      // Extract headers from the first row (dynamic — no hardcoded column names)
-      const hdrs = data.length > 0 ? Object.keys(data[0]) : [];
+      const hdrs = raw.length > 0 ? Object.keys(raw[0]) : [];
       setSheetUsed(targetSheet);
       setHeaders(hdrs);
-      setRows(data);
+      setTableData(raw);
       setParseProgress(100);
     } catch (err) {
       setDataError(String(err));
@@ -192,15 +201,70 @@ export default function MasterTab() {
     if (!uploading) handleFileSelect(e.dataTransfer.files);
   };
 
-  // ── Filter ────────────────────────────────────────────────────────────────
-  const filtered = rows.filter((r) => {
-    if (!search.trim()) return true;
-    const s = search.toLowerCase();
-    return Object.values(r).some((v) => String(v ?? "").toLowerCase().includes(s));
-  });
+  // ── Sort + Filter ─────────────────────────────────────────────────────────
+  const handleSort = (col: string) => {
+    if (sortCol === col) {
+      if (sortDir === "asc") setSortDir("desc");
+      else { setSortCol(null); setSortDir("asc"); }
+    } else {
+      setSortCol(col);
+      setSortDir("asc");
+    }
+    setPage(0);
+  };
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const pageRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const handleColFilter = (col: string, val: string) => {
+    setColFilters((p) => ({ ...p, [col]: val }));
+    setPage(0);
+  };
+
+  const clearAllFilters = () => {
+    setColFilters({});
+    setSearch("");
+    setSortCol(null);
+    setSortDir("asc");
+    setPage(0);
+  };
+
+  const activeFilterCount =
+    Object.values(colFilters).filter((v) => v.trim()).length + (search.trim() ? 1 : 0);
+
+  const displayData = useMemo(() => {
+    let data = tableData;
+
+    // Per-column filters
+    const activeFilters = Object.entries(colFilters).filter(([, v]) => v.trim());
+    if (activeFilters.length > 0)
+      data = data.filter((row) =>
+        activeFilters.every(([col, val]) =>
+          (row[col] || "").toLowerCase().includes(val.toLowerCase())
+        )
+      );
+
+    // Global search
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      data = data.filter((row) =>
+        Object.values(row).some((v) => v.toLowerCase().includes(q))
+      );
+    }
+
+    // Sort
+    if (sortCol) {
+      data = [...data].sort((a, b) => {
+        const av = a[sortCol] || "", bv = b[sortCol] || "";
+        const an = Number(av), bn = Number(bv);
+        const isNum = av !== "" && bv !== "" && !isNaN(an) && !isNaN(bn);
+        const cmp = isNum ? an - bn : av.localeCompare(bv, "th");
+        return sortDir === "asc" ? cmp : -cmp;
+      });
+    }
+
+    return data;
+  }, [tableData, colFilters, search, sortCol, sortDir]);
+
+  const totalPages = Math.ceil(displayData.length / PAGE_SIZE);
+  const pageRows = displayData.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -317,39 +381,59 @@ export default function MasterTab() {
               <h2 className="font-bold text-slate-800 text-lg">
                 ข้อมูลใน{sheetUsed ? ` ${sheetUsed}` : " Fixture_2026"}
               </h2>
-              {rows.length > 0 && (
+              {tableData.length > 0 && (
                 <span className="text-xs bg-pink-100 text-[#E91E8C] px-2 py-0.5 rounded-full font-medium">
-                  {rows.length.toLocaleString()} แถว
+                  {tableData.length.toLocaleString()} แถว
                 </span>
               )}
-              {filtered.length !== rows.length && (
+              {displayData.length !== tableData.length && (
                 <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
-                  กรองแล้ว: {filtered.length.toLocaleString()} แถว
+                  กรองแล้ว: {displayData.length.toLocaleString()} แถว
                 </span>
               )}
             </div>
           </div>
 
-          {rows.length > 0 && (
-            <div className="flex items-center gap-2">
+          {tableData.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Global search */}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="ค้นหา SEG / POG / Code Fixture..."
+                  placeholder="ค้นหาทุกคอลัมน์..."
                   value={search}
                   onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-                  className="pl-8 pr-8 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C] w-64"
+                  className="pl-8 pr-3 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C] w-52"
                 />
-                {search && (
-                  <button
-                    onClick={() => { setSearch(""); setPage(0); }}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
               </div>
+
+              {/* Column filter toggle */}
+              <button
+                onClick={() => setShowColFilters((v) => !v)}
+                className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${
+                  showColFilters || activeFilterCount > 0
+                    ? "bg-pink-50 border-[#E91E8C] text-[#E91E8C]"
+                    : "border-slate-200 text-slate-500 hover:border-slate-300"
+                }`}
+              >
+                <Filter className="w-3.5 h-3.5" />
+                Filter
+                {activeFilterCount > 0 && (
+                  <span className="bg-[#E91E8C] text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] font-bold">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </button>
+
+              {activeFilterCount > 0 && (
+                <button
+                  onClick={clearAllFilters}
+                  className="text-xs text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" />ล้างทั้งหมด
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -387,38 +471,66 @@ export default function MasterTab() {
         )}
 
         {/* Empty — file exists but no rows parsed */}
-        {!loadingData && !dataError && latestFile && rows.length === 0 && (
+        {!loadingData && !dataError && latestFile && tableData.length === 0 && (
           <div className="flex items-center justify-center py-16 text-slate-400 text-sm">ไม่พบข้อมูลในไฟล์</div>
         )}
 
         {/* ── Table ── */}
-        {!loadingData && !dataError && rows.length > 0 && (
+        {!loadingData && !dataError && tableData.length > 0 && (
           <>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
                     {headers.map((h) => (
-                      <th key={h} className="text-left px-4 py-3 font-semibold text-slate-600 text-xs uppercase tracking-wide whitespace-nowrap">
-                        {h}
+                      <th
+                        key={h}
+                        onClick={() => handleSort(h)}
+                        className="px-4 py-2.5 text-left text-xs font-semibold text-slate-600 whitespace-nowrap cursor-pointer select-none transition-colors group hover:bg-slate-100"
+                      >
+                        <div className="flex items-center gap-1">
+                          {h}
+                          {sortCol === h
+                            ? sortDir === "asc"
+                              ? <ArrowUp className="w-3 h-3 text-[#E91E8C]" />
+                              : <ArrowDown className="w-3 h-3 text-[#E91E8C]" />
+                            : <ArrowUpDown className="w-3 h-3 text-slate-300 group-hover:text-slate-400" />}
+                        </div>
                       </th>
                     ))}
                   </tr>
+
+                  {/* Per-column filter row */}
+                  {showColFilters && (
+                    <tr className="bg-white border-b border-slate-200">
+                      {headers.map((h) => (
+                        <th key={h} className="px-2 py-1.5">
+                          <input
+                            type="text"
+                            value={colFilters[h] || ""}
+                            onChange={(e) => handleColFilter(h, e.target.value)}
+                            placeholder="filter..."
+                            className="w-full px-2 py-1 text-xs border border-slate-200 rounded focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C] font-normal min-w-[80px]"
+                          />
+                        </th>
+                      ))}
+                    </tr>
+                  )}
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {pageRows.map((row, i) => (
                     <tr key={i} className="hover:bg-pink-50/40 transition-colors">
                       {headers.map((h) => (
                         <td key={h} className="px-4 py-2.5 text-slate-700 text-xs whitespace-nowrap">
-                          {String(row[h] ?? "")}
+                          {row[h] ?? ""}
                         </td>
                       ))}
                     </tr>
                   ))}
                   {pageRows.length === 0 && (
                     <tr>
-                      <td colSpan={3} className="px-4 py-10 text-center text-slate-400 text-sm">
-                        ไม่พบข้อมูลที่ตรงกับ &quot;{search}&quot;
+                      <td colSpan={headers.length} className="px-4 py-10 text-center text-slate-400 text-sm">
+                        ไม่พบข้อมูลที่ตรงกับเงื่อนไข
                       </td>
                     </tr>
                   )}
@@ -429,9 +541,10 @@ export default function MasterTab() {
             {totalPages > 1 && (
               <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500 bg-white sticky bottom-0">
                 <span>
-                  แสดง {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length).toLocaleString()}{" "}
-                  จาก {filtered.length.toLocaleString()} แถว
-                  {search && ` (กรองจาก ${rows.length.toLocaleString()})`}
+                  แสดง {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, displayData.length).toLocaleString()}{" "}
+                  จาก {displayData.length.toLocaleString()} แถว
+                  {(search || Object.values(colFilters).some(Boolean)) &&
+                    ` (กรองจาก ${tableData.length.toLocaleString()})`}
                 </span>
                 <div className="flex items-center gap-1">
                   <button
