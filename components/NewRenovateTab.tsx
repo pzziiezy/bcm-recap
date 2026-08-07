@@ -8,8 +8,11 @@ import type { ExceptionConfig } from "@/lib/types";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Stats {
-  sheet1: { written: number; matchedSpaceman: number; matchedIndex: number };
-  sheet2: { written: number; matched: number };
+  total: number;
+  matchedSpaceman: number;
+  matchedMaster: number;
+  matchedIndex: number;
+  matchedFixture: number;
 }
 
 type ProcStatus = "idle" | "processing" | "done" | "error";
@@ -21,31 +24,45 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
-  const [targetFile, setTargetFile]     = useState<File | null>(null);
-  const [spacemanFile, setSpacemanFile] = useState<File | null>(null);
-  const [indexFile, setIndexFile]       = useState<File | null>(null);
-  const [qryFile, setQryFile]           = useState<File | null>(null);
+  const [targetFile,  setTargetFile]  = useState<File | null>(null); // 1 Template
+  const [qryFile,     setQryFile]     = useState<File | null>(null); // 2 QRY (primary)
+  const [spacemanFile, setSpacemanFile] = useState<File | null>(null); // 3 DATA_SPACEMAN
+  const [masterFile,  setMasterFile]  = useState<File | null>(null); // 4 Master Assortment
+  const [indexFile,   setIndexFile]   = useState<File | null>(null); // 5 INDEX
+  const [fixtureFile, setFixtureFile] = useState<File | null>(null); // 6 Fixture Index
 
-  const [status, setStatus]       = useState<ProcStatus>("idle");
+  const [status,    setStatus]    = useState<ProcStatus>("idle");
   const [statusMsg, setStatusMsg] = useState("");
-  const [pct, setPct]             = useState(0);
-  const [stats, setStats]         = useState<Stats | null>(null);
-  const [errorMsg, setErrorMsg]   = useState("");
+  const [pct,       setPct]       = useState(0);
+  const [stats,     setStats]     = useState<Stats | null>(null);
+  const [errorMsg,  setErrorMsg]  = useState("");
 
-  const outputRef = useRef<ArrayBuffer | null>(null);
-  const workerRef = useRef<Worker | null>(null);
+  const outputRef  = useRef<ArrayBuffer | null>(null);
+  const workerRef  = useRef<Worker | null>(null);
 
-  // Terminate worker on unmount
   useEffect(() => () => { workerRef.current?.terminate(); }, []);
 
   const canProcess =
-    !!targetFile && !!spacemanFile && !!indexFile && !!qryFile &&
+    !!targetFile && !!qryFile && !!spacemanFile &&
+    !!masterFile && !!indexFile && !!fixtureFile &&
     status !== "processing";
+
+  // ── Reset ─────────────────────────────────────────────────────────────────
+
+  const handleReset = () => {
+    workerRef.current?.terminate();
+    workerRef.current = null;
+    setTargetFile(null); setQryFile(null); setSpacemanFile(null);
+    setMasterFile(null); setIndexFile(null); setFixtureFile(null);
+    setStatus("idle"); setStatusMsg(""); setPct(0);
+    setStats(null); setErrorMsg("");
+    outputRef.current = null;
+  };
 
   // ── Process ───────────────────────────────────────────────────────────────
 
   const handleProcess = async () => {
-    if (!targetFile || !spacemanFile || !indexFile || !qryFile) return;
+    if (!targetFile || !qryFile || !spacemanFile || !masterFile || !indexFile || !fixtureFile) return;
 
     setStatus("processing");
     setStatusMsg("กำลังโหลดไฟล์...");
@@ -54,15 +71,15 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     setStats(null);
     outputRef.current = null;
 
-    // Read all files to ArrayBuffers on main thread (fast I/O, not CPU)
-    const [targetBuf, spacemanBuf, indexBuf, qryBuf] = await Promise.all([
+    const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf] = await Promise.all([
       targetFile.arrayBuffer(),
-      spacemanFile.arrayBuffer(),
-      indexFile.arrayBuffer(),
       qryFile.arrayBuffer(),
+      spacemanFile.arrayBuffer(),
+      masterFile.arrayBuffer(),
+      indexFile.arrayBuffer(),
+      fixtureFile.arrayBuffer(),
     ]);
 
-    // Terminate any previous worker
     workerRef.current?.terminate();
 
     const worker = new Worker(
@@ -101,12 +118,13 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
       workerRef.current = null;
     };
 
-    // Transfer all buffers to worker (zero-copy)
     worker.postMessage(
-      { type: "run", targetBuf, spacemanBuf, indexBuf, qryBuf, exceptionConfig },
-      [targetBuf, spacemanBuf, indexBuf, qryBuf]
+      { type: "run", targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf, exceptionConfig },
+      [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf]
     );
   };
+
+  // ── Download ──────────────────────────────────────────────────────────────
 
   const handleDownload = () => {
     if (!outputRef.current || !targetFile) return;
@@ -123,15 +141,38 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     URL.revokeObjectURL(url);
   };
 
-  const handleReset = () => {
-    workerRef.current?.terminate();
-    workerRef.current = null;
-    setTargetFile(null); setSpacemanFile(null); setIndexFile(null); setQryFile(null);
-    setStatus("idle"); setStatusMsg(""); setPct(0); setStats(null); setErrorMsg("");
-    outputRef.current = null;
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const badge = (n: number, label: string, color: "pink" | "emerald" | "slate") => {
+    const cls: Record<typeof color, string> = {
+      pink:    "bg-pink-50 text-[#E91E8C] border border-pink-100",
+      emerald: "bg-emerald-50 text-emerald-700 border border-emerald-100",
+      slate:   "bg-slate-50 text-slate-500 border border-slate-200",
+    };
+    return (
+      <div className={`rounded-lg px-3 py-2 ${cls[color]}`}>
+        <div className="text-lg font-bold tabular-nums">{n.toLocaleString()}</div>
+        <div className="text-[10px] font-medium mt-0.5 leading-tight">{label}</div>
+      </div>
+    );
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const dropCard = (
+    num: number, title: string, hint: string,
+    file: File | null, setter: (f: File | null) => void, accept: string
+  ) => (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="w-6 h-6 rounded-full bg-[#E91E8C] text-white text-xs font-bold flex items-center justify-center flex-shrink-0">{num}</span>
+        <p className="text-sm font-semibold text-slate-700">{title}</p>
+      </div>
+      <DropZone label={title} accept={accept}
+        files={file ? [file] : []}
+        onFiles={(fs) => { setter(fs[0] ?? null); if (status !== "idle") handleReset(); }}
+        hint={hint} />
+    </div>
+  );
+
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
 
@@ -143,60 +184,19 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
         <div>
           <h2 className="text-lg font-bold text-slate-800">TO BE Mini New&amp;Renovate Report Filler</h2>
           <p className="text-sm text-slate-500 mt-1">
-            อัปโหลด 4 ไฟล์ตามลำดับ แล้วกด Build — ประมวลผลบน Background Thread (UI ไม่กระตุก)
+            อัปโหลด 6 ไฟล์ตามลำดับ แล้วกด Build — ประมวลผลบน Background Thread (UI ไม่กระตุก)
           </p>
         </div>
       </div>
 
       {/* Upload zones */}
       <div className="space-y-3">
-        {/* 1 — Template */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-6 h-6 rounded-full bg-[#E91E8C] text-white text-xs font-bold flex items-center justify-center flex-shrink-0">1</span>
-            <p className="text-sm font-semibold text-slate-700">Template New&amp;Renovate Report.xlsx</p>
-          </div>
-          <DropZone label="Template_New&Renovate_Report.xlsx" accept=".xlsx"
-            files={targetFile ? [targetFile] : []}
-            onFiles={(fs) => { setTargetFile(fs[0] ?? null); if (status !== "idle") handleReset(); }}
-            hint="ไฟล์ที่ต้องการเติมข้อมูล — มี sheet New&Exsiting For Oder / New for Link_IM" />
-        </div>
-
-        {/* 2 — DATA_SPACEMAN */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-6 h-6 rounded-full bg-[#E91E8C] text-white text-xs font-bold flex items-center justify-center flex-shrink-0">2</span>
-            <p className="text-sm font-semibold text-slate-700">DATA_SPACEMAN</p>
-          </div>
-          <DropZone label="DATA_SPACEMAN.xlsx / .xlsb" accept=".xlsx,.xlsb,.xls"
-            files={spacemanFile ? [spacemanFile] : []}
-            onFiles={(fs) => { setSpacemanFile(fs[0] ?? null); if (status !== "idle") handleReset(); }}
-            hint="ไฟล์เดียวกับที่ใช้ใน Menu DATA_SPACEMAN — ต้องมี sheet QRY_Product_by_POG" />
-        </div>
-
-        {/* 3 — INDEX */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-6 h-6 rounded-full bg-[#E91E8C] text-white text-xs font-bold flex items-center justify-center flex-shrink-0">3</span>
-            <p className="text-sm font-semibold text-slate-700">FILE INDEX</p>
-          </div>
-          <DropZone label="INDEX.xlsx" accept=".xlsx,.xls"
-            files={indexFile ? [indexFile] : []}
-            onFiles={(fs) => { setIndexFile(fs[0] ?? null); if (status !== "idle") handleReset(); }}
-            hint="Status · Store — join by PLANOGRAM" />
-        </div>
-
-        {/* 4 — QRY */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-6 h-6 rounded-full bg-[#E91E8C] text-white text-xs font-bold flex items-center justify-center flex-shrink-0">4</span>
-            <p className="text-sm font-semibold text-slate-700">QRY_Product by POG by Position</p>
-          </div>
-          <DropZone label="QRY_Product_by_POG_by_Position.xlsx" accept=".xlsx,.xls"
-            files={qryFile ? [qryFile] : []}
-            onFiles={(fs) => { setQryFile(fs[0] ?? null); if (status !== "idle") handleReset(); }}
-            hint="SEGMENT · LOCATION_ID · TOTAL_UNITS — join by BARCODE" />
-        </div>
+        {dropCard(1, "Template New&Renovate Report.xlsx", "ไฟล์ output — มี sheet New&Exsiting For Oder / New for Link_IM", targetFile,  setTargetFile,  ".xlsx")}
+        {dropCard(2, "QRY_Product by POG by Position",   "ข้อมูลตั้งต้น — BARCODE · SEGMENT · LOCATION_ID · TOTAL_UNITS",           qryFile,     setQryFile,     ".xlsx,.xls")}
+        {dropCard(3, "DATA_SPACEMAN",                    "lookup DIVISION / PF03 / PF04 / PLANOGRAM — ต้องมี sheet QRY_Product_by_POG", spacemanFile, setSpacemanFile, ".xlsx,.xlsb,.xls")}
+        {dropCard(4, "Master Assortment Orderable",      "lookup SALE PACK CODE (BAR_SINGLE) · Pack Size (SKU_PACK) · Extra info",   masterFile,  setMasterFile,  ".xlsx,.xls")}
+        {dropCard(5, "FILE INDEX",                       "lookup Status · Store — join by PLANOGRAM",                                  indexFile,   setIndexFile,   ".xlsx,.xls")}
+        {dropCard(6, "Fixture Index",                    "lookup New Fixture (Code Fixture) — join by SEG|POG · row 1 = REMARK",      fixtureFile, setFixtureFile, ".xlsx,.xls")}
       </div>
 
       {/* Action */}
@@ -242,26 +242,23 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
       {/* Results + Download */}
       {status === "done" && stats && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-              <p className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">Sheet 1 — New&amp;Exsiting</p>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-slate-600">แถวที่เขียน (จาก QRY)</span><span className="font-semibold">{stats.sheet1.written.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-emerald-600">Matched DATA_SPACEMAN</span><span className="font-semibold text-emerald-600">{stats.sheet1.matchedSpaceman.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-emerald-600">Matched INDEX</span><span className="font-semibold text-emerald-600">{stats.sheet1.matchedIndex.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">ไม่พบใน DATA_SPACEMAN</span><span className="font-semibold text-slate-400">{(stats.sheet1.written - stats.sheet1.matchedSpaceman).toLocaleString()}</span></div>
-                <div className="pt-2 border-t border-slate-100 text-xs text-slate-400">
-                  Config Rules active: {exceptionConfig.filter(e => e.status === "active").length} rules
-                </div>
-              </div>
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+            <p className="text-xs font-bold text-slate-500 mb-4 uppercase tracking-wide">ผลการ Lookup</p>
+            <div className="grid grid-cols-5 gap-3">
+              {badge(stats.total,           "QRY rows (ตั้งต้น)",            "pink")}
+              {badge(stats.matchedSpaceman, "Matched DATA_SPACEMAN",          "emerald")}
+              {badge(stats.matchedMaster,   "Matched Master Assortment",      "emerald")}
+              {badge(stats.matchedIndex,    "Matched INDEX",                  "emerald")}
+              {badge(stats.matchedFixture,  "Matched Fixture Index",          "emerald")}
             </div>
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-              <p className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">Sheet 2 — New for Link_IM</p>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-slate-600">แถวที่เขียน (จาก QRY)</span><span className="font-semibold">{stats.sheet2.written.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-emerald-600">Matched DATA_SPACEMAN</span><span className="font-semibold text-emerald-600">{stats.sheet2.matched.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">ไม่พบใน DATA_SPACEMAN</span><span className="font-semibold text-slate-400">{(stats.sheet2.written - stats.sheet2.matched).toLocaleString()}</span></div>
-              </div>
+            <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs text-slate-400">
+              <span>ไม่พบใน DATA_SPACEMAN: {(stats.total - stats.matchedSpaceman).toLocaleString()}</span>
+              <span>ไม่พบใน Master Assortment: {(stats.total - stats.matchedMaster).toLocaleString()}</span>
+              <span>ไม่พบใน INDEX: {(stats.total - stats.matchedIndex).toLocaleString()}</span>
+              <span>ไม่พบใน Fixture Index: {(stats.total - stats.matchedFixture).toLocaleString()}</span>
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              Config Rules active: {exceptionConfig.filter(e => e.status === "active").length} rules
             </div>
           </div>
 
