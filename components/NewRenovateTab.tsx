@@ -8,8 +8,8 @@ import type { ExceptionConfig } from "@/lib/types";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Stats {
-  sheet1: { processed: number; matched: number };
-  sheet2: { processed: number; matched: number };
+  sheet1: { written: number; matchedSpaceman: number; matchedIndex: number };
+  sheet2: { written: number; matched: number };
 }
 
 type ProcStatus = "idle" | "processing" | "done" | "error";
@@ -246,9 +246,10 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
               <p className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">Sheet 1 — New&amp;Exsiting</p>
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-slate-600">แถวที่ประมวลผล</span><span className="font-semibold">{stats.sheet1.processed.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-emerald-600">Matched</span><span className="font-semibold text-emerald-600">{stats.sheet1.matched.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">ไม่พบ barcode</span><span className="font-semibold text-slate-400">{(stats.sheet1.processed - stats.sheet1.matched).toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-slate-600">แถวที่เขียน (จาก QRY)</span><span className="font-semibold">{stats.sheet1.written.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-emerald-600">Matched DATA_SPACEMAN</span><span className="font-semibold text-emerald-600">{stats.sheet1.matchedSpaceman.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-emerald-600">Matched INDEX</span><span className="font-semibold text-emerald-600">{stats.sheet1.matchedIndex.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">ไม่พบใน DATA_SPACEMAN</span><span className="font-semibold text-slate-400">{(stats.sheet1.written - stats.sheet1.matchedSpaceman).toLocaleString()}</span></div>
                 <div className="pt-2 border-t border-slate-100 text-xs text-slate-400">
                   Config Rules active: {exceptionConfig.filter(e => e.status === "active").length} rules
                 </div>
@@ -257,9 +258,9 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
             <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
               <p className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">Sheet 2 — New for Link_IM</p>
               <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-slate-600">แถวที่ประมวลผล</span><span className="font-semibold">{stats.sheet2.processed.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-emerald-600">Matched</span><span className="font-semibold text-emerald-600">{stats.sheet2.matched.toLocaleString()}</span></div>
-                <div className="flex justify-between"><span className="text-slate-400">ไม่พบ barcode</span><span className="font-semibold text-slate-400">{(stats.sheet2.processed - stats.sheet2.matched).toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-slate-600">แถวที่เขียน (จาก QRY)</span><span className="font-semibold">{stats.sheet2.written.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-emerald-600">Matched DATA_SPACEMAN</span><span className="font-semibold text-emerald-600">{stats.sheet2.matched.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">ไม่พบใน DATA_SPACEMAN</span><span className="font-semibold text-slate-400">{(stats.sheet2.written - stats.sheet2.matched).toLocaleString()}</span></div>
               </div>
             </div>
           </div>

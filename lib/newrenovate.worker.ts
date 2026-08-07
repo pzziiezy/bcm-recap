@@ -1,13 +1,16 @@
 /**
- * NewRenovate worker — patches cell values directly inside the template XLSX ZIP.
- * Preserves all original formatting: styles, colours, merged cells, column widths,
- * freeze panes, conditional formatting, etc.
+ * NewRenovate worker — ZIP-patch approach (preserves all template formatting).
  *
- * Flow:
- *  1. XLSX.read source files (DATA_SPACEMAN, INDEX, QRY) → lookup maps
- *  2. XLSX.read target template (no styles) → detect header cols + read barcodes
- *  3. Build row→column patch map
- *  4. unzipSync(targetBuf) → patch sheet XMLs → append SST strings → zipSync
+ * Data flow (QRY-driven):
+ *   QRY_Product_by_POG_by_Position  ← primary source of rows
+ *     │  BARCODE → lookup DATA_SPACEMAN → DIVISION / PF03 / PF04 / PLANOGRAM / CAT / SUB / DESC_C
+ *     │  BARCODE → QRY row itself     → No.Bay (SEGMENT) / SEQ (LOCATION_ID) / SHELF STOCK (TOTAL_UNITS)
+ *     │  PLANOGRAM → lookup INDEX     → Status / Store
+ *     └─ Config Rules                 → % Ordering   (default 100%)
+ *        Net Capacity = SHELF STOCK × % Ordering
+ *
+ * Template is written via ZIP-patch: unzip → patch sheet XMLs → append SST → rezip.
+ * Nothing else in the XLSX (styles, workbook, rels, images …) is touched.
  */
 
 import * as XLSX from "xlsx";
@@ -31,8 +34,8 @@ type InMsg = {
 };
 
 interface Stats {
-  sheet1: { processed: number; matched: number };
-  sheet2: { processed: number; matched: number };
+  sheet1: { written: number; matchedSpaceman: number; matchedIndex: number };
+  sheet2: { written: number; matched: number };
 }
 
 interface SpacemanEntry {
@@ -45,7 +48,8 @@ interface SpacemanEntry {
   descC: string;
 }
 
-interface QryEntry {
+interface QryRow {
+  barcode: string;
   segment: string;
   locationId: string;
   totalUnits: string;
@@ -74,42 +78,29 @@ function normalizeBarcode(val: unknown): string {
 function getOrderingPct(cfg: ExceptionConfig[], cat: string, sub: string, descC: string): number {
   for (const rule of cfg) {
     if (rule.status === "inactive" || rule.status === "deleted") continue;
-    const catOk  = rule.category    === "ทั้งหมด" || rule.category    === cat;
-    const subOk  = rule.subcategory === "ทั้งหมด" || rule.subcategory === sub;
-    const descOk = rule.descC       === "ทั้งหมด" || rule.descC       === descC;
-    if (catOk && subOk && descOk) return Number(rule.percentage) / 100;
+    if ((rule.category    === "ทั้งหมด" || rule.category    === cat)  &&
+        (rule.subcategory === "ทั้งหมด" || rule.subcategory === sub)  &&
+        (rule.descC       === "ทั้งหมด" || rule.descC       === descC))
+      return Number(rule.percentage) / 100;
   }
   return 1.0;
 }
 
-function cellStrXlsx(ws: XLSX.WorkSheet, r: number, c: number): string {
-  const cell = ws[XLSX.utils.encode_cell({ r, c })];
-  return cell?.v != null ? String(cell.v).trim() : "";
-}
-
-// ─── XML / ZIP helpers (same pattern as download.worker.ts) ───────────────────
+// ─── XML / ZIP helpers ────────────────────────────────────────────────────────
 
 function encodeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
 function decodeXml(s: string): string {
-  return s
-    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  return s.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
+          .replace(/&quot;/g,'"').replace(/&apos;/g,"'");
 }
 
 function colLetter(idx: number): string {
-  let s = "";
-  let n = idx + 1;
-  while (n > 0) {
-    const r = (n - 1) % 26;
-    s = String.fromCharCode(65 + r) + s;
-    n = Math.floor((n - 1) / 26);
-  }
+  let s = "", n = idx + 1;
+  while (n > 0) { const r = (n-1)%26; s = String.fromCharCode(65+r)+s; n = Math.floor((n-1)/26); }
   return s;
 }
-
 function colLetterIdx(letters: string): number {
   let n = 0;
   for (let i = 0; i < letters.length; i++) n = n * 26 + letters.charCodeAt(i) - 64;
@@ -129,27 +120,21 @@ function parseSST(xml: string): string[] {
   }
   return out;
 }
-
 function appendSST(xml: string, newStrings: string[]): string {
   if (!newStrings.length) return xml;
   const newSis = newStrings.map(s => `<si><t>${encodeXml(s)}</t></si>`).join("");
   const at = xml.lastIndexOf("</sst>");
-  let result = xml.slice(0, at) + newSis + xml.slice(at);
-  result = result
-    .replace(/\bcount="(\d+)"/, (_, n) => `count="${+n + newStrings.length}"`)
-    .replace(/\buniqueCount="(\d+)"/, (_, n) => `uniqueCount="${+n + newStrings.length}"`);
-  return result;
+  let r = xml.slice(0, at) + newSis + xml.slice(at);
+  r = r.replace(/\bcount="(\d+)"/,       (_, n) => `count="${+n + newStrings.length}"`)
+       .replace(/\buniqueCount="(\d+)"/,  (_, n) => `uniqueCount="${+n + newStrings.length}"`);
+  return r;
 }
-
 function buildSST(strings: string[]): string {
   const n = strings.length;
-  return (
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"` +
     ` count="${n}" uniqueCount="${n}">` +
-    strings.map(s => `<si><t>${encodeXml(s)}</t></si>`).join("") +
-    `</sst>`
-  );
+    strings.map(s => `<si><t>${encodeXml(s)}</t></si>`).join("") + `</sst>`;
 }
 
 function findSheetPath(wbXml: string, relsXml: string, name: string): string | null {
@@ -166,14 +151,6 @@ function findSheetPath(wbXml: string, relsXml: string, name: string): string | n
   return `xl/worksheets/${t}`;
 }
 
-function getSheetNamesFromXml(wbXml: string): string[] {
-  const names: string[] = [];
-  const pat = /<sheet\b[^>]*name="([^"]*)"[^>]*/g;
-  let m: RegExpExecArray | null;
-  while ((m = pat.exec(wbXml)) !== null) names.push(decodeXml(m[1]));
-  return names;
-}
-
 // ─── Cell patching ────────────────────────────────────────────────────────────
 
 function buildCellXml(ref: string, patch: CellPatch, getSsIdx: (v: string) => number, sAttr: string): string {
@@ -185,16 +162,12 @@ function buildCellXml(ref: string, patch: CellPatch, getSsIdx: (v: string) => nu
 function patchCellInRow(inner: string, ref: string, ci: number, patch: CellPatch, getSsIdx: (v: string) => number): string {
   const pat = new RegExp(`<c r="${ref}"([^>]*?)(?:\\/>|>[\\s\\S]*?<\\/c>)`);
   const m = pat.exec(inner);
-  const sM = m ? /\bs="(\d+)"/.exec(m[1]) : null;
-  const sAttr = sM ? ` s="${sM[1]}"` : "";
+  const sAttr = m ? (/\bs="(\d+)"/.exec(m[1]) ? ` s="${/\bs="(\d+)"/.exec(m[1])![1]}"` : "") : "";
   const newCell = buildCellXml(ref, patch, getSsIdx, sAttr);
-
   if (m) return inner.slice(0, m.index) + newCell + inner.slice(m.index + m[0].length);
-
   // Insert in column order
   const scanPat = /<c\s+r="([A-Z]+)\d+"/g;
-  let at = -1;
-  let im: RegExpExecArray | null;
+  let at = -1, im: RegExpExecArray | null;
   while ((im = scanPat.exec(inner)) !== null) {
     if (colLetterIdx(im[1]) > ci) { at = im.index; break; }
   }
@@ -204,6 +177,11 @@ function patchCellInRow(inner: string, ref: string, ci: number, patch: CellPatch
 /**
  * Apply rowPatches to sheetXml.
  * rowPatches: Map<rowNum (1-based), Map<colIdx (0-based), CellPatch>>
+ *
+ * Handles three cases:
+ *  1. Self-closing rows (<row r="N" .../>)  — expand and inject cells
+ *  2. Open/close rows (<row r="N" ...>...</row>) — patch individual cells
+ *  3. Missing rows — insert new <row> elements into <sheetData>
  */
 function patchSheetXml(
   sheetXml: string,
@@ -219,34 +197,60 @@ function patchSheetXml(
     return i;
   };
 
-  // Pass 1: expand self-closing rows that need patching
+  const patchedRows = new Set<number>();
+
+  // Pass 1: self-closing rows
   let result = sheetXml.replace(/<row\b([^>]*?)\/>/g, (full, attrs) => {
     const rm = /\br="(\d+)"/.exec(attrs);
     if (!rm) return full;
-    const patches = rowPatches.get(+rm[1]);
-    if (!patches) return full;
     const rowNum = +rm[1];
+    const patches = rowPatches.get(rowNum);
+    if (!patches) return full;
+    patchedRows.add(rowNum);
     let cells = "";
-    for (const [ci, patch] of [...patches.entries()].sort((a, b) => a[0] - b[0])) {
-      const ref = `${colLetter(ci)}${rowNum}`;
-      cells += buildCellXml(ref, patch, getSsIdx, "");
-    }
+    for (const [ci, patch] of [...patches.entries()].sort((a, b) => a[0] - b[0]))
+      cells += buildCellXml(`${colLetter(ci)}${rowNum}`, patch, getSsIdx, "");
     return `<row${attrs}>${cells}</row>`;
   });
 
-  // Pass 2: patch open/close rows
+  // Pass 2: open/close rows
   result = result.replace(/(<row\b[^>]*>)([\s\S]*?)(<\/row>)/g, (full, open, inner, close) => {
     const rm = /\br="(\d+)"/.exec(open);
     if (!rm) return full;
-    const patches = rowPatches.get(+rm[1]);
-    if (!patches) return full;
     const rowNum = +rm[1];
+    const patches = rowPatches.get(rowNum);
+    if (!patches) return full;
+    patchedRows.add(rowNum);
     let cells = inner;
-    for (const [ci, patch] of patches) {
+    for (const [ci, patch] of patches)
       cells = patchCellInRow(cells, `${colLetter(ci)}${rowNum}`, ci, patch, getSsIdx);
-    }
     return open + cells + close;
   });
+
+  // Pass 3: insert rows that have no XML element yet
+  const newRowXml = [...rowPatches.entries()]
+    .filter(([rowNum]) => !patchedRows.has(rowNum))
+    .sort((a, b) => a[0] - b[0])
+    .map(([rowNum, patches]) => {
+      let cells = "";
+      for (const [ci, patch] of [...patches.entries()].sort((a, b) => a[0] - b[0]))
+        cells += buildCellXml(`${colLetter(ci)}${rowNum}`, patch, getSsIdx, "");
+      return `<row r="${rowNum}">${cells}</row>`;
+    }).join("");
+
+  if (newRowXml) {
+    const sdClose = result.lastIndexOf("</sheetData>");
+    const sdSelf  = result.indexOf("<sheetData/>");
+    if (sdClose >= 0) {
+      result = result.slice(0, sdClose) + newRowXml + result.slice(sdClose);
+    } else if (sdSelf >= 0) {
+      result = result.slice(0, sdSelf) + `<sheetData>${newRowXml}</sheetData>` + result.slice(sdSelf + 12);
+    } else {
+      const wsEnd = result.lastIndexOf("</worksheet>");
+      if (wsEnd >= 0)
+        result = result.slice(0, wsEnd) + `<sheetData>${newRowXml}</sheetData>` + result.slice(wsEnd);
+    }
+  }
 
   return { sheetXml: result, newStrings: allStrings.slice(sstStrings.length) };
 }
@@ -258,7 +262,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
   const { targetBuf, spacemanBuf, indexBuf, qryBuf, exceptionConfig } = e.data;
 
   try {
-    // ── 1. Parse DATA_SPACEMAN ────────────────────────────────────────────────
+    // ── 1. Parse DATA_SPACEMAN → map by BARCODE ───────────────────────────────
     progress(5, "อ่านไฟล์ DATA_SPACEMAN...");
 
     const spacemanWb = XLSX.read(spacemanBuf, { type: "array", cellText: false, cellHTML: false, cellNF: false, cellDates: false });
@@ -267,7 +271,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     const sRange = XLSX.utils.decode_range(spacemanWs["!ref"] || "A1");
     const hdrs: string[] = [];
-    for (let c = 0; c <= sRange.e.c; c++) hdrs.push(cellStrXlsx(spacemanWs, 0, c));
+    for (let c = 0; c <= sRange.e.c; c++) {
+      const cell = spacemanWs[XLSX.utils.encode_cell({ r: 0, c })];
+      hdrs.push(cell?.v != null ? String(cell.v).trim() : "");
+    }
 
     const upcIdx   = hdrs.indexOf("UPC");
     const pf02Idx  = hdrs.indexOf("PLANOFOLDER02");
@@ -278,19 +285,24 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const subIdx   = hdrs.indexOf("SUBCATEGORY");
     const descCIdx = hdrs.indexOf("DESC_C");
 
+    const getCell = (r: number, c: number) => {
+      const cell = spacemanWs[XLSX.utils.encode_cell({ r, c })];
+      return cell?.v != null ? String(cell.v).trim() : "";
+    };
+
     const spacemanMap = new Map<string, SpacemanEntry>();
     for (let r = 1; r <= sRange.e.r; r++) {
-      const upc = upcIdx >= 0 ? normalizeBarcode(cellStrXlsx(spacemanWs, r, upcIdx)) : "";
+      const upc = upcIdx >= 0 ? normalizeBarcode(getCell(r, upcIdx)) : "";
       if (!upc) continue;
       if (!spacemanMap.has(upc)) {
         spacemanMap.set(upc, {
-          planofolder02: pf02Idx  >= 0 ? cellStrXlsx(spacemanWs, r, pf02Idx)  : "",
-          planofolder03: pf03Idx  >= 0 ? cellStrXlsx(spacemanWs, r, pf03Idx)  : "",
-          planofolder04: pf04Idx  >= 0 ? cellStrXlsx(spacemanWs, r, pf04Idx)  : "",
-          planogram:     cellStrXlsx(spacemanWs, r, plogIdx),
-          category:      catIdx   >= 0 ? cellStrXlsx(spacemanWs, r, catIdx)   : "",
-          subcategory:   subIdx   >= 0 ? cellStrXlsx(spacemanWs, r, subIdx)   : "",
-          descC:         descCIdx >= 0 ? cellStrXlsx(spacemanWs, r, descCIdx) : "",
+          planofolder02: pf02Idx  >= 0 ? getCell(r, pf02Idx)  : "",
+          planofolder03: pf03Idx  >= 0 ? getCell(r, pf03Idx)  : "",
+          planofolder04: pf04Idx  >= 0 ? getCell(r, pf04Idx)  : "",
+          planogram:     getCell(r, plogIdx),
+          category:      catIdx   >= 0 ? getCell(r, catIdx)   : "",
+          subcategory:   subIdx   >= 0 ? getCell(r, subIdx)   : "",
+          descC:         descCIdx >= 0 ? getCell(r, descCIdx) : "",
         });
       }
       if (r % 10000 === 0)
@@ -298,7 +310,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
     progress(30, `DATA_SPACEMAN: ${spacemanMap.size.toLocaleString()} barcodes`);
 
-    // ── 2. Parse INDEX ────────────────────────────────────────────────────────
+    // ── 2. Parse INDEX → map by PLANOGRAM ────────────────────────────────────
     progress(32, "อ่านไฟล์ INDEX...");
 
     const indexWb = XLSX.read(indexBuf, { type: "array" });
@@ -313,203 +325,184 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (!plog) continue;
       if (!indexMap.has(plog)) {
         indexMap.set(plog, {
-          status: String(row["Status"] ?? row["STATUS"] ?? row["สถานะ"] ?? ""),
-          store:  String(row["Store"]  ?? row["STORE"]  ?? row["สาขา"]  ?? ""),
+          status: String(row["Status"]  ?? row["STATUS"] ?? row["สถานะ"] ?? ""),
+          store:  String(row["Store"]   ?? row["STORE"]  ?? row["สาขา"]  ?? ""),
         });
       }
     }
     progress(42, `INDEX: ${indexMap.size.toLocaleString()} planograms`);
 
-    // ── 3. Parse QRY_Product_by_POG_by_Position ───────────────────────────────
+    // ── 3. Parse QRY_Product_by_POG_by_Position → ordered list of rows ───────
     progress(44, "อ่านไฟล์ QRY_Product_by_POG_by_Position...");
 
     const qryWb = XLSX.read(qryBuf, { type: "array" });
     const qryWs = qryWb.Sheets[qryWb.SheetNames[0]];
     if (!qryWs) throw new Error("ไม่พบ sheet ใน QRY_Product_by_POG_by_Position");
 
-    type QryRow = Record<string, unknown>;
-    const qryRows = XLSX.utils.sheet_to_json<QryRow>(qryWs, { defval: "" });
-    const qryMap = new Map<string, QryEntry>();
-    for (const row of qryRows) {
+    type QrySourceRow = Record<string, unknown>;
+    const qrySourceRows = XLSX.utils.sheet_to_json<QrySourceRow>(qryWs, { defval: "" });
+
+    const qryRows: QryRow[] = [];
+    for (const row of qrySourceRows) {
       const bc = normalizeBarcode(row["BARCODE"] ?? row["UPC"] ?? row["Barcode"]);
       if (!bc) continue;
-      if (!qryMap.has(bc)) {
-        qryMap.set(bc, {
-          segment:    String(row["SEGMENT"]     ?? ""),
-          locationId: String(row["LOCATION_ID"] ?? ""),
-          totalUnits: String(row["TOTAL_UNITS"] ?? ""),
-        });
-      }
+      qryRows.push({
+        barcode:    bc,
+        segment:    String(row["SEGMENT"]     ?? ""),
+        locationId: String(row["LOCATION_ID"] ?? ""),
+        totalUnits: String(row["TOTAL_UNITS"] ?? ""),
+      });
     }
-    progress(55, `QRY Position: ${qryMap.size.toLocaleString()} barcodes`);
+    progress(55, `QRY: ${qryRows.length.toLocaleString()} rows → เป็นแหล่งข้อมูลตั้งต้น`);
 
-    // ── 4. Parse target template (XLSX.read — for header/barcode detection only) ──
+    // ── 4. Detect column positions from template (header row 6 = index 5) ────
     progress(57, "อ่านไฟล์ Template (detect headers)...");
 
-    // NOTE: XLSX.read does not detach the ArrayBuffer, so we can still use
-    // targetBuf later in unzipSync for the format-preserving ZIP patch.
+    // XLSX.read does NOT detach ArrayBuffer — targetBuf is still usable after this
     const targetWb = XLSX.read(targetBuf, { type: "array", cellText: false, cellHTML: false, cellNF: false, cellDates: false });
-
-    // ── 5. Build patches for Sheet 1 ─────────────────────────────────────────
-    progress(60, "สร้าง patch data Sheet 1...");
 
     const s1Name = targetWb.SheetNames.find(n => n.trimStart().startsWith("New&Exsiting For Oder"));
     if (!s1Name) throw new Error("ไม่พบ sheet ที่ขึ้นต้นด้วย 'New&Exsiting For Oder'");
     const ws1 = targetWb.Sheets[s1Name];
+    const ref1 = XLSX.utils.decode_range(ws1["!ref"] ?? "A1:V7");
 
-    const ref1 = XLSX.utils.decode_range(ws1["!ref"] ?? "A1:V7998");
-    const lastRow1 = Math.min(ref1.e.r + 1, 7998);
-
-    // Detect column positions from row 6 (index 5)
     const colMap1 = new Map<string, number>();
     for (let c = 0; c <= ref1.e.c; c++) {
-      const h = cellStrXlsx(ws1, 5, c);
+      const cell = ws1[XLSX.utils.encode_cell({ r: 5, c })];
+      const h = cell?.v != null ? String(cell.v).trim() : "";
       if (h) colMap1.set(h, c);
     }
 
-    const c1 = (name: string, fb: number) => colMap1.get(name) ?? fb;
-    const findCol = (needle: string) => {
+    const c1  = (name: string, fb: number) => colMap1.get(name) ?? fb;
+    const fc1 = (needle: string) => {
       for (const [k, v] of colMap1)
         if (k.toLowerCase().includes(needle.toLowerCase())) return v;
       return undefined;
     };
 
-    const BARCODE_COL    = c1("BARCODE", 5);
-    const DIVISION_COL   = c1("DIVISION", 1);
-    const PF03_COL       = colMap1.get("PLANOFOLDER03") ?? 2;
-    const PF04_COL       = colMap1.get("PLANOFOLDER04") ?? 3;
-    const STATUS_COL     = findCol("Status");
-    const STORE_COL      = findCol("Store");
-    const FIXTYPE_COL    = findCol("Fixture Type");
-    const W_COL          = findCol(" W") ?? findCol("W");
-    const H_COL          = findCol(" H") ?? findCol("H");
-    const D_COL          = findCol(" D") ?? findCol("D");
-    const NEWFIXTURE_COL = findCol("New Fixture");
-    const NOBAY_COL      = findCol("No.Bay");
-    const SEQ_COL        = findCol("SEQ");
-    const SHELFSTOCK_COL = findCol("SHELF STOCK") ?? c1("SHELF STOCK FOR ORDER (Piece)", 19);
-    const PCT_COL        = findCol("% Ordering") ?? 20;
-    const NETCAP_COL     = findCol("Net Capacity") ?? 21;
-
-    // Map<rowNum (1-based), Map<colIdx, CellPatch>>
-    const s1Patches = new Map<number, Map<number, CellPatch>>();
-
-    let s1Processed = 0, s1Matched = 0;
-
-    for (let row1 = 7; row1 <= lastRow1; row1++) {
-      const r = row1 - 1;
-      const isSpecialRow = row1 <= 8;
-      const bc = normalizeBarcode(ws1[XLSX.utils.encode_cell({ r, c: BARCODE_COL })]?.v);
-
-      const rowCols = new Map<number, CellPatch>();
-
-      if (!isSpecialRow && bc) {
-        s1Processed++;
-        const spaceman = spacemanMap.get(bc);
-        const qry      = qryMap.get(bc);
-        const planogram = spaceman?.planogram ?? "";
-        if (spaceman || qry) s1Matched++;
-
-        const setS = (col: number | undefined, v: string) => {
-          if (col !== undefined && v) rowCols.set(col, { t: "s", v });
-        };
-        const setN = (col: number | undefined, v: unknown) => {
-          if (col === undefined || v == null || v === "") return;
-          const n = Number(v);
-          if (!isNaN(n)) rowCols.set(col, { t: "n", v: n });
-        };
-
-        setS(DIVISION_COL, spaceman?.planofolder02 ?? "");
-        setS(PF03_COL,     spaceman?.planofolder03 ?? "");
-        setS(PF04_COL,     spaceman?.planofolder04 ?? "");
-
-        const idx = planogram ? indexMap.get(planogram) : undefined;
-        setS(STATUS_COL, idx?.status ?? "");
-        setS(STORE_COL,  idx?.store  ?? "");
-
-        if (FIXTYPE_COL    !== undefined) rowCols.set(FIXTYPE_COL,    { t: "n", v: 0 });
-        if (W_COL          !== undefined) rowCols.set(W_COL,          { t: "n", v: 2 });
-        if (H_COL          !== undefined) rowCols.set(H_COL,          { t: "n", v: 1 });
-        if (D_COL          !== undefined) rowCols.set(D_COL,          { t: "n", v: 1 });
-        if (NEWFIXTURE_COL !== undefined) rowCols.set(NEWFIXTURE_COL, { t: "s", v: "" });
-
-        setS(NOBAY_COL, qry?.segment    ?? "");
-        setS(SEQ_COL,   qry?.locationId ?? "");
-        setN(SHELFSTOCK_COL, qry?.totalUnits);
-      }
-
-      if (!isSpecialRow || bc) {
-        const spaceman = bc ? spacemanMap.get(bc) : undefined;
-        const pct = getOrderingPct(exceptionConfig, spaceman?.category ?? "", spaceman?.subcategory ?? "", spaceman?.descC ?? "");
-        rowCols.set(PCT_COL, { t: "n", v: pct });
-        // Net Capacity as formula referencing the actual cells
-        const tRef = `${colLetter(SHELFSTOCK_COL)}${row1}`;
-        const uRef = `${colLetter(PCT_COL)}${row1}`;
-        rowCols.set(NETCAP_COL, { t: "f", f: `${tRef}*${uRef}`, v: 0 });
-      }
-
-      if (rowCols.size) s1Patches.set(row1, rowCols);
-    }
-
-    // ── 6. Build patches for Sheet 2 ─────────────────────────────────────────
-    progress(70, "สร้าง patch data Sheet 2...");
+    const BARCODE_COL    = c1("BARCODE", 5);       // F
+    const DIVISION_COL   = c1("DIVISION", 1);       // B
+    const PF03_COL       = colMap1.get("PLANOFOLDER03") ?? 2; // C
+    const PF04_COL       = colMap1.get("PLANOFOLDER04") ?? 3; // D
+    const STATUS_COL     = fc1("Status");
+    const STORE_COL      = fc1("Store");
+    const FIXTYPE_COL    = fc1("Fixture Type");
+    const W_COL          = fc1(" W") ?? fc1("W");
+    const H_COL          = fc1(" H") ?? fc1("H");
+    const D_COL          = fc1(" D") ?? fc1("D");
+    const NEWFIXTURE_COL = fc1("New Fixture");
+    const NOBAY_COL      = fc1("No.Bay");
+    const SEQ_COL        = fc1("SEQ");
+    const SHELFSTOCK_COL = fc1("SHELF STOCK") ?? c1("SHELF STOCK FOR ORDER (Piece)", 19); // T
+    const PCT_COL        = fc1("% Ordering") ?? 20; // U
+    const NETCAP_COL     = fc1("Net Capacity") ?? 21; // V
 
     const s2Name = targetWb.SheetNames.find(n => n.trim().startsWith("New for Link_IM"));
     if (!s2Name) throw new Error("ไม่พบ sheet ที่ขึ้นต้นด้วย 'New for Link_IM'");
     const ws2 = targetWb.Sheets[s2Name];
-
-    const ref2 = XLSX.utils.decode_range(ws2["!ref"] ?? "A1:H15522");
-    const lastRow2 = Math.min(ref2.e.r + 1, 15522);
+    const ref2 = XLSX.utils.decode_range(ws2["!ref"] ?? "A1:H7");
 
     const colMap2 = new Map<string, number>();
     for (let c = 0; c <= ref2.e.c; c++) {
-      const h = cellStrXlsx(ws2, 5, c);
+      const cell = ws2[XLSX.utils.encode_cell({ r: 5, c })];
+      const h = cell?.v != null ? String(cell.v).trim() : "";
       if (h) colMap2.set(h, c);
     }
-    const BC2_COL   = colMap2.get("BARCODE")    ?? 4;
-    const DIV2_COL  = colMap2.get("DIVISION")   ?? 1;
-    const DEPT2_COL = colMap2.get("DEPARTMENT") ?? 2;
+    const BARCODE2_COL = colMap2.get("BARCODE")    ?? 4; // E
+    const DIV2_COL     = colMap2.get("DIVISION")   ?? 1; // B
+    const DEPT2_COL    = colMap2.get("DEPARTMENT") ?? 2; // C
 
+    // ── 5. Build patches from QRY rows ────────────────────────────────────────
+    progress(62, `สร้าง patches จาก ${qryRows.length.toLocaleString()} QRY rows...`);
+
+    const DATA_START_ROW = 7; // Template header = row 6, data starts at row 7
+
+    const s1Patches = new Map<number, Map<number, CellPatch>>();
     const s2Patches = new Map<number, Map<number, CellPatch>>();
-    let s2Processed = 0, s2Matched = 0;
 
-    for (let row2 = 7; row2 <= lastRow2; row2++) {
-      s2Processed++;
-      const bc = normalizeBarcode(ws2[XLSX.utils.encode_cell({ r: row2 - 1, c: BC2_COL })]?.v);
-      const spaceman = bc ? spacemanMap.get(bc) : undefined;
-      if (spaceman) {
-        s2Matched++;
-        const rowCols = new Map<number, CellPatch>();
-        if (spaceman.planofolder02) rowCols.set(DIV2_COL,  { t: "s", v: spaceman.planofolder02 });
-        if (spaceman.planofolder03) rowCols.set(DEPT2_COL, { t: "s", v: spaceman.planofolder03 });
-        if (rowCols.size) s2Patches.set(row2, rowCols);
-      }
+    let matchedSpaceman = 0, matchedIndex = 0;
+
+    for (let i = 0; i < qryRows.length; i++) {
+      const qry     = qryRows[i];
+      const rowNum  = DATA_START_ROW + i; // 1-based row number in Excel
+      const spaceman = spacemanMap.get(qry.barcode);
+      const planogram = spaceman?.planogram ?? "";
+      const idxEntry  = planogram ? indexMap.get(planogram) : undefined;
+
+      if (spaceman) matchedSpaceman++;
+      if (idxEntry) matchedIndex++;
+
+      // ── Sheet 1 patches ───────────────────────────────────────────────────
+      const cols1 = new Map<number, CellPatch>();
+
+      // BARCODE (from QRY)
+      cols1.set(BARCODE_COL, { t: "s", v: qry.barcode });
+
+      // From DATA_SPACEMAN
+      if (spaceman?.planofolder02) cols1.set(DIVISION_COL, { t: "s", v: spaceman.planofolder02 });
+      if (spaceman?.planofolder03) cols1.set(PF03_COL,     { t: "s", v: spaceman.planofolder03 });
+      if (spaceman?.planofolder04) cols1.set(PF04_COL,     { t: "s", v: spaceman.planofolder04 });
+
+      // From INDEX (via PLANOGRAM)
+      if (STATUS_COL !== undefined && idxEntry?.status) cols1.set(STATUS_COL, { t: "s", v: idxEntry.status });
+      if (STORE_COL  !== undefined && idxEntry?.store)  cols1.set(STORE_COL,  { t: "s", v: idxEntry.store });
+
+      // Constants
+      if (FIXTYPE_COL    !== undefined) cols1.set(FIXTYPE_COL,    { t: "n", v: 0 });
+      if (W_COL          !== undefined) cols1.set(W_COL,          { t: "n", v: 2 });
+      if (H_COL          !== undefined) cols1.set(H_COL,          { t: "n", v: 1 });
+      if (D_COL          !== undefined) cols1.set(D_COL,          { t: "n", v: 1 });
+      if (NEWFIXTURE_COL !== undefined) cols1.set(NEWFIXTURE_COL, { t: "s", v: "" });
+
+      // From QRY
+      if (qry.segment)    cols1.set(NOBAY_COL!    ?? 999, { t: "s", v: qry.segment });
+      if (qry.locationId) cols1.set(SEQ_COL!      ?? 999, { t: "s", v: qry.locationId });
+      if (qry.totalUnits) cols1.set(SHELFSTOCK_COL, { t: "n", v: Number(qry.totalUnits) });
+
+      // % Ordering (Config Rules)
+      const pct = getOrderingPct(exceptionConfig, spaceman?.category ?? "", spaceman?.subcategory ?? "", spaceman?.descC ?? "");
+      cols1.set(PCT_COL, { t: "n", v: pct });
+
+      // Net Capacity = SHELF_STOCK × % Ordering (as formula)
+      const tRef = `${colLetter(SHELFSTOCK_COL)}${rowNum}`;
+      const uRef = `${colLetter(PCT_COL)}${rowNum}`;
+      cols1.set(NETCAP_COL, { t: "f", f: `${tRef}*${uRef}`, v: 0 });
+
+      // Remove sentinel 999 entries (columns not found)
+      cols1.delete(999);
+      s1Patches.set(rowNum, cols1);
+
+      // ── Sheet 2 patches ───────────────────────────────────────────────────
+      const cols2 = new Map<number, CellPatch>();
+      cols2.set(BARCODE2_COL, { t: "s", v: qry.barcode });
+      if (spaceman?.planofolder02) cols2.set(DIV2_COL,  { t: "s", v: spaceman.planofolder02 });
+      if (spaceman?.planofolder03) cols2.set(DEPT2_COL, { t: "s", v: spaceman.planofolder03 });
+      s2Patches.set(rowNum, cols2);
     }
 
-    // ── 7. ZIP-patch the template (format-preserving) ─────────────────────────
-    progress(78, "เปิด Template ZIP...");
+    // ── 6. ZIP-patch the template ─────────────────────────────────────────────
+    progress(75, "เปิด Template ZIP...");
 
-    const files = unzipSync(new Uint8Array(targetBuf));
-    const wbXml   = strFromU8(files["xl/workbook.xml"]);
-    const relsXml = strFromU8(files["xl/_rels/workbook.xml.rels"]);
+    const files    = unzipSync(new Uint8Array(targetBuf));
+    const wbXml    = strFromU8(files["xl/workbook.xml"]);
+    const relsXml  = strFromU8(files["xl/_rels/workbook.xml.rels"]);
     const sstPath  = "xl/sharedStrings.xml";
     const sstStrings = files[sstPath] ? parseSST(strFromU8(files[sstPath])) : [];
 
-    // Accumulate all new strings across both sheets
     const allNewStrings: string[] = [];
 
     // Patch Sheet 1
     const path1 = findSheetPath(wbXml, relsXml, s1Name);
-    if (!path1 || !files[path1]) throw new Error(`ไม่พบ path สำหรับ sheet "${s1Name}" ใน ZIP`);
-    progress(82, "Patch Sheet 1...");
+    if (!path1 || !files[path1]) throw new Error(`ไม่พบ ZIP path สำหรับ sheet "${s1Name}"`);
+    progress(80, `Patch Sheet 1 (${s1Patches.size.toLocaleString()} rows)...`);
     const r1 = patchSheetXml(strFromU8(files[path1]), [...sstStrings, ...allNewStrings], s1Patches);
     files[path1] = strToU8(r1.sheetXml);
     allNewStrings.push(...r1.newStrings);
 
     // Patch Sheet 2
     const path2 = findSheetPath(wbXml, relsXml, s2Name);
-    if (!path2 || !files[path2]) throw new Error(`ไม่พบ path สำหรับ sheet "${s2Name}" ใน ZIP`);
-    progress(88, "Patch Sheet 2...");
+    if (!path2 || !files[path2]) throw new Error(`ไม่พบ ZIP path สำหรับ sheet "${s2Name}"`);
+    progress(88, `Patch Sheet 2 (${s2Patches.size.toLocaleString()} rows)...`);
     const r2 = patchSheetXml(strFromU8(files[path2]), [...sstStrings, ...allNewStrings], s2Patches);
     files[path2] = strToU8(r2.sheetXml);
     allNewStrings.push(...r2.newStrings);
@@ -523,14 +516,21 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       );
     }
 
-    // Rezip — every other file (styles.xml, workbook.xml, rels, images …) unchanged
-    progress(94, "บีบอัดไฟล์ผลลัพธ์...");
+    // Rezip — styles.xml, workbook.xml, images etc. untouched
+    progress(95, "บีบอัดไฟล์ผลลัพธ์...");
     const zipped = zipSync(files);
     const output = zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength);
     progress(100, "เสร็จสิ้น!");
 
     ctx.postMessage(
-      { type: "done", buffer: output, stats: { sheet1: { processed: s1Processed, matched: s1Matched }, sheet2: { processed: s2Processed, matched: s2Matched } } },
+      {
+        type: "done",
+        buffer: output,
+        stats: {
+          sheet1: { written: qryRows.length, matchedSpaceman, matchedIndex },
+          sheet2: { written: qryRows.length, matched: matchedSpaceman },
+        },
+      } satisfies { type: "done"; buffer: ArrayBuffer; stats: Stats },
       [output]
     );
 
