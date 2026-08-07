@@ -156,7 +156,10 @@ export default function MasterTab() {
       const raw = XLSX.utils.sheet_to_json<DataRow>(ws, { defval: "", range: 1 });
       setParseProgress(90);
 
-      const hdrs = raw.length > 0 ? Object.keys(raw[0]) : [];
+      // Filter out _EMPTY, _EMPTY_1 etc. — xlsx auto-generates these for blank cells
+      const hdrs = raw.length > 0
+        ? Object.keys(raw[0]).filter((h) => !h.startsWith("_"))
+        : [];
       setSheetUsed(targetSheet);
       setHeaders(hdrs);
       setTableData(raw);
