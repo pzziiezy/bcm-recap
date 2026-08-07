@@ -1,9 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, useEffect, DragEvent } from "react";
 import * as XLSX from "xlsx";
-import DropZone from "./DropZone";
-import { Database, Search, X } from "lucide-react";
+import {
+  CloudUpload, CheckCircle, XCircle, Clock, RefreshCw, Search, Database,
+  ChevronLeft, ChevronRight, ChevronDown, ChevronUp, X,
+} from "lucide-react";
+
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+
+interface DriveFileInfo { id: string; name: string; createdTime: string; }
 
 interface FixtureRow {
   SEG: number | string;
@@ -11,35 +17,126 @@ interface FixtureRow {
   "Code Fixture": string;
 }
 
-type Status = "idle" | "parsing" | "done" | "error";
-
 const PAGE_SIZE = 100;
 
+function formatDateTime(isoString: string): string {
+  const d = new Date(isoString);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 export default function MasterTab() {
-  const [fixtureFile, setFixtureFile] = useState<File | null>(null);
-  const [status, setStatus] = useState<Status>("idle");
-  const [statusMsg, setStatusMsg] = useState("");
+  // File meta
+  const [latestFile, setLatestFile] = useState<DriveFileInfo | null>(null);
+  const [loadingMeta, setLoadingMeta] = useState(true);
+
+  // Table data
   const [rows, setRows] = useState<FixtureRow[]>([]);
   const [sheetUsed, setSheetUsed] = useState("");
+  const [loadingData, setLoadingData] = useState(false);
+  const [dataError, setDataError] = useState("");
+  const [parseProgress, setParseProgress] = useState(0);
+
+  // Table controls
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
-  const [errorMsg, setErrorMsg] = useState("");
 
-  const handleParse = async (file: File) => {
-    setStatus("parsing");
-    setStatusMsg("กำลังอ่านไฟล์...");
-    setErrorMsg("");
+  // Upload panel
+  const [showUpload, setShowUpload] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<"idle" | "success" | "error">("idle");
+  const [uploadError, setUploadError] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const [gisReady, setGisReady] = useState(false);
+
+  const inputRef = useRef<HTMLInputElement>(null);
+  const tokenClientRef = useRef<any>(null);
+  const pendingFileRef = useRef<File | null>(null);
+
+  // ── GIS init ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+    const initClient = () => {
+      tokenClientRef.current = (window as any).google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: "https://www.googleapis.com/auth/drive",
+        callback: async (resp: { access_token?: string; error?: string }) => {
+          const file = pendingFileRef.current;
+          pendingFileRef.current = null;
+          if (resp.error || !resp.access_token || !file) {
+            setUploadStatus("error");
+            setUploadError(resp.error || "ไม่สามารถรับ access token ได้");
+            setUploading(false);
+            return;
+          }
+          try {
+            const fd = new FormData();
+            fd.append("file", file);
+            fd.append("accessToken", resp.access_token);
+            const res = await fetch("/api/master/upload", { method: "POST", body: fd });
+            if (!res.ok) { const d = await res.json(); throw new Error(d.error || "อัปโหลดล้มเหลว"); }
+            setUploadStatus("success");
+            setSelectedFile(null);
+            const newFile = await fetchLatest();
+            if (newFile) loadData(newFile);
+          } catch (err) {
+            setUploadStatus("error");
+            setUploadError(String(err));
+          } finally {
+            setUploading(false);
+          }
+        },
+      });
+      setGisReady(true);
+    };
+    if ((window as any).google?.accounts?.oauth2) initClient();
+    else {
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.onload = initClient;
+      document.head.appendChild(script);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
+  const fetchLatest = async () => {
+    setLoadingMeta(true);
+    try {
+      const res = await fetch("/api/master/latest");
+      const data = await res.json();
+      const file: DriveFileInfo | null = data.file ?? null;
+      setLatestFile(file);
+      return file;
+    } catch {
+      setLatestFile(null);
+      return null;
+    } finally {
+      setLoadingMeta(false);
+    }
+  };
+
+  const loadData = async (file: DriveFileInfo) => {
+    setLoadingData(true);
+    setParseProgress(10);
+    setDataError("");
     setRows([]);
     setSheetUsed("");
     setSearch("");
     setPage(0);
 
     try {
-      await new Promise<void>((r) => setTimeout(r, 0)); // yield to UI
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
+      setParseProgress(20);
+      const res = await fetch(`/api/master/file?id=${file.id}`);
+      if (!res.ok) throw new Error("ดาวน์โหลดไฟล์ไม่สำเร็จ");
+      const buffer = await res.arrayBuffer();
+      setParseProgress(60);
 
-      // Prefer Fixture_2026, fallback to any sheet starting with "Fixture", then first sheet
+      await new Promise<void>((r) => setTimeout(r, 0));
+      const wb = XLSX.read(buffer, { type: "array" });
+
       const targetSheet =
         wb.SheetNames.find((n) => n === "Fixture_2026") ??
         wb.SheetNames.find((n) => n.startsWith("Fixture")) ??
@@ -49,32 +146,54 @@ export default function MasterTab() {
 
       const ws = wb.Sheets[targetSheet];
       const data = XLSX.utils.sheet_to_json<FixtureRow>(ws, { defval: "" });
+      setParseProgress(90);
 
       setSheetUsed(targetSheet);
       setRows(data);
-      setStatus("done");
-      setStatusMsg(`โหลดเสร็จ — ${data.length.toLocaleString()} แถว จาก sheet "${targetSheet}"`);
-    } catch (e) {
-      setStatus("error");
-      setErrorMsg(String(e));
+      setParseProgress(100);
+    } catch (err) {
+      setDataError(String(err));
+    } finally {
+      setLoadingData(false);
     }
   };
 
-  const handleFileChange = (files: File[]) => {
-    const f = files[0] ?? null;
-    setFixtureFile(f);
-    if (f) handleParse(f);
-    else {
-      setStatus("idle");
-      setRows([]);
-      setSheetUsed("");
-      setSearch("");
-      setPage(0);
-    }
+  useEffect(() => {
+    fetchLatest().then((file) => { if (file) loadData(file); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Upload handlers ───────────────────────────────────────────────────────
+  const handleFileSelect = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setSelectedFile(files[0]);
+    setUploadStatus("idle");
+    setUploadError("");
   };
 
+  const handleUpload = () => {
+    if (!selectedFile) return;
+    if (!gisReady || !tokenClientRef.current) {
+      setUploadStatus("error");
+      setUploadError("Google Identity Services ยังไม่พร้อม กรุณารีเฟรชหน้าแล้วลองใหม่");
+      return;
+    }
+    setUploading(true);
+    setUploadStatus("idle");
+    setUploadError("");
+    pendingFileRef.current = selectedFile;
+    tokenClientRef.current.requestAccessToken({ prompt: "" });
+  };
+
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    if (!uploading) handleFileSelect(e.dataTransfer.files);
+  };
+
+  // ── Filter ────────────────────────────────────────────────────────────────
   const filtered = rows.filter((r) => {
-    if (!search) return true;
+    if (!search.trim()) return true;
     const s = search.toLowerCase();
     return (
       String(r.POG).toLowerCase().includes(s) ||
@@ -86,89 +205,144 @@ export default function MasterTab() {
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const pageRows = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  const matchRate =
-    rows.length > 0
-      ? `${rows.length.toLocaleString()} รายการ`
-      : "";
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-6">
-
-      {/* Header card */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <div className="flex items-start gap-4">
-          <div className="bg-gradient-to-br from-pink-50 to-orange-50 rounded-xl p-3 flex-shrink-0">
-            <Database className="w-8 h-8 text-[#E91E8C]" />
-          </div>
-          <div>
-            <h2 className="text-lg font-bold text-slate-800">Master Data</h2>
-            <p className="text-sm text-slate-500 mt-1">
-              จัดการไฟล์ข้อมูล Master สำหรับใช้งานในระบบ
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="px-2 py-0.5 rounded-full bg-pink-50 text-[#E91E8C] text-xs font-medium border border-pink-100">
-                Fixture Index
-              </span>
-              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium">
-                Sheet: Fixture_2026
-              </span>
-              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-xs font-medium">
-                Columns: SEG · POG · Code Fixture
-              </span>
+    <div className="space-y-6">
+      {/* ── Upload card ── */}
+      <div className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
+        <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#00A6E2] via-[#FFD100] via-[#F15A22] to-[#72BF44]" />
+        <div className="px-6 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-1 h-5 rounded-full bg-gradient-to-b from-[#E91E8C] to-[#F15A22]" />
+            <div>
+              <h2 className="font-bold text-slate-800 text-lg">Fixture Index</h2>
+              {loadingMeta ? (
+                <p className="text-xs text-slate-400 mt-0.5 flex items-center gap-1">
+                  <span className="inline-block animate-spin rounded-full h-3 w-3 border border-slate-300 border-t-slate-500" />
+                  กำลังตรวจสอบ...
+                </p>
+              ) : latestFile ? (
+                <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  อัปโหลดล่าสุด:{" "}
+                  <strong className="text-slate-700">{formatDateTime(latestFile.createdTime)}</strong>
+                  <span className="text-slate-400 ml-1">— {latestFile.name}</span>
+                </p>
+              ) : (
+                <p className="text-xs text-amber-600 mt-0.5">ยังไม่มีไฟล์ใน Google Drive</p>
+              )}
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fetchLatest().then((f) => f && loadData(f))}
+              disabled={loadingMeta || loadingData}
+              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-[#E91E8C] transition-colors disabled:opacity-40 px-3 py-1.5 rounded-lg hover:bg-pink-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loadingMeta || loadingData ? "animate-spin" : ""}`} />
+              รีเฟรช
+            </button>
+            <button
+              onClick={() => { setShowUpload((v) => !v); setUploadStatus("idle"); }}
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] transition-all shadow-sm"
+            >
+              <CloudUpload className="w-3.5 h-3.5" />
+              อัปโหลดไฟล์ใหม่
+              {showUpload ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+          </div>
         </div>
+
+        {showUpload && (
+          <div className="px-6 pb-6 space-y-3 border-t border-pink-50 pt-4">
+            <div
+              onClick={() => !uploading && inputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={onDrop}
+              className={`flex flex-col items-center justify-center gap-2 border-2 border-dashed rounded-xl p-8 transition-all duration-200
+                ${uploading ? "opacity-60 cursor-not-allowed border-pink-200 bg-pink-50/30"
+                  : dragging ? "border-[#E91E8C] bg-pink-50 scale-[1.01] cursor-pointer"
+                  : selectedFile ? "border-green-300 bg-green-50/40 cursor-pointer"
+                  : "border-pink-200 bg-pink-50/30 hover:border-[#E91E8C] hover:bg-pink-50 cursor-pointer"}`}
+            >
+              <input ref={inputRef} type="file" accept=".xlsx" className="hidden"
+                onChange={(e) => { handleFileSelect(e.target.files); e.target.value = ""; }} />
+              {uploading ? (
+                <div className="animate-spin rounded-full h-8 w-8 border-4 border-pink-200 border-t-[#E91E8C]" />
+              ) : selectedFile ? (
+                <CheckCircle className="w-8 h-8 text-green-500" />
+              ) : (
+                <CloudUpload className={`w-8 h-8 ${dragging ? "text-[#E91E8C]" : "text-pink-300"}`} />
+              )}
+              <div className="text-center">
+                {uploading
+                  ? <p className="text-sm text-slate-500">กำลังอัปโหลดไปยัง Google Drive...</p>
+                  : selectedFile ? (
+                    <><p className="font-semibold text-green-700 text-sm">{selectedFile.name}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">คลิกเพื่อเลือกไฟล์ใหม่</p></>
+                  ) : (
+                    <><p className="font-semibold text-slate-700 text-sm">เลือกไฟล์ Fixture_Index</p>
+                    <p className="text-xs text-slate-400 mt-0.5">คลิกหรือลากไฟล์ .xlsx มาวางที่นี่</p></>
+                  )}
+              </div>
+            </div>
+            {selectedFile && !uploading && uploadStatus !== "success" && (
+              <button onClick={handleUpload}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-gradient-to-r from-[#E91E8C] to-[#d41679] text-white hover:from-[#d41679] hover:to-[#be185d] transition-all shadow-sm">
+                <CloudUpload className="w-4 h-4" />อัปเดตเป็นไฟล์ล่าสุด
+              </button>
+            )}
+            {uploadStatus === "success" && (
+              <div className="flex items-center gap-2 px-4 py-2.5 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm">
+                <CheckCircle className="w-4 h-4 flex-shrink-0" />อัปโหลดสำเร็จ! ข้อมูลด้านล่างได้รับการอัปเดตแล้ว
+              </div>
+            )}
+            {uploadStatus === "error" && (
+              <div className="flex items-start gap-2 px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+                <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /><span>อัปโหลดล้มเหลว: {uploadError}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Fixture Index section */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-5">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-slate-700">Fixture Index</h3>
-          {status === "done" && matchRate && (
-            <span className="text-sm text-emerald-600 font-medium">{matchRate}</span>
-          )}
-        </div>
+      {/* ── Data card ── */}
+      <div className="bg-white rounded-2xl shadow-sm border border-pink-100 overflow-hidden">
+        <div className="h-1 bg-gradient-to-r from-[#E91E8C] via-[#00A6E2] via-[#FFD100] via-[#F15A22] to-[#72BF44]" />
 
-        <div className="max-w-md">
-          <DropZone
-            label="Fixture_Index (APR 2026).xlsx"
-            accept=".xlsx"
-            files={fixtureFile ? [fixtureFile] : []}
-            onFiles={handleFileChange}
-            hint={`Sheet: ${sheetUsed || "Fixture_2026"} — SEG, POG, Code Fixture`}
-          />
-        </div>
-
-        {/* Parsing indicator */}
-        {status === "parsing" && (
+        {/* Card header */}
+        <div className="px-6 py-4 border-b border-pink-50 flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
-            <div className="animate-spin rounded-full h-5 w-5 border-2 border-pink-200 border-t-[#E91E8C] flex-shrink-0" />
-            <p className="text-sm text-slate-600">{statusMsg}</p>
+            <div className="w-1 h-5 rounded-full bg-gradient-to-b from-[#E91E8C] to-[#F15A22]" />
+            <div className="flex items-center gap-2 flex-wrap">
+              <Database className="w-4 h-4 text-slate-400" />
+              <h2 className="font-bold text-slate-800 text-lg">
+                ข้อมูลใน{sheetUsed ? ` ${sheetUsed}` : " Fixture_2026"}
+              </h2>
+              {rows.length > 0 && (
+                <span className="text-xs bg-pink-100 text-[#E91E8C] px-2 py-0.5 rounded-full font-medium">
+                  {rows.length.toLocaleString()} แถว
+                </span>
+              )}
+              {filtered.length !== rows.length && (
+                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                  กรองแล้ว: {filtered.length.toLocaleString()} แถว
+                </span>
+              )}
+            </div>
           </div>
-        )}
 
-        {/* Error */}
-        {status === "error" && (
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm">
-            ❌ {errorMsg}
-          </div>
-        )}
-
-        {/* Data table */}
-        {status === "done" && rows.length > 0 && (
-          <div className="space-y-3">
-            {/* Search bar */}
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <p className="text-sm text-slate-500">{statusMsg}</p>
+          {rows.length > 0 && (
+            <div className="flex items-center gap-2">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="ค้นหา POG / Code Fixture / SEG..."
+                  placeholder="ค้นหา SEG / POG / Code Fixture..."
                   value={search}
                   onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-                  className="pl-9 pr-8 py-2 text-sm border border-slate-200 rounded-lg
-                    focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-transparent w-72"
+                  className="pl-8 pr-8 py-1.5 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-200 focus:border-[#E91E8C] w-64"
                 />
                 {search && (
                   <button
@@ -180,34 +354,69 @@ export default function MasterTab() {
                 )}
               </div>
             </div>
+          )}
+        </div>
 
-            {/* Table */}
-            <div className="overflow-x-auto rounded-xl border border-slate-200">
+        {/* Loading state */}
+        {loadingData && (
+          <div className="flex flex-col items-center justify-center py-16 gap-4 text-slate-500">
+            <div className="animate-spin rounded-full h-8 w-8 border-4 border-pink-200 border-t-[#E91E8C]" />
+            <p className="text-sm font-medium">
+              {parseProgress < 50 ? "กำลังดาวน์โหลดไฟล์..." : `กำลังประมวลผลข้อมูล... (${parseProgress}%)`}
+            </p>
+            <div className="w-64 bg-slate-200 rounded-full h-2 overflow-hidden">
+              <div
+                className="h-2 rounded-full transition-all duration-300 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
+                style={{ width: `${parseProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {!loadingData && dataError && (
+          <div className="m-6 flex items-start gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+            <XCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /><span>{dataError}</span>
+          </div>
+        )}
+
+        {/* Empty — no file in Drive */}
+        {!loadingData && !dataError && !latestFile && (
+          <div className="flex flex-col items-center justify-center py-16 gap-2 text-slate-400">
+            <CloudUpload className="w-10 h-10 text-pink-200" />
+            <p className="text-sm">ยังไม่มีไฟล์ใน Google Drive</p>
+            <p className="text-xs">คลิก &quot;อัปโหลดไฟล์ใหม่&quot; ด้านบนเพื่อเริ่มต้น</p>
+          </div>
+        )}
+
+        {/* Empty — file exists but no rows parsed */}
+        {!loadingData && !dataError && latestFile && rows.length === 0 && (
+          <div className="flex items-center justify-center py-16 text-slate-400 text-sm">ไม่พบข้อมูลในไฟล์</div>
+        )}
+
+        {/* ── Table ── */}
+        {!loadingData && !dataError && rows.length > 0 && (
+          <>
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="text-left px-4 py-3 font-semibold text-slate-600 w-20 text-xs uppercase tracking-wide">
-                      SEG
-                    </th>
-                    <th className="text-left px-4 py-3 font-semibold text-slate-600 text-xs uppercase tracking-wide">
-                      POG
-                    </th>
-                    <th className="text-left px-4 py-3 font-semibold text-slate-600 w-40 text-xs uppercase tracking-wide">
-                      Code Fixture
-                    </th>
+                    <th className="text-left px-4 py-3 font-semibold text-slate-600 w-24 text-xs uppercase tracking-wide">SEG</th>
+                    <th className="text-left px-4 py-3 font-semibold text-slate-600 text-xs uppercase tracking-wide">POG</th>
+                    <th className="text-left px-4 py-3 font-semibold text-slate-600 w-48 text-xs uppercase tracking-wide">Code Fixture</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {pageRows.map((row, i) => (
-                    <tr key={i} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{row.SEG}</td>
-                      <td className="px-4 py-2.5 text-slate-700 text-xs">{row.POG}</td>
-                      <td className="px-4 py-2.5 text-slate-700 font-mono text-xs">{row["Code Fixture"]}</td>
+                    <tr key={i} className="hover:bg-pink-50/40 transition-colors">
+                      <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{String(row.SEG)}</td>
+                      <td className="px-4 py-2.5 text-slate-700 text-xs">{String(row.POG)}</td>
+                      <td className="px-4 py-2.5 text-slate-700 font-mono text-xs">{String(row["Code Fixture"])}</td>
                     </tr>
                   ))}
                   {pageRows.length === 0 && (
                     <tr>
-                      <td colSpan={3} className="px-4 py-8 text-center text-slate-400 text-sm">
+                      <td colSpan={3} className="px-4 py-10 text-center text-slate-400 text-sm">
                         ไม่พบข้อมูลที่ตรงกับ &quot;{search}&quot;
                       </td>
                     </tr>
@@ -216,38 +425,33 @@ export default function MasterTab() {
               </table>
             </div>
 
-            {/* Pagination */}
             {totalPages > 1 && (
-              <div className="flex items-center justify-between text-sm text-slate-500 pt-1">
+              <div className="px-6 py-3 border-t border-slate-100 flex items-center justify-between text-sm text-slate-500 bg-white sticky bottom-0">
                 <span>
                   แสดง {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length).toLocaleString()}{" "}
                   จาก {filtered.length.toLocaleString()} แถว
                   {search && ` (กรองจาก ${rows.length.toLocaleString()})`}
                 </span>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <button
                     onClick={() => setPage((p) => Math.max(0, p - 1))}
                     disabled={page === 0}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs
-                      disabled:opacity-40 hover:bg-slate-50 transition-colors disabled:cursor-not-allowed"
+                    className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed"
                   >
-                    ← ก่อนหน้า
+                    <ChevronLeft className="w-4 h-4" />
                   </button>
-                  <span className="px-2 text-xs">
-                    {page + 1} / {totalPages}
-                  </span>
+                  <span className="px-3 font-medium">{page + 1} / {totalPages}</span>
                   <button
                     onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                     disabled={page >= totalPages - 1}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs
-                      disabled:opacity-40 hover:bg-slate-50 transition-colors disabled:cursor-not-allowed"
+                    className="p-1.5 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed"
                   >
-                    ถัดไป →
+                    <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
               </div>
             )}
-          </div>
+          </>
         )}
       </div>
     </div>

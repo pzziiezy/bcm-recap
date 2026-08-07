@@ -20,7 +20,7 @@ export async function GET() {
     const drive = google.drive({ version: "v3", auth });
 
     const response = await drive.files.list({
-      q: `'${FOLDER_ID}' in parents and trashed=false and not name contains 'Fixture'`,
+      q: `'${FOLDER_ID}' in parents and trashed=false and name contains 'Fixture'`,
       orderBy: "createdTime desc",
       pageSize: 1,
       fields: "files(id,name,createdTime)",
