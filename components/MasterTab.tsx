@@ -11,11 +11,7 @@ const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 
 interface DriveFileInfo { id: string; name: string; createdTime: string; }
 
-interface FixtureRow {
-  SEG: number | string;
-  POG: string;
-  "Code Fixture": string;
-}
+type FixtureRow = Record<string, unknown>;
 
 const PAGE_SIZE = 100;
 
@@ -32,6 +28,7 @@ export default function MasterTab() {
 
   // Table data
   const [rows, setRows] = useState<FixtureRow[]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
   const [sheetUsed, setSheetUsed] = useState("");
   const [loadingData, setLoadingData] = useState(false);
   const [dataError, setDataError] = useState("");
@@ -123,6 +120,7 @@ export default function MasterTab() {
     setParseProgress(10);
     setDataError("");
     setRows([]);
+    setHeaders([]);
     setSheetUsed("");
     setSearch("");
     setPage(0);
@@ -148,7 +146,10 @@ export default function MasterTab() {
       const data = XLSX.utils.sheet_to_json<FixtureRow>(ws, { defval: "" });
       setParseProgress(90);
 
+      // Extract headers from the first row (dynamic — no hardcoded column names)
+      const hdrs = data.length > 0 ? Object.keys(data[0]) : [];
       setSheetUsed(targetSheet);
+      setHeaders(hdrs);
       setRows(data);
       setParseProgress(100);
     } catch (err) {
@@ -195,11 +196,7 @@ export default function MasterTab() {
   const filtered = rows.filter((r) => {
     if (!search.trim()) return true;
     const s = search.toLowerCase();
-    return (
-      String(r.POG).toLowerCase().includes(s) ||
-      String(r["Code Fixture"]).toLowerCase().includes(s) ||
-      String(r.SEG).toLowerCase().includes(s)
-    );
+    return Object.values(r).some((v) => String(v ?? "").toLowerCase().includes(s));
   });
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
@@ -401,17 +398,21 @@ export default function MasterTab() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="text-left px-4 py-3 font-semibold text-slate-600 w-24 text-xs uppercase tracking-wide">SEG</th>
-                    <th className="text-left px-4 py-3 font-semibold text-slate-600 text-xs uppercase tracking-wide">POG</th>
-                    <th className="text-left px-4 py-3 font-semibold text-slate-600 w-48 text-xs uppercase tracking-wide">Code Fixture</th>
+                    {headers.map((h) => (
+                      <th key={h} className="text-left px-4 py-3 font-semibold text-slate-600 text-xs uppercase tracking-wide whitespace-nowrap">
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {pageRows.map((row, i) => (
                     <tr key={i} className="hover:bg-pink-50/40 transition-colors">
-                      <td className="px-4 py-2.5 text-slate-500 font-mono text-xs">{String(row.SEG)}</td>
-                      <td className="px-4 py-2.5 text-slate-700 text-xs">{String(row.POG)}</td>
-                      <td className="px-4 py-2.5 text-slate-700 font-mono text-xs">{String(row["Code Fixture"])}</td>
+                      {headers.map((h) => (
+                        <td key={h} className="px-4 py-2.5 text-slate-700 text-xs whitespace-nowrap">
+                          {String(row[h] ?? "")}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                   {pageRows.length === 0 && (
