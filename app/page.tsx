@@ -957,7 +957,7 @@ export default function Home() {
             </div>
 
             {/* New and Renovate tab */}
-            {view === "newrenovate" && <NewRenovateTab />}
+            {view === "newrenovate" && <NewRenovateTab exceptionConfig={exceptionConfig} />}
 
             {/* Master tab */}
             {view === "master" && <MasterTab />}
