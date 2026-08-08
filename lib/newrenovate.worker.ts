@@ -292,40 +292,60 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 1. QRY → ordered row list ─────────────────────────────────────────────
     progress(3, "อ่านไฟล์ QRY_Product_by_POG_by_Position...");
 
-    // cellText:true so cell.w (formatted text) is populated — needed to preserve
-    // leading zeros on barcodes stored with custom number format in Excel.
+    // cellText:true → cell.w (formatted text) is populated, needed for barcode leading zeros.
     const qryWb = XLSX.read(new Uint8Array(qryBuf), { type: "array", cellText: true });
     const qryWs = qryWb.Sheets[qryWb.SheetNames[0]];
     if (!qryWs) throw new Error("ไม่พบ sheet ใน QRY_Product_by_POG_by_Position");
 
     const qryRange = XLSX.utils.decode_range(qryWs["!ref"] || "A1");
+
+    // Auto-detect header row: scan first 5 rows for a row that contains a barcode-like column.
+    let qHdrRow = 0;
+    for (let r = 0; r <= Math.min(4, qryRange.e.r); r++) {
+      for (let c = 0; c <= qryRange.e.c; c++) {
+        const v = String(qryWs[XLSX.utils.encode_cell({ r, c })]?.v ?? "").toUpperCase().trim();
+        if (v === "BARCODE" || v === "UPC" || v === "EAN") { qHdrRow = r; break; }
+      }
+      if (qHdrRow === r && r > 0) break;
+    }
+
+    // Build header array (case-preserved for display, searched case-insensitively below)
     const qHdrs: string[] = [];
     for (let c = 0; c <= qryRange.e.c; c++) {
-      const cell = qryWs[XLSX.utils.encode_cell({ r: 0, c })];
+      const cell = qryWs[XLSX.utils.encode_cell({ r: qHdrRow, c })];
       qHdrs.push(cell?.v != null ? String(cell.v).trim() : "");
     }
-    const qBarcodeCol  = qHdrs.indexOf("BARCODE");
-    const qSegCol      = qHdrs.indexOf("SEGMENT");
-    const qLocCol      = qHdrs.indexOf("LOCATION_ID");
-    const qUnitsCol    = qHdrs.indexOf("TOTAL_UNITS");
-    // "NAME" column in QRY is the canonical source — search it first.
-    const qNameCol     = (["NAME","PRODUCT_NAME","DESCRIPTION","LONG_DESC","SHORT_DESC"] as const)
-                           .map(n => qHdrs.indexOf(n)).find(i => i >= 0) ?? -1;
+
+    // Case-insensitive column finder with multiple name fallbacks
+    const findQCol = (...names: string[]): number => {
+      const targets = new Set(names.map(n => n.toLowerCase()));
+      return qHdrs.findIndex(h => targets.has(h.toLowerCase()));
+    };
+
+    const qBarcodeCol = findQCol("BARCODE", "UPC", "EAN", "Barcode", "barcode");
+    const qSegCol     = findQCol("SEGMENT", "Segment");
+    const qLocCol     = findQCol("LOCATION_ID", "LOCATIONID", "Location_ID");
+    const qUnitsCol   = findQCol("TOTAL_UNITS", "TOTALUNITS", "Total_Units", "QTY", "UNITS");
+    // NAME column in QRY is the primary source for product name.
+    const qNameCol    = findQCol("NAME", "PRODUCT_NAME", "DESCRIPTION", "LONG_DESC", "SHORT_DESC");
+
+    if (qBarcodeCol < 0)
+      throw new Error(`QRY: ไม่พบ column BARCODE — headers ที่พบ: [${qHdrs.filter(Boolean).join(", ")}]`);
 
     const qryRows: QrySourceRow[] = [];
-    for (let r = 1; r <= qryRange.e.r; r++) {
-      const barcodeCell = qBarcodeCol >= 0 ? qryWs[XLSX.utils.encode_cell({ r, c: qBarcodeCol })] : null;
-      // Prefer formatted text (w) to recover leading zeros from custom Excel formats.
+    for (let r = qHdrRow + 1; r <= qryRange.e.r; r++) {
+      const barcodeCell = qryWs[XLSX.utils.encode_cell({ r, c: qBarcodeCol })];
+      // Prefer formatted text (w) to recover leading zeros from Excel custom number formats.
       const bc = normalizeBarcode(barcodeCell?.v, barcodeCell?.w);
       if (!bc) continue;
 
-      const str = (col: number) => {
+      const str = (col: number): string => {
         if (col < 0) return "";
         const cell = qryWs[XLSX.utils.encode_cell({ r, c: col })];
         if (!cell) return "";
         return (cell.w != null ? String(cell.w) : cell.v != null ? String(cell.v) : "").trim();
       };
-      const num = (col: number) => {
+      const numStr = (col: number): string => {
         if (col < 0) return "";
         const cell = qryWs[XLSX.utils.encode_cell({ r, c: col })];
         return cell?.v != null ? String(cell.v) : "";
@@ -335,7 +355,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         barcode:    bc,
         segment:    str(qSegCol),
         locationId: str(qLocCol),
-        totalUnits: num(qUnitsCol),
+        totalUnits: numStr(qUnitsCol),
         name:       str(qNameCol),
       });
     }
