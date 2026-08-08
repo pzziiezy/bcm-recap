@@ -598,7 +598,14 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const PF03_COL       = colMap1.get("PLANOFOLDER03") ?? fc1("PF03") ?? 2;
     const PF04_COL       = colMap1.get("PLANOFOLDER04") ?? fc1("PF04") ?? 3;
     const PLOGNAME_COL   = fc1("PLANOGRAM NAME") ?? fc1("POG NAME") ?? fc1("PLANOGRAM");
-    const NAME_COL       = fc1("Name") ?? fc1("Product Name") ?? fc1("Item Name") ?? fc1("ชื่อ");
+    // Exact case-insensitive match first — avoids false hits on "PLANOGRAM NAME" etc.
+    const exactCI1 = (needle: string) => {
+      const nl = needle.toLowerCase();
+      for (const [k, v] of colMap1) if (k.toLowerCase() === nl) return v;
+      return undefined;
+    };
+    const NAME_COL = exactCI1("name") ?? exactCI1("product name") ?? exactCI1("item name") ??
+                     exactCI1("ชื่อสินค้า") ?? exactCI1("ชื่อ");
     const SALEPACK_COL   = fc1("SALE PACK CODE") ?? fc1("SALE PACK") ?? 7;
     const PACKSIZE_COL   = fc1("Pack Size") ?? fc1("PACK SIZE") ?? 8;
     const EXTRA_COL      = fc1("Extra info") ?? fc1("EXTRA INFO") ?? fc1("EXTRA") ?? 9;
