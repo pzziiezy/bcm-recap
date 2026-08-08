@@ -4,16 +4,13 @@
  * Data flow (QRY-driven):
  *
  *   QRY_Product_by_POG_by_Position  ← primary source of rows
- *     │  BARCODE → DATA_SPACEMAN    → DIVISION(PF02) / PF03 / PF04 / PLANOGRAM / CAT / SUB / DESC_C
- *     │  BARCODE → Master Assortment→ SALE PACK CODE (BAR_SINGLE) / Pack Size (SKU_PACK) / Extra info (EXTRA_INFO)
- *     │  PLANOGRAM + SEGMENT
- *     │            → Fixture Index  → New Fixture (Code Fixture)
- *     │  PLANOGRAM → INDEX          → Status / Store
- *     │  QRY itself                 → No.Bay (SEGMENT) / SEQ (LOCATION_ID) / SHELF STOCK (TOTAL_UNITS)
- *     └─ Config Rules               → % Ordering (default 100%)
- *        Net Capacity = SHELF STOCK × % Ordering
- *
- * Template is written via ZIP-patch: unzip → patch sheet XMLs → append SST → rezip.
+ *     │  BARCODE → DATA_SPACEMAN    → DIVISION(PF01) / PF03 / PF04 / PLANOGRAM
+ *     │  BARCODE → Master Assortment→ SALE PACK CODE / Pack Size / Extra info / Status / Store / Name
+ *     │  PLANOGRAM + SEGMENT → Fixture Index → New Fixture (Code Fixture)
+ *     │  PLANOGRAM → INDEX   → Status(fallback) / Store(fallback) / PLANOGRAM NAME
+ *     │  QRY itself          → No.Bay(SEGMENT) / SEQ(LOCATION_ID) / SHELF STOCK(TOTAL_UNITS) / Name
+ *     └─ Config Rules        → % Ordering (default 100, stored as integer)
+ *        Net Capacity = SHELF STOCK × (% Ordering / 100)
  */
 
 import * as XLSX from "xlsx";
@@ -37,35 +34,38 @@ type InMsg = {
   exceptionConfig: ExceptionConfig[];
 };
 
-interface Stats {
-  total: number;
-  matchedSpaceman: number;
-  matchedMaster: number;
-  matchedIndex: number;
-  matchedFixture: number;
-}
-
 interface SpacemanEntry {
+  planofolder01: string;
   planofolder02: string;
   planofolder03: string;
   planofolder04: string;
-  planogram: string;
-  category: string;
-  subcategory: string;
-  descC: string;
+  planogram:     string;
+  category:      string;
+  subcategory:   string;
+  descC:         string;
 }
 
 interface MasterEntry {
+  name:      string;
   barSingle: string;
-  skuPack: string;
+  skuPack:   string;
   extraInfo: string;
+  status:    string;
+  store:     string;
+}
+
+interface IndexEntry {
+  status:        string;
+  store:         string;
+  planogramName: string;
 }
 
 interface QrySourceRow {
-  barcode: string;
-  segment: string;
+  barcode:    string;
+  segment:    string;
   locationId: string;
   totalUnits: string;
+  name:       string;
 }
 
 type CellPatch =
@@ -79,24 +79,53 @@ function progress(pct: number, msg: string) {
   ctx.postMessage({ type: "progress", pct, msg });
 }
 
-function normalizeBarcode(val: unknown): string {
+/**
+ * Normalize a barcode to a canonical string.
+ * KEY FIX: if the value is already a string that starts with "0",
+ * preserve the leading zeros — don't convert to Number and back.
+ * Also accepts an optional `formatted` (cell.w) which preserves Excel custom-number-format
+ * leading zeros (e.g., format "0000000000000" applied to a number).
+ */
+function normalizeBarcode(val: unknown, formatted?: string): string {
+  // Prefer formatted text (w property from cellText:true) — it preserves
+  // leading zeros that come from Excel custom number formats.
+  if (formatted != null && formatted !== "") {
+    const w = formatted.replace(/[, ]/g, "").trim();
+    if (w) return w;
+  }
   if (val == null || val === "") return "";
   const s = String(val).trim();
   if (!s) return "";
+  // Preserve strings that already have leading zeros (text-type cells)
+  if (s.startsWith("0")) return s;
   const n = Number(s);
   if (!isNaN(n) && n > 0) return String(Math.round(n));
   return s;
 }
 
-function getOrderingPct(cfg: ExceptionConfig[], cat: string, sub: string, descC: string): number {
+/**
+ * Returns the ordering percentage as an integer (0–100).
+ * Default = 100. Matches Config Rules by DIVISION(PF01)+PF03+PF04.
+ */
+function getOrderingPct(
+  cfg: ExceptionConfig[],
+  pf01: string,
+  pf03: string,
+  pf04: string,
+): number {
   for (const rule of cfg) {
     if (rule.status === "inactive" || rule.status === "deleted") continue;
-    if ((rule.category    === "ทั้งหมด" || rule.category    === cat)  &&
-        (rule.subcategory === "ทั้งหมด" || rule.subcategory === sub)  &&
-        (rule.descC       === "ทั้งหมด" || rule.descC       === descC))
-      return Number(rule.percentage) / 100;
+    const catOk = rule.category    === "ทั้งหมด" || rule.category    === pf01;
+    const subOk = rule.subcategory === "ทั้งหมด" || rule.subcategory === pf03;
+    const dscOk = rule.descC       === "ทั้งหมด" || rule.descC       === pf04;
+    if (catOk && subOk && dscOk) return Number(rule.percentage);
   }
-  return 1.0;
+  return 100;
+}
+
+/** Normalize key for INDEX map: trim + collapse whitespace */
+function normalizeKey(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
 }
 
 // ─── XML / ZIP helpers ────────────────────────────────────────────────────────
@@ -105,12 +134,13 @@ function encodeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 function decodeXml(s: string): string {
-  return s.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">")
-          .replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+  return s
+    .replace(/&amp;/g,  "&").replace(/&lt;/g,  "<").replace(/&gt;/g,  ">")
+    .replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 }
 function colLetter(idx: number): string {
   let s = "", n = idx + 1;
-  while (n > 0) { const r = (n-1)%26; s = String.fromCharCode(65+r)+s; n = Math.floor((n-1)/26); }
+  while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
   return s;
 }
 function colLetterIdx(letters: string): number {
@@ -136,8 +166,8 @@ function appendSST(xml: string, newStrings: string[]): string {
   const newSis = newStrings.map(s => `<si><t>${encodeXml(s)}</t></si>`).join("");
   const at = xml.lastIndexOf("</sst>");
   let r = xml.slice(0, at) + newSis + xml.slice(at);
-  r = r.replace(/\bcount="(\d+)"/,       (_,n) => `count="${+n + newStrings.length}"`)
-       .replace(/\buniqueCount="(\d+)"/,  (_,n) => `uniqueCount="${+n + newStrings.length}"`);
+  r = r.replace(/\bcount="(\d+)"/,      (_, n) => `count="${+n + newStrings.length}"`)
+       .replace(/\buniqueCount="(\d+)"/, (_, n) => `uniqueCount="${+n + newStrings.length}"`);
   return r;
 }
 function buildSST(strings: string[]): string {
@@ -186,7 +216,7 @@ function patchCellInRow(inner: string, ref: string, ci: number, patch: CellPatch
 function patchSheetXml(
   sheetXml: string,
   sstStrings: string[],
-  rowPatches: Map<number, Map<number, CellPatch>>
+  rowPatches: Map<number, Map<number, CellPatch>>,
 ): { sheetXml: string; newStrings: string[] } {
   if (!rowPatches.size) return { sheetXml, newStrings: [] };
 
@@ -198,7 +228,7 @@ function patchSheetXml(
   };
   const patchedRows = new Set<number>();
 
-  // Pass 1: self-closing rows
+  // Pass 1: self-closing rows <row r="N" .../>
   let result = sheetXml.replace(/<row\b([^>]*?)\/>/g, (full, attrs) => {
     const rm = /\br="(\d+)"/.exec(attrs);
     if (!rm) return full;
@@ -211,7 +241,7 @@ function patchSheetXml(
     return `<row${attrs}>${cells}</row>`;
   });
 
-  // Pass 2: open/close rows
+  // Pass 2: open/close rows <row r="N" ...>...</row>
   result = result.replace(/(<row\b[^>]*>)([\s\S]*?)(<\/row>)/g, (full, open, inner, close) => {
     const rm = /\br="(\d+)"/.exec(open);
     if (!rm) return full;
@@ -224,7 +254,7 @@ function patchSheetXml(
     return open + cells + close;
   });
 
-  // Pass 3: insert missing rows
+  // Pass 3: insert rows that have no XML element yet
   const newRowXml = [...rowPatches.entries()]
     .filter(([rowNum]) => !patchedRows.has(rowNum))
     .sort((a, b) => a[0] - b[0])
@@ -259,31 +289,63 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
   const { targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf, exceptionConfig } = e.data;
 
   try {
-    // ── 1. QRY_Product_by_POG_by_Position → ordered list of rows ─────────────
+    // ── 1. QRY → ordered row list ─────────────────────────────────────────────
     progress(3, "อ่านไฟล์ QRY_Product_by_POG_by_Position...");
 
-    const qryWb = XLSX.read(qryBuf, { type: "array" });
+    // cellText:true so cell.w (formatted text) is populated — needed to preserve
+    // leading zeros on barcodes stored with custom number format in Excel.
+    const qryWb = XLSX.read(new Uint8Array(qryBuf), { type: "array", cellText: true });
     const qryWs = qryWb.Sheets[qryWb.SheetNames[0]];
     if (!qryWs) throw new Error("ไม่พบ sheet ใน QRY_Product_by_POG_by_Position");
 
-    const qrySourceRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(qryWs, { defval: "" });
+    const qryRange = XLSX.utils.decode_range(qryWs["!ref"] || "A1");
+    const qHdrs: string[] = [];
+    for (let c = 0; c <= qryRange.e.c; c++) {
+      const cell = qryWs[XLSX.utils.encode_cell({ r: 0, c })];
+      qHdrs.push(cell?.v != null ? String(cell.v).trim() : "");
+    }
+    const qBarcodeCol  = qHdrs.indexOf("BARCODE");
+    const qSegCol      = qHdrs.indexOf("SEGMENT");
+    const qLocCol      = qHdrs.indexOf("LOCATION_ID");
+    const qUnitsCol    = qHdrs.indexOf("TOTAL_UNITS");
+    const qNameCol     = (["PRODUCT_NAME","DESCRIPTION","LONG_DESC","SHORT_DESC","NAME"] as const)
+                           .map(n => qHdrs.indexOf(n)).find(i => i >= 0) ?? -1;
+
     const qryRows: QrySourceRow[] = [];
-    for (const row of qrySourceRows) {
-      const bc = normalizeBarcode(row["BARCODE"] ?? row["UPC"] ?? row["Barcode"]);
+    for (let r = 1; r <= qryRange.e.r; r++) {
+      const barcodeCell = qBarcodeCol >= 0 ? qryWs[XLSX.utils.encode_cell({ r, c: qBarcodeCol })] : null;
+      // Prefer formatted text (w) to recover leading zeros from custom Excel formats.
+      const bc = normalizeBarcode(barcodeCell?.v, barcodeCell?.w);
       if (!bc) continue;
+
+      const str = (col: number) => {
+        if (col < 0) return "";
+        const cell = qryWs[XLSX.utils.encode_cell({ r, c: col })];
+        if (!cell) return "";
+        return (cell.w != null ? String(cell.w) : cell.v != null ? String(cell.v) : "").trim();
+      };
+      const num = (col: number) => {
+        if (col < 0) return "";
+        const cell = qryWs[XLSX.utils.encode_cell({ r, c: col })];
+        return cell?.v != null ? String(cell.v) : "";
+      };
+
       qryRows.push({
         barcode:    bc,
-        segment:    String(row["SEGMENT"]     ?? ""),
-        locationId: String(row["LOCATION_ID"] ?? ""),
-        totalUnits: String(row["TOTAL_UNITS"] ?? ""),
+        segment:    str(qSegCol),
+        locationId: str(qLocCol),
+        totalUnits: num(qUnitsCol),
+        name:       str(qNameCol),
       });
     }
-    progress(12, `QRY: ${qryRows.length.toLocaleString()} rows (ข้อมูลตั้งต้น)`);
+    progress(12, `QRY: ${qryRows.length.toLocaleString()} rows`);
 
-    // ── 2. DATA_SPACEMAN → map by BARCODE/UPC ────────────────────────────────
+    // ── 2. DATA_SPACEMAN → map by UPC ────────────────────────────────────────
     progress(14, "อ่านไฟล์ DATA_SPACEMAN...");
 
-    const spacemanWb = XLSX.read(spacemanBuf, { type: "array", cellText: false, cellHTML: false, cellNF: false, cellDates: false });
+    const spacemanWb = XLSX.read(new Uint8Array(spacemanBuf), {
+      type: "array", cellText: true, cellHTML: false, cellNF: false, cellDates: false,
+    });
     const spacemanWs = spacemanWb.Sheets["QRY_Product_by_POG"];
     if (!spacemanWs) throw new Error('ไม่พบ sheet "QRY_Product_by_POG" ใน DATA_SPACEMAN');
 
@@ -294,6 +356,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       sHdrs.push(cell?.v != null ? String(cell.v).trim() : "");
     }
     const upcIdx   = sHdrs.indexOf("UPC");
+    const pf01Idx  = sHdrs.indexOf("PLANOFOLDER01");
     const pf02Idx  = sHdrs.indexOf("PLANOFOLDER02");
     const pf03Idx  = sHdrs.indexOf("PLANOFOLDER03");
     const pf04Idx  = sHdrs.indexOf("PLANOFOLDER04");
@@ -302,20 +365,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const subIdx   = sHdrs.indexOf("SUBCATEGORY");
     const descCIdx = sHdrs.indexOf("DESC_C");
 
-    const getS = (r: number, c: number) => {
+    const getS = (r: number, c: number, useW = false): string => {
       const cell = spacemanWs[XLSX.utils.encode_cell({ r, c })];
-      return cell?.v != null ? String(cell.v).trim() : "";
+      if (!cell) return "";
+      if (useW && cell.w != null) return String(cell.w).replace(/,/g, "").trim();
+      return cell.v != null ? String(cell.v).trim() : "";
     };
 
     const spacemanMap = new Map<string, SpacemanEntry>();
     for (let r = 1; r <= sRange.e.r; r++) {
-      const upc = upcIdx >= 0 ? normalizeBarcode(getS(r, upcIdx)) : "";
+      const upc = upcIdx >= 0 ? normalizeBarcode(getS(r, upcIdx), getS(r, upcIdx, true)) : "";
       if (!upc) continue;
       if (!spacemanMap.has(upc)) {
         spacemanMap.set(upc, {
-          planofolder02: pf02Idx  >= 0 ? getS(r, pf02Idx)  : "",
-          planofolder03: pf03Idx  >= 0 ? getS(r, pf03Idx)  : "",
-          planofolder04: pf04Idx  >= 0 ? getS(r, pf04Idx)  : "",
+          planofolder01: pf01Idx >= 0 ? getS(r, pf01Idx) : "",
+          planofolder02: pf02Idx >= 0 ? getS(r, pf02Idx) : "",
+          planofolder03: pf03Idx >= 0 ? getS(r, pf03Idx) : "",
+          planofolder04: pf04Idx >= 0 ? getS(r, pf04Idx) : "",
           planogram:     getS(r, plogIdx),
           category:      catIdx   >= 0 ? getS(r, catIdx)   : "",
           subcategory:   subIdx   >= 0 ? getS(r, subIdx)   : "",
@@ -323,62 +389,94 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         });
       }
       if (r % 10000 === 0)
-        progress(14 + Math.floor((r / sRange.e.r) * 20), `DATA_SPACEMAN: ${r.toLocaleString()} rows...`);
+        progress(14 + Math.floor((r / sRange.e.r) * 18), `DATA_SPACEMAN: ${r.toLocaleString()} rows...`);
     }
-    progress(34, `DATA_SPACEMAN: ${spacemanMap.size.toLocaleString()} barcodes`);
+    progress(32, `DATA_SPACEMAN: ${spacemanMap.size.toLocaleString()} barcodes`);
 
-    // ── 3. Master Assortment Orderable → map by BARCODE ───────────────────────
-    progress(36, "อ่านไฟล์ Master Assortment Orderable...");
+    // ── 3. Master Assortment → map by BARCODE ────────────────────────────────
+    progress(34, "อ่านไฟล์ Master Assortment Orderable...");
 
-    const masterWb = XLSX.read(new Uint8Array(masterBuf), { type: "array" });
-    const masterSheetName =
-      masterWb.SheetNames.find(n => masterWb.Sheets[n]) ??
-      masterWb.SheetNames[0];
+    const masterWb = XLSX.read(new Uint8Array(masterBuf), { type: "array", cellText: true });
+    const masterSheetName = masterWb.SheetNames.find(n => masterWb.Sheets[n]) ?? masterWb.SheetNames[0];
     if (!masterSheetName)
-      throw new Error(`Master Assortment: ไม่พบ sheet ใดๆ ในไฟล์ — SheetNames: [${masterWb.SheetNames.join(", ") || "ว่าง"}]`);
+      throw new Error(`Master Assortment: ไม่พบ sheet — SheetNames: [${masterWb.SheetNames.join(", ") || "ว่าง"}]`);
     const masterWs = masterWb.Sheets[masterSheetName];
     if (!masterWs)
       throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}" — SheetNames: [${masterWb.SheetNames.join(", ")}]`);
 
-    const masterRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(masterWs, { defval: "" });
+    const masterAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(masterWs, { defval: "" });
     const masterMap = new Map<string, MasterEntry>();
-    for (const row of masterRows) {
-      const bc = normalizeBarcode(row["BARCODE"]);
+
+    // Detect which header key holds the barcode (case-insensitive scan of first row)
+    const masterHdrKeys = Object.keys(masterAllRows[0] ?? {});
+    const findHdr = (...names: string[]) =>
+      names.find(n => masterHdrKeys.some(k => k.toUpperCase() === n.toUpperCase())) ??
+      names.find(n => masterHdrKeys.some(k => k.toUpperCase().includes(n.toUpperCase())));
+    const masterBcKey    = findHdr("BARCODE","EAN","UPC") ?? "BARCODE";
+    const masterNameKey  = findHdr("DESCRIPTION","PRODUCT_NAME","LONG_DESC","NAME","SHORT_DESC","PROD_NAME") ?? "";
+    const masterBarSingle= findHdr("BAR_SINGLE","BAR_SINGLE_CODE","SALE_PACK_CODE") ?? "BAR_SINGLE";
+    const masterSkuPack  = findHdr("SKU_PACK","PACK_SIZE","PACK") ?? "SKU_PACK";
+    const masterExtraKey = findHdr("EXTRA_INFO","EXTRA","REMARK") ?? "EXTRA_INFO";
+    const masterStatusKey= findHdr("STATUS","ITEM_STATUS","ORD_STATUS") ?? "STATUS";
+    const masterStoreKey = findHdr("STORE","STORE_CODE","STORE_NAME","BRANCH") ?? "STORE";
+
+    for (const row of masterAllRows) {
+      // Prefer formatted-text barcode from sheet — but sheet_to_json raw gives us the .v already.
+      // For leading-zero safety: treat numeric BARCODE values with the same normalizeBarcode.
+      const bc = normalizeBarcode(row[masterBcKey]);
       if (!bc) continue;
       if (!masterMap.has(bc)) {
         masterMap.set(bc, {
-          barSingle: String(row["BAR_SINGLE"] ?? ""),
-          skuPack:   String(row["SKU_PACK"]   ?? ""),
-          extraInfo: String(row["EXTRA_INFO"] ?? ""),
+          name:      masterNameKey ? String(row[masterNameKey] ?? "") : "",
+          barSingle: String(row[masterBarSingle] ?? ""),
+          skuPack:   String(row[masterSkuPack]   ?? ""),
+          extraInfo: String(row[masterExtraKey]  ?? ""),
+          status:    String(row[masterStatusKey] ?? ""),
+          store:     String(row[masterStoreKey]  ?? ""),
         });
       }
     }
     progress(46, `Master Assortment: ${masterMap.size.toLocaleString()} barcodes`);
 
-    // ── 4. INDEX → map by PLANOGRAM ───────────────────────────────────────────
+    // ── 4. INDEX → map by PLANOGRAM (normalized key) ──────────────────────────
     progress(48, "อ่านไฟล์ INDEX...");
 
     const indexWb = XLSX.read(new Uint8Array(indexBuf), { type: "array" });
     const indexSheetName = indexWb.SheetNames.find(n => indexWb.Sheets[n]) ?? indexWb.SheetNames[0];
-    if (!indexSheetName) throw new Error(`INDEX: ไม่พบ sheet — SheetNames: [${indexWb.SheetNames.join(", ") || "ว่าง"}]`);
+    if (!indexSheetName)
+      throw new Error(`INDEX: ไม่พบ sheet — SheetNames: [${indexWb.SheetNames.join(", ") || "ว่าง"}]`);
     const indexWs = indexWb.Sheets[indexSheetName];
     if (!indexWs) throw new Error(`INDEX: ไม่พบ sheet "${indexSheetName}"`);
 
-    const indexRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(indexWs, { defval: "" });
-    const indexMap = new Map<string, { status: string; store: string }>();
-    for (const row of indexRows) {
-      const plog = String(row["PLANOGRAM"] ?? row["Planogram"] ?? row["POG"] ?? "").trim();
+    const indexAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(indexWs, { defval: "" });
+    const indexMap = new Map<string, IndexEntry>(); // key = normalized planogram name
+
+    const idxHdrKeys = Object.keys(indexAllRows[0] ?? {});
+    const findIdxHdr = (...names: string[]) =>
+      names.find(n => idxHdrKeys.some(k => k.toUpperCase() === n.toUpperCase())) ??
+      names.find(n => idxHdrKeys.some(k => k.toUpperCase().includes(n.toUpperCase())));
+    const idxPlogKey  = findIdxHdr("PLANOGRAM","POG","POG_NAME","PLANOGRAM_NAME","POG NAME") ?? "PLANOGRAM";
+    const idxStatKey  = findIdxHdr("STATUS","สถานะ","ITEM_STATUS") ?? "STATUS";
+    const idxStoreKey = findIdxHdr("STORE","สาขา","STORE_NAME","STORE_CODE","BRANCH") ?? "STORE";
+    const idxNameKey  = findIdxHdr("PLANOGRAM NAME","POG NAME","PLANOGRAM_NAME","POG_NAME","NAME") ?? "";
+
+    for (const row of indexAllRows) {
+      const plog = normalizeKey(String(row[idxPlogKey] ?? ""));
       if (!plog) continue;
       if (!indexMap.has(plog)) {
         indexMap.set(plog, {
-          status: String(row["Status"]  ?? row["STATUS"] ?? row["สถานะ"] ?? ""),
-          store:  String(row["Store"]   ?? row["STORE"]  ?? row["สาขา"]  ?? ""),
+          status:        String(row[idxStatKey]  ?? ""),
+          store:         String(row[idxStoreKey] ?? ""),
+          planogramName: idxNameKey ? String(row[idxNameKey] ?? "") : "",
         });
       }
+      // Also store under uppercase variant for case-insensitive fallback
+      const upper = plog.toUpperCase();
+      if (!indexMap.has(upper)) indexMap.set(upper, indexMap.get(plog)!);
     }
-    progress(55, `INDEX: ${indexMap.size.toLocaleString()} planograms`);
+    progress(55, `INDEX: ${(indexMap.size / 2) | 0} planograms`);
 
-    // ── 5. Fixture Index → map by "SEG|POG" ───────────────────────────────────
+    // ── 5. Fixture Index → map by "SEG|POG" ──────────────────────────────────
     progress(57, "อ่านไฟล์ Fixture Index...");
 
     const fixtureWb = XLSX.read(new Uint8Array(fixtureBuf), { type: "array" });
@@ -392,79 +490,97 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const fixtureWs = fixtureWb.Sheets[fixtureSheetName];
     if (!fixtureWs)
       throw new Error(`Fixture Index: ไม่พบ sheet "${fixtureSheetName}" — SheetNames: [${fixtureWb.SheetNames.join(", ")}]`);
-    // range:1 = skip remark row, row 2 becomes headers (SEG / POG / Code Fixture)
-    const fixtureRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(fixtureWs, { defval: "", range: 1 });
 
-    const fixtureMap = new Map<string, string>(); // "SEG|POG" → Code Fixture
+    // range:1 = skip the REMARK row; actual headers (SEG / POG / Code Fixture) are in row 2
+    const fixtureRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(fixtureWs, { defval: "", range: 1 });
+    const fixtureMap = new Map<string, string>();
     for (const row of fixtureRows) {
-      const seg  = String(row["SEG"]          ?? "").trim();
-      const pog  = String(row["POG"]          ?? "").trim();
+      const seg  = normalizeKey(String(row["SEG"]          ?? ""));
+      const pog  = normalizeKey(String(row["POG"]          ?? ""));
       const code = String(row["Code Fixture"] ?? "").trim();
       if (seg && pog && code) fixtureMap.set(`${seg}|${pog}`, code);
     }
     progress(63, `Fixture Index: ${fixtureMap.size.toLocaleString()} SEG|POG entries`);
 
-    // ── 6. Detect column positions from template ───────────────────────────────
+    // ── 6. Detect column positions from template header row 6 (index 5) ───────
     progress(65, "อ่านไฟล์ Template (detect headers)...");
 
-    // XLSX.read does NOT detach ArrayBuffer — safe to unzip later
     const targetWb = XLSX.read(targetBuf, { type: "array", cellText: false, cellHTML: false, cellNF: false, cellDates: false });
 
     const s1Name = targetWb.SheetNames.find(n => n.trimStart().startsWith("New&Exsiting For Oder"));
     if (!s1Name) throw new Error("ไม่พบ sheet ที่ขึ้นต้นด้วย 'New&Exsiting For Oder'");
-    const ws1 = targetWb.Sheets[s1Name];
-    const ref1 = XLSX.utils.decode_range(ws1["!ref"] ?? "A1:V7");
+    const ws1  = targetWb.Sheets[s1Name];
+    const ref1 = XLSX.utils.decode_range(ws1["!ref"] ?? "A1:Z7");
 
     const colMap1 = new Map<string, number>();
-    for (let c = 0; c <= Math.max(ref1.e.c, 25); c++) {
+    for (let c = 0; c <= Math.max(ref1.e.c, 30); c++) {
       const cell = ws1[XLSX.utils.encode_cell({ r: 5, c })];
-      const h = cell?.v != null ? String(cell.v).trim() : "";
+      const h = cell?.v != null ? String(cell.v).replace(/\s+/g, " ").trim() : "";
       if (h) colMap1.set(h, c);
     }
 
-    const c1  = (name: string, fb: number) => colMap1.get(name) ?? fb;
-    const fc1 = (needle: string) => {
+    // Exact match (case-sensitive), with fallback index
+    const c1 = (name: string, fb: number) => colMap1.get(name) ?? fb;
+    // Fuzzy: first header whose normalised form contains the needle (case-insensitive)
+    const fc1 = (needle: string): number | undefined => {
+      const nl = needle.toLowerCase().replace(/\s+/g, " ");
       for (const [k, v] of colMap1)
-        if (k.toLowerCase().includes(needle.toLowerCase())) return v;
+        if (k.toLowerCase().replace(/\s+/g, " ").includes(nl)) return v;
       return undefined;
     };
 
-    const BARCODE_COL    = c1("BARCODE", 5);
-    const DIVISION_COL   = c1("DIVISION", 1);
-    const PF03_COL       = colMap1.get("PLANOFOLDER03") ?? 2;
-    const PF04_COL       = colMap1.get("PLANOFOLDER04") ?? 3;
-    const SALEPACK_COL   = fc1("SALE PACK CODE") ?? fc1("SALE PACK") ?? 7;
-    const PACKSIZE_COL   = fc1("Pack Size") ?? 8;
-    const EXTRA_COL      = fc1("Extra info") ?? 9;
-    const STATUS_COL     = fc1("Status");
-    const STORE_COL      = fc1("Store");
-    const FIXTYPE_COL    = fc1("Fixture Type");
-    const W_COL          = fc1(" W") ?? fc1("W");
-    const H_COL          = fc1(" H") ?? fc1("H");
-    const D_COL          = fc1(" D") ?? fc1("D");
-    const NEWFIXTURE_COL = fc1("New Fixture");
-    const NOBAY_COL      = fc1("No.Bay");
-    const SEQ_COL        = fc1("SEQ");
-    const SHELFSTOCK_COL = fc1("SHELF STOCK") ?? c1("SHELF STOCK FOR ORDER (Piece)", 19);
-    const PCT_COL        = fc1("% Ordering") ?? 20;
-    const NETCAP_COL     = fc1("Net Capacity") ?? 21;
+    const BARCODE_COL       = c1("BARCODE", 5);
+    // DIVISION ← PLANOFOLDER01 (topmost hierarchy level)
+    const DIVISION_COL      = c1("DIVISION", 1);
+    const PF03_COL          = colMap1.get("PLANOFOLDER03") ?? fc1("PF03") ?? 2;
+    const PF04_COL          = colMap1.get("PLANOFOLDER04") ?? fc1("PF04") ?? 3;
+    const PLOGNAME_COL      = fc1("PLANOGRAM NAME") ?? fc1("PLANOGRAM") ?? fc1("POG NAME");
+    const NAME_COL          = fc1("Name") ?? fc1("Product Name") ?? fc1("Item Name") ?? fc1("ชื่อ");
+    const SALEPACK_COL      = fc1("SALE PACK CODE") ?? fc1("SALE PACK") ?? 7;
+    const PACKSIZE_COL      = fc1("Pack Size") ?? fc1("PACK SIZE") ?? 8;
+    const EXTRA_COL         = fc1("Extra info") ?? fc1("EXTRA INFO") ?? fc1("EXTRA") ?? 9;
+    const STATUS_COL        = fc1("Status") ?? fc1("STATUS");
+    const STORE_COL         = fc1("Store") ?? fc1("STORE");
+    const FIXTYPE_COL       = fc1("Fixture Type") ?? fc1("FIXTURE TYPE");
+    const W_COL             = (() => {
+      // Look for standalone "W" — avoid matching "STORE" or "NEW FIXTURE"
+      for (const [k, v] of colMap1) if (/^\s*W\s*$/.test(k)) return v;
+      return undefined;
+    })();
+    const H_COL             = (() => { for (const [k, v] of colMap1) if (/^\s*H\s*$/.test(k)) return v; return undefined; })();
+    const D_COL             = (() => { for (const [k, v] of colMap1) if (/^\s*D\s*$/.test(k)) return v; return undefined; })();
+    const NEWFIXTURE_COL    = fc1("New Fixture") ?? fc1("NEW FIXTURE");
+    const NOBAY_COL         = fc1("No.Bay") ?? fc1("NO BAY") ?? fc1("NO.BAY");
+    const SEQ_COL           = fc1("SEQ");
+    const SHELFSTOCK_COL    = fc1("SHELF STOCK") ?? c1("SHELF STOCK FOR ORDER (Piece)", 19);
+    const PCT_COL           = fc1("% Ordering") ?? fc1("%Ordering") ?? 20;
+    const NETCAP_COL        = fc1("Net Capacity") ?? fc1("NET CAPACITY") ?? 21;
 
     const s2Name = targetWb.SheetNames.find(n => n.trim().startsWith("New for Link_IM"));
     if (!s2Name) throw new Error("ไม่พบ sheet ที่ขึ้นต้นด้วย 'New for Link_IM'");
-    const ws2 = targetWb.Sheets[s2Name];
-    const ref2 = XLSX.utils.decode_range(ws2["!ref"] ?? "A1:H7");
+    const ws2  = targetWb.Sheets[s2Name];
+    const ref2 = XLSX.utils.decode_range(ws2["!ref"] ?? "A1:J7");
 
     const colMap2 = new Map<string, number>();
-    for (let c = 0; c <= Math.max(ref2.e.c, 10); c++) {
+    for (let c = 0; c <= Math.max(ref2.e.c, 15); c++) {
       const cell = ws2[XLSX.utils.encode_cell({ r: 5, c })];
-      const h = cell?.v != null ? String(cell.v).trim() : "";
+      const h = cell?.v != null ? String(cell.v).replace(/\s+/g, " ").trim() : "";
       if (h) colMap2.set(h, c);
     }
-    const BARCODE2_COL = colMap2.get("BARCODE")    ?? 4;
-    const DIV2_COL     = colMap2.get("DIVISION")   ?? 1;
-    const DEPT2_COL    = colMap2.get("DEPARTMENT") ?? 2;
+    const fc2 = (needle: string): number | undefined => {
+      const nl = needle.toLowerCase().replace(/\s+/g, " ");
+      for (const [k, v] of colMap2)
+        if (k.toLowerCase().replace(/\s+/g, " ").includes(nl)) return v;
+      return undefined;
+    };
+    const BARCODE2_COL  = colMap2.get("BARCODE")    ?? fc2("BARCODE")    ?? 4;
+    const DIV2_COL      = colMap2.get("DIVISION")   ?? fc2("DIVISION")   ?? 1;
+    const NAME2_COL     = colMap2.get("Name")       ?? fc2("name")       ?? fc2("ชื่อ");
+    const POG04_2_COL   = colMap2.get("POG 04")     ?? fc2("POG 04")     ?? fc2("PLANOFOLDER04") ?? fc2("PF04");
+    const POG03_2_COL   = colMap2.get("POG 03")     ?? fc2("POG 03")     ?? fc2("PLANOFOLDER03") ?? fc2("PF03");
+    const DEPT2_COL     = colMap2.get("DEPARTMENT") ?? fc2("DEPARTMENT") ?? fc2("DEPT");
 
-    // ── 7. Build patches row-by-row from QRY ──────────────────────────────────
+    // ── 7. Build row patches ──────────────────────────────────────────────────
     progress(68, `สร้าง patches จาก ${qryRows.length.toLocaleString()} QRY rows...`);
 
     const DATA_START_ROW = 7;
@@ -474,55 +590,70 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
 
     for (let i = 0; i < qryRows.length; i++) {
-      const qry      = qryRows[i];
-      const rowNum   = DATA_START_ROW + i;
-      const spaceman = spacemanMap.get(qry.barcode);
-      const master   = masterMap.get(qry.barcode);
-      const planogram = spaceman?.planogram ?? "";
-      const idxEntry  = planogram ? indexMap.get(planogram) : undefined;
-      const fixtureKey = qry.segment && planogram ? `${qry.segment}|${planogram}` : "";
+      const qry     = qryRows[i];
+      const rowNum  = DATA_START_ROW + i;
+      const sm      = spacemanMap.get(qry.barcode);
+      const master  = masterMap.get(qry.barcode);
+
+      // Normalized planogram key for INDEX lookup
+      const planogram    = normalizeKey(sm?.planogram ?? "");
+      const idxEntry     = planogram
+        ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
+        : undefined;
+
+      const fixtureKey  = qry.segment && planogram ? `${qry.segment}|${planogram}` : "";
       const fixtureCode = fixtureKey ? (fixtureMap.get(fixtureKey) ?? "") : "";
 
-      if (spaceman)    matchedSpaceman++;
+      if (sm)          matchedSpaceman++;
       if (master)      matchedMaster++;
       if (idxEntry)    matchedIndex++;
       if (fixtureCode) matchedFixture++;
 
-      // ── Sheet 1 ──────────────────────────────────────────────────────────
+      // ── Sheet 1 (New&Exsiting For Oder_SCM+MIS) ──────────────────────────
       const cols1 = new Map<number, CellPatch>();
 
-      const setS1 = (col: number | undefined, v: string) => {
+      const ss = (col: number | undefined, v: string) => {
         if (col !== undefined && v !== "") cols1.set(col, { t: "s", v });
       };
-      const setN1 = (col: number | undefined, v: unknown) => {
+      const sn = (col: number | undefined, v: unknown) => {
         if (col === undefined) return;
         const n = Number(v);
         if (!isNaN(n)) cols1.set(col, { t: "n", v: n });
       };
 
-      // BARCODE (from QRY)
+      // BARCODE — always written as string to preserve leading zeros
       cols1.set(BARCODE_COL, { t: "s", v: qry.barcode });
 
-      // From DATA_SPACEMAN
-      setS1(DIVISION_COL, spaceman?.planofolder02 ?? "");
-      setS1(PF03_COL,     spaceman?.planofolder03 ?? "");
-      setS1(PF04_COL,     spaceman?.planofolder04 ?? "");
+      // Name — from QRY first, fall back to Master Assortment
+      const productName = qry.name || master?.name || "";
+      ss(NAME_COL, productName);
 
-      // From Master Assortment
+      // DATA_SPACEMAN lookups
+      ss(DIVISION_COL, sm?.planofolder01 ?? "");  // DIVISION = PLANOFOLDER01
+      ss(PF03_COL,     sm?.planofolder03 ?? "");
+      ss(PF04_COL,     sm?.planofolder04 ?? "");
+      // PLANOGRAM NAME
+      const plogNameVal = idxEntry?.planogramName || sm?.planogram || "";
+      ss(PLOGNAME_COL, plogNameVal);
+
+      // Master Assortment
       if (master) {
         const barSingleNum = Number(master.barSingle);
         if (!isNaN(barSingleNum) && master.barSingle !== "") {
           cols1.set(SALEPACK_COL, { t: "n", v: barSingleNum });
         } else {
-          setS1(SALEPACK_COL, master.barSingle);
+          ss(SALEPACK_COL, master.barSingle);
         }
-        setN1(PACKSIZE_COL, master.skuPack);
-        setS1(EXTRA_COL,    master.extraInfo);
+        sn(PACKSIZE_COL, master.skuPack);
+        ss(EXTRA_COL,    master.extraInfo);
+        // Status / Store from Master Assortment (primary), INDEX as fallback
+        ss(STATUS_COL, master.status || idxEntry?.status || "");
+        ss(STORE_COL,  master.store  || idxEntry?.store  || "");
+      } else {
+        // No Master match — fall back to INDEX for Status/Store
+        ss(STATUS_COL, idxEntry?.status ?? "");
+        ss(STORE_COL,  idxEntry?.store  ?? "");
       }
-
-      // From INDEX
-      setS1(STATUS_COL, idxEntry?.status ?? "");
-      setS1(STORE_COL,  idxEntry?.store  ?? "");
 
       // Constants
       if (FIXTYPE_COL !== undefined) cols1.set(FIXTYPE_COL, { t: "n", v: 0 });
@@ -530,38 +661,51 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (H_COL       !== undefined) cols1.set(H_COL,       { t: "n", v: 1 });
       if (D_COL       !== undefined) cols1.set(D_COL,       { t: "n", v: 1 });
 
-      // From Fixture Index
-      setS1(NEWFIXTURE_COL, fixtureCode);
+      // Fixture Index
+      ss(NEWFIXTURE_COL, fixtureCode);
 
-      // From QRY itself
-      setS1(NOBAY_COL, qry.segment);
-      setS1(SEQ_COL,   qry.locationId);
-      setN1(SHELFSTOCK_COL, qry.totalUnits || undefined);
+      // QRY direct fields
+      ss(NOBAY_COL, qry.segment);
+      ss(SEQ_COL,   qry.locationId);
+      sn(SHELFSTOCK_COL, qry.totalUnits || undefined);
 
-      // % Ordering (Config Rules or default 100%)
-      const pct = getOrderingPct(exceptionConfig, spaceman?.category ?? "", spaceman?.subcategory ?? "", spaceman?.descC ?? "");
-      cols1.set(PCT_COL, { t: "n", v: pct });
+      // % Ordering — stored as integer (100 = 100%).
+      // Config Rule keys: PLANOFOLDER01(Division) + PF03 + PF04
+      const pctVal = getOrderingPct(
+        exceptionConfig,
+        sm?.planofolder01 ?? "",
+        sm?.planofolder03 ?? "",
+        sm?.planofolder04 ?? "",
+      );
+      cols1.set(PCT_COL, { t: "n", v: pctVal });
 
-      // Net Capacity = SHELF_STOCK_CELL × PCT_CELL
-      cols1.set(NETCAP_COL, { t: "f", f: `${colLetter(SHELFSTOCK_COL)}${rowNum}*${colLetter(PCT_COL)}${rowNum}`, v: 0 });
+      // Net Capacity = SHELF_STOCK × (% Ordering / 100)
+      cols1.set(NETCAP_COL, {
+        t: "f",
+        f: `${colLetter(SHELFSTOCK_COL)}${rowNum}*${colLetter(PCT_COL)}${rowNum}/100`,
+        v: 0,
+      });
 
       s1Patches.set(rowNum, cols1);
 
-      // ── Sheet 2 ──────────────────────────────────────────────────────────
+      // ── Sheet 2 (New for Link_IM) ─────────────────────────────────────────
       const cols2 = new Map<number, CellPatch>();
       cols2.set(BARCODE2_COL, { t: "s", v: qry.barcode });
-      if (spaceman?.planofolder02) cols2.set(DIV2_COL,  { t: "s", v: spaceman.planofolder02 });
-      if (spaceman?.planofolder03) cols2.set(DEPT2_COL, { t: "s", v: spaceman.planofolder03 });
+      if (sm?.planofolder01)  cols2.set(DIV2_COL,    { t: "s", v: sm.planofolder01 });
+      if (productName)        { if (NAME2_COL  !== undefined) cols2.set(NAME2_COL,  { t: "s", v: productName }); }
+      if (sm?.planofolder04)  { if (POG04_2_COL !== undefined) cols2.set(POG04_2_COL, { t: "s", v: sm.planofolder04 }); }
+      if (sm?.planofolder03)  { if (POG03_2_COL !== undefined) cols2.set(POG03_2_COL, { t: "s", v: sm.planofolder03 }); }
+      if (sm?.planofolder02)  { if (DEPT2_COL   !== undefined) cols2.set(DEPT2_COL,   { t: "s", v: sm.planofolder02 }); }
       s2Patches.set(rowNum, cols2);
     }
 
     // ── 8. ZIP-patch template ─────────────────────────────────────────────────
     progress(75, "เปิด Template ZIP...");
 
-    const files   = unzipSync(new Uint8Array(targetBuf));
-    const wbXml   = strFromU8(files["xl/workbook.xml"]);
-    const relsXml = strFromU8(files["xl/_rels/workbook.xml.rels"]);
-    const sstPath = "xl/sharedStrings.xml";
+    const files    = unzipSync(new Uint8Array(targetBuf));
+    const wbXml    = strFromU8(files["xl/workbook.xml"]);
+    const relsXml  = strFromU8(files["xl/_rels/workbook.xml.rels"]);
+    const sstPath  = "xl/sharedStrings.xml";
     const sstStrings = files[sstPath] ? parseSST(strFromU8(files[sstPath])) : [];
 
     const allNewStrings: string[] = [];
@@ -584,7 +728,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       files[sstPath] = strToU8(
         files[sstPath]
           ? appendSST(strFromU8(files[sstPath]), allNewStrings)
-          : buildSST([...sstStrings, ...allNewStrings])
+          : buildSST([...sstStrings, ...allNewStrings]),
       );
     }
 
@@ -594,8 +738,12 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     progress(100, "เสร็จสิ้น!");
 
     ctx.postMessage(
-      { type: "done", buffer: output, stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture } },
-      [output]
+      {
+        type: "done",
+        buffer: output,
+        stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture },
+      },
+      [output],
     );
 
   } catch (err) {
