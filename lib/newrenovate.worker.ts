@@ -330,9 +330,15 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 3. Master Assortment Orderable → map by BARCODE ───────────────────────
     progress(36, "อ่านไฟล์ Master Assortment Orderable...");
 
-    const masterWb = XLSX.read(masterBuf, { type: "array" });
-    const masterWs = masterWb.Sheets["Sheet1"] ?? masterWb.Sheets[masterWb.SheetNames[0]];
-    if (!masterWs) throw new Error("ไม่พบ sheet ใน Master Assortment Orderable");
+    const masterWb = XLSX.read(new Uint8Array(masterBuf), { type: "array" });
+    const masterSheetName =
+      masterWb.SheetNames.find(n => masterWb.Sheets[n]) ??
+      masterWb.SheetNames[0];
+    if (!masterSheetName)
+      throw new Error(`Master Assortment: ไม่พบ sheet ใดๆ ในไฟล์ — SheetNames: [${masterWb.SheetNames.join(", ") || "ว่าง"}]`);
+    const masterWs = masterWb.Sheets[masterSheetName];
+    if (!masterWs)
+      throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}" — SheetNames: [${masterWb.SheetNames.join(", ")}]`);
 
     const masterRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(masterWs, { defval: "" });
     const masterMap = new Map<string, MasterEntry>();
@@ -352,9 +358,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 4. INDEX → map by PLANOGRAM ───────────────────────────────────────────
     progress(48, "อ่านไฟล์ INDEX...");
 
-    const indexWb = XLSX.read(indexBuf, { type: "array" });
-    const indexWs = indexWb.Sheets[indexWb.SheetNames[0]];
-    if (!indexWs) throw new Error("ไม่พบ sheet ใน INDEX");
+    const indexWb = XLSX.read(new Uint8Array(indexBuf), { type: "array" });
+    const indexSheetName = indexWb.SheetNames.find(n => indexWb.Sheets[n]) ?? indexWb.SheetNames[0];
+    if (!indexSheetName) throw new Error(`INDEX: ไม่พบ sheet — SheetNames: [${indexWb.SheetNames.join(", ") || "ว่าง"}]`);
+    const indexWs = indexWb.Sheets[indexSheetName];
+    if (!indexWs) throw new Error(`INDEX: ไม่พบ sheet "${indexSheetName}"`);
 
     const indexRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(indexWs, { defval: "" });
     const indexMap = new Map<string, { status: string; store: string }>();
@@ -373,14 +381,17 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 5. Fixture Index → map by "SEG|POG" ───────────────────────────────────
     progress(57, "อ่านไฟล์ Fixture Index...");
 
-    const fixtureWb = XLSX.read(fixtureBuf, { type: "array" });
+    const fixtureWb = XLSX.read(new Uint8Array(fixtureBuf), { type: "array" });
     const fixtureSheetName =
       fixtureWb.SheetNames.find(n => n === "Fixture_2026") ??
-      fixtureWb.SheetNames.find(n => n.startsWith("Fixture")) ??
+      fixtureWb.SheetNames.find(n => n.toLowerCase().startsWith("fixture")) ??
+      fixtureWb.SheetNames.find(n => fixtureWb.Sheets[n]) ??
       fixtureWb.SheetNames[0];
-    if (!fixtureSheetName) throw new Error("ไม่พบ sheet ใน Fixture Index");
-
+    if (!fixtureSheetName)
+      throw new Error(`Fixture Index: ไม่พบ sheet — SheetNames: [${fixtureWb.SheetNames.join(", ") || "ว่าง"}]`);
     const fixtureWs = fixtureWb.Sheets[fixtureSheetName];
+    if (!fixtureWs)
+      throw new Error(`Fixture Index: ไม่พบ sheet "${fixtureSheetName}" — SheetNames: [${fixtureWb.SheetNames.join(", ")}]`);
     // range:1 = skip remark row, row 2 becomes headers (SEG / POG / Code Fixture)
     const fixtureRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(fixtureWs, { defval: "", range: 1 });
 
