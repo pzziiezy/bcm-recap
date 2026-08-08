@@ -2,15 +2,14 @@
  * NewRenovate worker — ZIP-patch approach (preserves all template formatting).
  *
  * Data flow (QRY-driven):
- *
  *   QRY_Product_by_POG_by_Position  ← primary source of rows
- *     │  BARCODE → DATA_SPACEMAN    → DIVISION(PF01) / PF03 / PF04 / PLANOGRAM
+ *     │  BARCODE → DATA_SPACEMAN    → DIVISION(PF01|PF02) / PF03 / PF04 / PLANOGRAM
  *     │  BARCODE → Master Assortment→ SALE PACK CODE / Pack Size / Extra info / Status / Store / Name
  *     │  PLANOGRAM + SEGMENT → Fixture Index → New Fixture (Code Fixture)
  *     │  PLANOGRAM → INDEX   → Status(fallback) / Store(fallback) / PLANOGRAM NAME
- *     │  QRY itself          → No.Bay(SEGMENT) / SEQ(LOCATION_ID) / SHELF STOCK(TOTAL_UNITS) / Name
- *     └─ Config Rules        → % Ordering (default 100, stored as integer)
- *        Net Capacity = SHELF STOCK × (% Ordering / 100)
+ *     │  QRY itself          → No.Bay / SEQ / SHELF STOCK / Name
+ *     └─ Config Rules        → % Ordering (decimal 1.0=100%; stored with column % format)
+ *        Net Capacity = SHELF STOCK × % Ordering
  */
 
 import * as XLSX from "xlsx";
@@ -61,7 +60,8 @@ interface IndexEntry {
 }
 
 interface QrySourceRow {
-  barcode:    string;
+  barcode:    string; // display form (preserves leading zeros)
+  matchKey:   string; // stripped leading zeros — used for all map lookups
   segment:    string;
   locationId: string;
   totalUnits: string;
@@ -80,15 +80,10 @@ function progress(pct: number, msg: string) {
 }
 
 /**
- * Normalize a barcode to a canonical string.
- * KEY FIX: if the value is already a string that starts with "0",
- * preserve the leading zeros — don't convert to Number and back.
- * Also accepts an optional `formatted` (cell.w) which preserves Excel custom-number-format
- * leading zeros (e.g., format "0000000000000" applied to a number).
+ * Normalize barcode for DISPLAY — preserves leading zeros that come from
+ * cell.w (Excel formatted text) or string-type cells.
  */
 function normalizeBarcode(val: unknown, formatted?: string): string {
-  // Prefer formatted text (w property from cellText:true) — it preserves
-  // leading zeros that come from Excel custom number formats.
   if (formatted != null && formatted !== "") {
     const w = formatted.replace(/[, ]/g, "").trim();
     if (w) return w;
@@ -96,16 +91,27 @@ function normalizeBarcode(val: unknown, formatted?: string): string {
   if (val == null || val === "") return "";
   const s = String(val).trim();
   if (!s) return "";
-  // Preserve strings that already have leading zeros (text-type cells)
-  if (s.startsWith("0")) return s;
+  if (s.startsWith("0")) return s; // preserve leading zeros from text cells
   const n = Number(s);
   if (!isNaN(n) && n > 0) return String(Math.round(n));
   return s;
 }
 
 /**
- * Returns the ordering percentage as an integer (0–100).
- * Default = 100. Matches Config Rules by DIVISION(PF01)+PF03+PF04.
+ * Return a match key for map lookups by stripping leading zeros.
+ * "0012345678901" and "12345678901" map to the same key "12345678901".
+ * This prevents mismatches when one file stores barcodes as numbers (no zeros)
+ * and another stores as text (with leading zeros).
+ */
+function barcodeMatchKey(bc: string): string {
+  const stripped = bc.replace(/^0+/, "");
+  return stripped || bc; // don't return "" if bc was all zeros
+}
+
+/**
+ * Returns ordering percentage as a decimal (1.0 = 100%, 0.8 = 80%).
+ * Config Rule keys: PLANOFOLDER01(Division) + PF03 + PF04.
+ * Default = 1.0 (100%).
  */
 function getOrderingPct(
   cfg: ExceptionConfig[],
@@ -118,12 +124,11 @@ function getOrderingPct(
     const catOk = rule.category    === "ทั้งหมด" || rule.category    === pf01;
     const subOk = rule.subcategory === "ทั้งหมด" || rule.subcategory === pf03;
     const dscOk = rule.descC       === "ทั้งหมด" || rule.descC       === pf04;
-    if (catOk && subOk && dscOk) return Number(rule.percentage);
+    if (catOk && subOk && dscOk) return Number(rule.percentage) / 100;
   }
-  return 100;
+  return 1.0; // default 100%
 }
 
-/** Normalize key for INDEX map: trim + collapse whitespace */
 function normalizeKey(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
@@ -191,15 +196,51 @@ function findSheetPath(wbXml: string, relsXml: string, name: string): string | n
   return `xl/worksheets/${t}`;
 }
 
+/**
+ * Parse the <cols> section of a sheet XML and return a map of
+ * 0-indexed column → style attribute string.
+ * Used to apply column default styles to newly inserted cells so that
+ * number formats (e.g., percentage) are preserved.
+ */
+function parseColStyles(sheetXml: string): Map<number, string> {
+  const colStyles = new Map<number, string>();
+  const colsMatch = /<cols\b[^>]*>([\s\S]*?)<\/cols>/.exec(sheetXml);
+  if (!colsMatch) return colStyles;
+  const colRe = /<col\b([^>]*?)(?:\/>|><\/col>)/g;
+  let m: RegExpExecArray | null;
+  while ((m = colRe.exec(colsMatch[1])) !== null) {
+    const attrs = m[1];
+    const minM  = /\bmin="(\d+)"/.exec(attrs);
+    const maxM  = /\bmax="(\d+)"/.exec(attrs);
+    const styleM = /\bstyle="(\d+)"/.exec(attrs);
+    if (!minM || !maxM || !styleM) continue;
+    const lo = parseInt(minM[1]) - 1; // 1-indexed → 0-indexed
+    const hi = parseInt(maxM[1]) - 1;
+    for (let c = lo; c <= hi; c++) colStyles.set(c, styleM[1]);
+  }
+  return colStyles;
+}
+
 // ─── Cell patching ────────────────────────────────────────────────────────────
 
-function buildCellXml(ref: string, patch: CellPatch, getSsIdx: (v: string) => number, sAttr: string): string {
+function buildCellXml(
+  ref: string,
+  patch: CellPatch,
+  getSsIdx: (v: string) => number,
+  sAttr: string,
+): string {
   if (patch.t === "s") return `<c r="${ref}"${sAttr} t="s"><v>${getSsIdx(patch.v)}</v></c>`;
   if (patch.t === "n") return `<c r="${ref}"${sAttr}><v>${patch.v}</v></c>`;
   return `<c r="${ref}"${sAttr}><f>${patch.f}</f><v>${patch.v}</v></c>`;
 }
 
-function patchCellInRow(inner: string, ref: string, ci: number, patch: CellPatch, getSsIdx: (v: string) => number): string {
+function patchCellInRow(
+  inner: string,
+  ref: string,
+  ci: number,
+  patch: CellPatch,
+  getSsIdx: (v: string) => number,
+): string {
   const pat = new RegExp(`<c r="${ref}"([^>]*?)(?:\\/>|>[\\s\\S]*?<\\/c>)`);
   const m = pat.exec(inner);
   const sAttr = m ? (/\bs="(\d+)"/.exec(m[1]) ? ` s="${/\bs="(\d+)"/.exec(m[1])![1]}"` : "") : "";
@@ -217,6 +258,7 @@ function patchSheetXml(
   sheetXml: string,
   sstStrings: string[],
   rowPatches: Map<number, Map<number, CellPatch>>,
+  colStyles: Map<number, string>,          // column default styles from <cols>
 ): { sheetXml: string; newStrings: string[] } {
   if (!rowPatches.size) return { sheetXml, newStrings: [] };
 
@@ -236,8 +278,10 @@ function patchSheetXml(
     if (!patches) return full;
     patchedRows.add(+rm[1]);
     let cells = "";
-    for (const [ci, patch] of [...patches.entries()].sort((a, b) => a[0] - b[0]))
-      cells += buildCellXml(`${colLetter(ci)}${rm[1]}`, patch, getSsIdx, "");
+    for (const [ci, patch] of [...patches.entries()].sort((a, b) => a[0] - b[0])) {
+      const sAttr = colStyles.has(ci) ? ` s="${colStyles.get(ci)}"` : "";
+      cells += buildCellXml(`${colLetter(ci)}${rm[1]}`, patch, getSsIdx, sAttr);
+    }
     return `<row${attrs}>${cells}</row>`;
   });
 
@@ -260,8 +304,11 @@ function patchSheetXml(
     .sort((a, b) => a[0] - b[0])
     .map(([rowNum, patches]) => {
       let cells = "";
-      for (const [ci, patch] of [...patches.entries()].sort((a, b) => a[0] - b[0]))
-        cells += buildCellXml(`${colLetter(ci)}${rowNum}`, patch, getSsIdx, "");
+      for (const [ci, patch] of [...patches.entries()].sort((a, b) => a[0] - b[0])) {
+        // Apply the column's default style so number formats (%, date, etc.) are preserved
+        const sAttr = colStyles.has(ci) ? ` s="${colStyles.get(ci)}"` : "";
+        cells += buildCellXml(`${colLetter(ci)}${rowNum}`, patch, getSsIdx, sAttr);
+      }
       return `<row r="${rowNum}">${cells}</row>`;
     }).join("");
 
@@ -292,24 +339,21 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 1. QRY → ordered row list ─────────────────────────────────────────────
     progress(3, "อ่านไฟล์ QRY_Product_by_POG_by_Position...");
 
-    // cellText:true → cell.w (formatted text) is populated, needed for barcode leading zeros.
     const qryWb = XLSX.read(new Uint8Array(qryBuf), { type: "array", cellText: true });
     const qryWs = qryWb.Sheets[qryWb.SheetNames[0]];
     if (!qryWs) throw new Error("ไม่พบ sheet ใน QRY_Product_by_POG_by_Position");
 
     const qryRange = XLSX.utils.decode_range(qryWs["!ref"] || "A1");
 
-    // Auto-detect header row: scan first 5 rows for a row that contains a barcode-like column.
+    // Auto-detect header row: scan first 5 rows for a row containing BARCODE/UPC/EAN
     let qHdrRow = 0;
-    for (let r = 0; r <= Math.min(4, qryRange.e.r); r++) {
+    outer: for (let r = 0; r <= Math.min(4, qryRange.e.r); r++) {
       for (let c = 0; c <= qryRange.e.c; c++) {
         const v = String(qryWs[XLSX.utils.encode_cell({ r, c })]?.v ?? "").toUpperCase().trim();
-        if (v === "BARCODE" || v === "UPC" || v === "EAN") { qHdrRow = r; break; }
+        if (v === "BARCODE" || v === "UPC" || v === "EAN") { qHdrRow = r; break outer; }
       }
-      if (qHdrRow === r && r > 0) break;
     }
 
-    // Build header array (case-preserved for display, searched case-insensitively below)
     const qHdrs: string[] = [];
     for (let c = 0; c <= qryRange.e.c; c++) {
       const cell = qryWs[XLSX.utils.encode_cell({ r: qHdrRow, c })];
@@ -323,19 +367,17 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     };
 
     const qBarcodeCol = findQCol("BARCODE", "UPC", "EAN", "Barcode", "barcode");
-    const qSegCol     = findQCol("SEGMENT", "Segment");
-    const qLocCol     = findQCol("LOCATION_ID", "LOCATIONID", "Location_ID");
-    const qUnitsCol   = findQCol("TOTAL_UNITS", "TOTALUNITS", "Total_Units", "QTY", "UNITS");
-    // NAME column in QRY is the primary source for product name.
+    const qSegCol     = findQCol("SEGMENT", "Segment", "segment");
+    const qLocCol     = findQCol("LOCATION_ID", "LOCATIONID", "Location_ID", "location_id");
+    const qUnitsCol   = findQCol("TOTAL_UNITS", "TOTALUNITS", "Total_Units", "QTY", "UNITS", "total_units");
     const qNameCol    = findQCol("NAME", "PRODUCT_NAME", "DESCRIPTION", "LONG_DESC", "SHORT_DESC");
 
     if (qBarcodeCol < 0)
-      throw new Error(`QRY: ไม่พบ column BARCODE — headers ที่พบ: [${qHdrs.filter(Boolean).join(", ")}]`);
+      throw new Error(`QRY: ไม่พบ column BARCODE — headers พบ: [${qHdrs.filter(Boolean).join(", ")}]`);
 
     const qryRows: QrySourceRow[] = [];
     for (let r = qHdrRow + 1; r <= qryRange.e.r; r++) {
       const barcodeCell = qryWs[XLSX.utils.encode_cell({ r, c: qBarcodeCol })];
-      // Prefer formatted text (w) to recover leading zeros from Excel custom number formats.
       const bc = normalizeBarcode(barcodeCell?.v, barcodeCell?.w);
       if (!bc) continue;
 
@@ -353,6 +395,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
       qryRows.push({
         barcode:    bc,
+        matchKey:   barcodeMatchKey(bc),   // stripped for all map lookups
         segment:    str(qSegCol),
         locationId: str(qLocCol),
         totalUnits: numStr(qUnitsCol),
@@ -361,7 +404,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
     progress(12, `QRY: ${qryRows.length.toLocaleString()} rows`);
 
-    // ── 2. DATA_SPACEMAN → map by UPC ────────────────────────────────────────
+    // ── 2. DATA_SPACEMAN → map by UPC matchKey ───────────────────────────────
     progress(14, "อ่านไฟล์ DATA_SPACEMAN...");
 
     const spacemanWb = XLSX.read(new Uint8Array(spacemanBuf), {
@@ -393,12 +436,13 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       return cell.v != null ? String(cell.v).trim() : "";
     };
 
-    const spacemanMap = new Map<string, SpacemanEntry>();
+    const spacemanMap = new Map<string, SpacemanEntry>(); // key = barcodeMatchKey
     for (let r = 1; r <= sRange.e.r; r++) {
-      const upc = upcIdx >= 0 ? normalizeBarcode(getS(r, upcIdx), getS(r, upcIdx, true)) : "";
-      if (!upc) continue;
-      if (!spacemanMap.has(upc)) {
-        spacemanMap.set(upc, {
+      const rawUpc = upcIdx >= 0 ? normalizeBarcode(getS(r, upcIdx), getS(r, upcIdx, true)) : "";
+      const key    = barcodeMatchKey(rawUpc);
+      if (!key) continue;
+      if (!spacemanMap.has(key)) {
+        spacemanMap.set(key, {
           planofolder01: pf01Idx >= 0 ? getS(r, pf01Idx) : "",
           planofolder02: pf02Idx >= 0 ? getS(r, pf02Idx) : "",
           planofolder03: pf03Idx >= 0 ? getS(r, pf03Idx) : "",
@@ -414,7 +458,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
     progress(32, `DATA_SPACEMAN: ${spacemanMap.size.toLocaleString()} barcodes`);
 
-    // ── 3. Master Assortment → map by BARCODE ────────────────────────────────
+    // ── 3. Master Assortment → map by BARCODE matchKey ───────────────────────
     progress(34, "อ่านไฟล์ Master Assortment Orderable...");
 
     const masterWb = XLSX.read(new Uint8Array(masterBuf), { type: "array", cellText: true });
@@ -423,43 +467,42 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       throw new Error(`Master Assortment: ไม่พบ sheet — SheetNames: [${masterWb.SheetNames.join(", ") || "ว่าง"}]`);
     const masterWs = masterWb.Sheets[masterSheetName];
     if (!masterWs)
-      throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}" — SheetNames: [${masterWb.SheetNames.join(", ")}]`);
+      throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}"`);
 
     const masterAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(masterWs, { defval: "" });
-    const masterMap = new Map<string, MasterEntry>();
+    const masterMap = new Map<string, MasterEntry>(); // key = barcodeMatchKey
 
-    // Detect which header key holds the barcode (case-insensitive scan of first row)
-    const masterHdrKeys = Object.keys(masterAllRows[0] ?? {});
-    const findHdr = (...names: string[]) =>
-      names.find(n => masterHdrKeys.some(k => k.toUpperCase() === n.toUpperCase())) ??
-      names.find(n => masterHdrKeys.some(k => k.toUpperCase().includes(n.toUpperCase())));
-    const masterBcKey    = findHdr("BARCODE","EAN","UPC") ?? "BARCODE";
-    const masterNameKey  = findHdr("DESCRIPTION","PRODUCT_NAME","LONG_DESC","NAME","SHORT_DESC","PROD_NAME") ?? "";
-    const masterBarSingle= findHdr("BAR_SINGLE","BAR_SINGLE_CODE","SALE_PACK_CODE") ?? "BAR_SINGLE";
-    const masterSkuPack  = findHdr("SKU_PACK","PACK_SIZE","PACK") ?? "SKU_PACK";
-    const masterExtraKey = findHdr("EXTRA_INFO","EXTRA","REMARK") ?? "EXTRA_INFO";
-    const masterStatusKey= findHdr("STATUS","ITEM_STATUS","ORD_STATUS") ?? "STATUS";
-    const masterStoreKey = findHdr("STORE","STORE_CODE","STORE_NAME","BRANCH") ?? "STORE";
+    const mHdrs = Object.keys(masterAllRows[0] ?? {});
+    const findMHdr = (...names: string[]) =>
+      names.find(n => mHdrs.some(k => k.toUpperCase() === n.toUpperCase())) ??
+      names.find(n => mHdrs.some(k => k.toUpperCase().includes(n.toUpperCase())));
+
+    const mBcKey     = findMHdr("BARCODE", "EAN", "UPC") ?? "BARCODE";
+    const mNameKey   = findMHdr("DESCRIPTION","PRODUCT_NAME","LONG_DESC","NAME","SHORT_DESC","PROD_NAME") ?? "";
+    const mBarSingle = findMHdr("BAR_SINGLE","BAR_SINGLE_CODE","SALE_PACK_CODE","SALEPACKCODE") ?? "BAR_SINGLE";
+    const mSkuPack   = findMHdr("SKU_PACK","PACK_SIZE","PACK") ?? "SKU_PACK";
+    const mExtra     = findMHdr("EXTRA_INFO","EXTRA","REMARK") ?? "EXTRA_INFO";
+    const mStatus    = findMHdr("STATUS","ITEM_STATUS","ORD_STATUS","ORDERABLE") ?? "STATUS";
+    const mStore     = findMHdr("STORE","STORE_CODE","STORE_NAME","BRANCH") ?? "STORE";
 
     for (const row of masterAllRows) {
-      // Prefer formatted-text barcode from sheet — but sheet_to_json raw gives us the .v already.
-      // For leading-zero safety: treat numeric BARCODE values with the same normalizeBarcode.
-      const bc = normalizeBarcode(row[masterBcKey]);
-      if (!bc) continue;
-      if (!masterMap.has(bc)) {
-        masterMap.set(bc, {
-          name:      masterNameKey ? String(row[masterNameKey] ?? "") : "",
-          barSingle: String(row[masterBarSingle] ?? ""),
-          skuPack:   String(row[masterSkuPack]   ?? ""),
-          extraInfo: String(row[masterExtraKey]  ?? ""),
-          status:    String(row[masterStatusKey] ?? ""),
-          store:     String(row[masterStoreKey]  ?? ""),
+      const rawBc = normalizeBarcode(row[mBcKey]);
+      const key   = barcodeMatchKey(rawBc);
+      if (!key) continue;
+      if (!masterMap.has(key)) {
+        masterMap.set(key, {
+          name:      mNameKey ? String(row[mNameKey] ?? "") : "",
+          barSingle: String(row[mBarSingle] ?? ""),
+          skuPack:   String(row[mSkuPack]   ?? ""),
+          extraInfo: String(row[mExtra]     ?? ""),
+          status:    String(row[mStatus]    ?? ""),
+          store:     String(row[mStore]     ?? ""),
         });
       }
     }
     progress(46, `Master Assortment: ${masterMap.size.toLocaleString()} barcodes`);
 
-    // ── 4. INDEX → map by PLANOGRAM (normalized key) ──────────────────────────
+    // ── 4. INDEX → map by PLANOGRAM (normalised key) ─────────────────────────
     progress(48, "อ่านไฟล์ INDEX...");
 
     const indexWb = XLSX.read(new Uint8Array(indexBuf), { type: "array" });
@@ -470,32 +513,34 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     if (!indexWs) throw new Error(`INDEX: ไม่พบ sheet "${indexSheetName}"`);
 
     const indexAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(indexWs, { defval: "" });
-    const indexMap = new Map<string, IndexEntry>(); // key = normalized planogram name
+    const indexMap = new Map<string, IndexEntry>(); // key = normalizeKey(planogram)
 
-    const idxHdrKeys = Object.keys(indexAllRows[0] ?? {});
-    const findIdxHdr = (...names: string[]) =>
-      names.find(n => idxHdrKeys.some(k => k.toUpperCase() === n.toUpperCase())) ??
-      names.find(n => idxHdrKeys.some(k => k.toUpperCase().includes(n.toUpperCase())));
-    const idxPlogKey  = findIdxHdr("PLANOGRAM","POG","POG_NAME","PLANOGRAM_NAME","POG NAME") ?? "PLANOGRAM";
-    const idxStatKey  = findIdxHdr("STATUS","สถานะ","ITEM_STATUS") ?? "STATUS";
-    const idxStoreKey = findIdxHdr("STORE","สาขา","STORE_NAME","STORE_CODE","BRANCH") ?? "STORE";
-    const idxNameKey  = findIdxHdr("PLANOGRAM NAME","POG NAME","PLANOGRAM_NAME","POG_NAME","NAME") ?? "";
+    const iHdrs = Object.keys(indexAllRows[0] ?? {});
+    const findIHdr = (...names: string[]) =>
+      names.find(n => iHdrs.some(k => k.toUpperCase() === n.toUpperCase())) ??
+      names.find(n => iHdrs.some(k => k.toUpperCase().includes(n.toUpperCase())));
+
+    const iPlogKey  = findIHdr("PLANOGRAM","POG","POG_NAME","PLANOGRAM_NAME","POG NAME") ?? "PLANOGRAM";
+    const iStatKey  = findIHdr("STATUS","สถานะ","ITEM_STATUS") ?? "STATUS";
+    const iStoreKey = findIHdr("STORE","สาขา","STORE_NAME","STORE_CODE","BRANCH") ?? "STORE";
+    const iNameKey  = findIHdr("PLANOGRAM NAME","POG NAME","PLANOGRAM_NAME","POG_NAME") ?? "";
 
     for (const row of indexAllRows) {
-      const plog = normalizeKey(String(row[idxPlogKey] ?? ""));
+      const plog = normalizeKey(String(row[iPlogKey] ?? ""));
       if (!plog) continue;
       if (!indexMap.has(plog)) {
-        indexMap.set(plog, {
-          status:        String(row[idxStatKey]  ?? ""),
-          store:         String(row[idxStoreKey] ?? ""),
-          planogramName: idxNameKey ? String(row[idxNameKey] ?? "") : "",
-        });
+        const entry: IndexEntry = {
+          status:        String(row[iStatKey]  ?? ""),
+          store:         String(row[iStoreKey] ?? ""),
+          planogramName: iNameKey ? String(row[iNameKey] ?? "") : plog,
+        };
+        indexMap.set(plog, entry);
+        // Also index by uppercase for case-insensitive fallback
+        const upper = plog.toUpperCase();
+        if (!indexMap.has(upper)) indexMap.set(upper, entry);
       }
-      // Also store under uppercase variant for case-insensitive fallback
-      const upper = plog.toUpperCase();
-      if (!indexMap.has(upper)) indexMap.set(upper, indexMap.get(plog)!);
     }
-    progress(55, `INDEX: ${(indexMap.size / 2) | 0} planograms`);
+    progress(55, `INDEX: ${Math.ceil(indexMap.size / 2)} planograms`);
 
     // ── 5. Fixture Index → map by "SEG|POG" ──────────────────────────────────
     progress(57, "อ่านไฟล์ Fixture Index...");
@@ -510,9 +555,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       throw new Error(`Fixture Index: ไม่พบ sheet — SheetNames: [${fixtureWb.SheetNames.join(", ") || "ว่าง"}]`);
     const fixtureWs = fixtureWb.Sheets[fixtureSheetName];
     if (!fixtureWs)
-      throw new Error(`Fixture Index: ไม่พบ sheet "${fixtureSheetName}" — SheetNames: [${fixtureWb.SheetNames.join(", ")}]`);
+      throw new Error(`Fixture Index: ไม่พบ sheet "${fixtureSheetName}"`);
 
-    // range:1 = skip the REMARK row; actual headers (SEG / POG / Code Fixture) are in row 2
+    // range:1 = skip REMARK row; actual headers (SEG / POG / Code Fixture) are in row 2
     const fixtureRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(fixtureWs, { defval: "", range: 1 });
     const fixtureMap = new Map<string, string>();
     for (const row of fixtureRows) {
@@ -524,7 +569,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     progress(63, `Fixture Index: ${fixtureMap.size.toLocaleString()} SEG|POG entries`);
 
     // ── 6. Detect column positions from template header row 6 (index 5) ───────
-    progress(65, "อ่านไฟล์ Template (detect headers)...");
+    progress(65, "อ่านไฟล์ Template...");
 
     const targetWb = XLSX.read(targetBuf, { type: "array", cellText: false, cellHTML: false, cellNF: false, cellDates: false });
 
@@ -539,10 +584,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const h = cell?.v != null ? String(cell.v).replace(/\s+/g, " ").trim() : "";
       if (h) colMap1.set(h, c);
     }
-
-    // Exact match (case-sensitive), with fallback index
     const c1 = (name: string, fb: number) => colMap1.get(name) ?? fb;
-    // Fuzzy: first header whose normalised form contains the needle (case-insensitive)
     const fc1 = (needle: string): number | undefined => {
       const nl = needle.toLowerCase().replace(/\s+/g, " ");
       for (const [k, v] of colMap1)
@@ -550,32 +592,28 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       return undefined;
     };
 
-    const BARCODE_COL       = c1("BARCODE", 5);
-    // DIVISION ← PLANOFOLDER01 (topmost hierarchy level)
-    const DIVISION_COL      = c1("DIVISION", 1);
-    const PF03_COL          = colMap1.get("PLANOFOLDER03") ?? fc1("PF03") ?? 2;
-    const PF04_COL          = colMap1.get("PLANOFOLDER04") ?? fc1("PF04") ?? 3;
-    const PLOGNAME_COL      = fc1("PLANOGRAM NAME") ?? fc1("PLANOGRAM") ?? fc1("POG NAME");
-    const NAME_COL          = fc1("Name") ?? fc1("Product Name") ?? fc1("Item Name") ?? fc1("ชื่อ");
-    const SALEPACK_COL      = fc1("SALE PACK CODE") ?? fc1("SALE PACK") ?? 7;
-    const PACKSIZE_COL      = fc1("Pack Size") ?? fc1("PACK SIZE") ?? 8;
-    const EXTRA_COL         = fc1("Extra info") ?? fc1("EXTRA INFO") ?? fc1("EXTRA") ?? 9;
-    const STATUS_COL        = fc1("Status") ?? fc1("STATUS");
-    const STORE_COL         = fc1("Store") ?? fc1("STORE");
-    const FIXTYPE_COL       = fc1("Fixture Type") ?? fc1("FIXTURE TYPE");
-    const W_COL             = (() => {
-      // Look for standalone "W" — avoid matching "STORE" or "NEW FIXTURE"
-      for (const [k, v] of colMap1) if (/^\s*W\s*$/.test(k)) return v;
-      return undefined;
-    })();
-    const H_COL             = (() => { for (const [k, v] of colMap1) if (/^\s*H\s*$/.test(k)) return v; return undefined; })();
-    const D_COL             = (() => { for (const [k, v] of colMap1) if (/^\s*D\s*$/.test(k)) return v; return undefined; })();
-    const NEWFIXTURE_COL    = fc1("New Fixture") ?? fc1("NEW FIXTURE");
-    const NOBAY_COL         = fc1("No.Bay") ?? fc1("NO BAY") ?? fc1("NO.BAY");
-    const SEQ_COL           = fc1("SEQ");
-    const SHELFSTOCK_COL    = fc1("SHELF STOCK") ?? c1("SHELF STOCK FOR ORDER (Piece)", 19);
-    const PCT_COL           = fc1("% Ordering") ?? fc1("%Ordering") ?? 20;
-    const NETCAP_COL        = fc1("Net Capacity") ?? fc1("NET CAPACITY") ?? 21;
+    const BARCODE_COL    = c1("BARCODE", 5);
+    // DIVISION = PLANOFOLDER01 (topmost). Fallback: PF02 if PF01 is absent in DS.
+    const DIVISION_COL   = c1("DIVISION", 1);
+    const PF03_COL       = colMap1.get("PLANOFOLDER03") ?? fc1("PF03") ?? 2;
+    const PF04_COL       = colMap1.get("PLANOFOLDER04") ?? fc1("PF04") ?? 3;
+    const PLOGNAME_COL   = fc1("PLANOGRAM NAME") ?? fc1("POG NAME") ?? fc1("PLANOGRAM");
+    const NAME_COL       = fc1("Name") ?? fc1("Product Name") ?? fc1("Item Name") ?? fc1("ชื่อ");
+    const SALEPACK_COL   = fc1("SALE PACK CODE") ?? fc1("SALE PACK") ?? 7;
+    const PACKSIZE_COL   = fc1("Pack Size") ?? fc1("PACK SIZE") ?? 8;
+    const EXTRA_COL      = fc1("Extra info") ?? fc1("EXTRA INFO") ?? fc1("EXTRA") ?? 9;
+    const STATUS_COL     = fc1("Status") ?? fc1("STATUS");
+    const STORE_COL      = fc1("Store") ?? fc1("STORE");
+    const FIXTYPE_COL    = fc1("Fixture Type") ?? fc1("FIXTURE TYPE");
+    const W_COL          = (() => { for (const [k, v] of colMap1) if (/^\s*W\s*$/.test(k)) return v; return undefined; })();
+    const H_COL          = (() => { for (const [k, v] of colMap1) if (/^\s*H\s*$/.test(k)) return v; return undefined; })();
+    const D_COL          = (() => { for (const [k, v] of colMap1) if (/^\s*D\s*$/.test(k)) return v; return undefined; })();
+    const NEWFIXTURE_COL = fc1("New Fixture") ?? fc1("NEW FIXTURE");
+    const NOBAY_COL      = fc1("No.Bay") ?? fc1("NO BAY") ?? fc1("NO.BAY");
+    const SEQ_COL        = fc1("SEQ");
+    const SHELFSTOCK_COL = fc1("SHELF STOCK") ?? c1("SHELF STOCK FOR ORDER (Piece)", 19);
+    const PCT_COL        = fc1("% Ordering") ?? fc1("%Ordering") ?? 20;
+    const NETCAP_COL     = fc1("Net Capacity") ?? fc1("NET CAPACITY") ?? 21;
 
     const s2Name = targetWb.SheetNames.find(n => n.trim().startsWith("New for Link_IM"));
     if (!s2Name) throw new Error("ไม่พบ sheet ที่ขึ้นต้นด้วย 'New for Link_IM'");
@@ -611,14 +649,15 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
 
     for (let i = 0; i < qryRows.length; i++) {
-      const qry     = qryRows[i];
-      const rowNum  = DATA_START_ROW + i;
-      const sm      = spacemanMap.get(qry.barcode);
-      const master  = masterMap.get(qry.barcode);
+      const qry    = qryRows[i];
+      const rowNum = DATA_START_ROW + i;
 
-      // Normalized planogram key for INDEX lookup
-      const planogram    = normalizeKey(sm?.planogram ?? "");
-      const idxEntry     = planogram
+      // All lookups use barcodeMatchKey (leading zeros stripped) for consistency
+      const sm     = spacemanMap.get(qry.matchKey);
+      const master = masterMap.get(qry.matchKey);
+
+      const planogram = normalizeKey(sm?.planogram ?? "");
+      const idxEntry  = planogram
         ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
         : undefined;
 
@@ -630,7 +669,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (idxEntry)    matchedIndex++;
       if (fixtureCode) matchedFixture++;
 
-      // ── Sheet 1 (New&Exsiting For Oder_SCM+MIS) ──────────────────────────
+      // ── Sheet 1 ───────────────────────────────────────────────────────────
       const cols1 = new Map<number, CellPatch>();
 
       const ss = (col: number | undefined, v: string) => {
@@ -642,36 +681,33 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         if (!isNaN(n)) cols1.set(col, { t: "n", v: n });
       };
 
-      // BARCODE — always written as string to preserve leading zeros
+      // BARCODE (display form — preserves leading zeros)
       cols1.set(BARCODE_COL, { t: "s", v: qry.barcode });
 
-      // Name — from QRY first, fall back to Master Assortment
+      // Name — QRY's own NAME column is primary source
       const productName = qry.name || master?.name || "";
       ss(NAME_COL, productName);
 
-      // DATA_SPACEMAN lookups
-      ss(DIVISION_COL, sm?.planofolder01 ?? "");  // DIVISION = PLANOFOLDER01
-      ss(PF03_COL,     sm?.planofolder03 ?? "");
-      ss(PF04_COL,     sm?.planofolder04 ?? "");
-      // PLANOGRAM NAME
-      const plogNameVal = idxEntry?.planogramName || sm?.planogram || "";
-      ss(PLOGNAME_COL, plogNameVal);
+      // DATA_SPACEMAN
+      // DIVISION: prefer PLANOFOLDER01; if absent fall back to PLANOFOLDER02
+      const divisionVal = sm?.planofolder01 || sm?.planofolder02 || "";
+      ss(DIVISION_COL,  divisionVal);
+      ss(PF03_COL,      sm?.planofolder03 ?? "");
+      ss(PF04_COL,      sm?.planofolder04 ?? "");
+      ss(PLOGNAME_COL,  idxEntry?.planogramName || sm?.planogram || "");
 
-      // Master Assortment
+      // Master Assortment (Status/Store from master first; fallback to INDEX)
       if (master) {
         const barSingleNum = Number(master.barSingle);
-        if (!isNaN(barSingleNum) && master.barSingle !== "") {
+        if (!isNaN(barSingleNum) && master.barSingle !== "")
           cols1.set(SALEPACK_COL, { t: "n", v: barSingleNum });
-        } else {
+        else
           ss(SALEPACK_COL, master.barSingle);
-        }
         sn(PACKSIZE_COL, master.skuPack);
         ss(EXTRA_COL,    master.extraInfo);
-        // Status / Store from Master Assortment (primary), INDEX as fallback
         ss(STATUS_COL, master.status || idxEntry?.status || "");
         ss(STORE_COL,  master.store  || idxEntry?.store  || "");
       } else {
-        // No Master match — fall back to INDEX for Status/Store
         ss(STATUS_COL, idxEntry?.status ?? "");
         ss(STORE_COL,  idxEntry?.store  ?? "");
       }
@@ -685,13 +721,14 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       // Fixture Index
       ss(NEWFIXTURE_COL, fixtureCode);
 
-      // QRY direct fields
+      // QRY direct
       ss(NOBAY_COL, qry.segment);
       ss(SEQ_COL,   qry.locationId);
       sn(SHELFSTOCK_COL, qry.totalUnits || undefined);
 
-      // % Ordering — stored as integer (100 = 100%).
-      // Config Rule keys: PLANOFOLDER01(Division) + PF03 + PF04
+      // % Ordering — stored as DECIMAL (1.0 = 100%, 0.8 = 80%).
+      // The column's percentage format (from <cols> in sheet XML) is applied via
+      // parseColStyles → colStyles → s="N" on each cell, so Excel shows "100%".
       const pctVal = getOrderingPct(
         exceptionConfig,
         sm?.planofolder01 ?? "",
@@ -700,23 +737,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       );
       cols1.set(PCT_COL, { t: "n", v: pctVal });
 
-      // Net Capacity = SHELF_STOCK × (% Ordering / 100)
+      // Net Capacity = SHELF STOCK × % Ordering (both in matching units: pieces × decimal)
       cols1.set(NETCAP_COL, {
         t: "f",
-        f: `${colLetter(SHELFSTOCK_COL)}${rowNum}*${colLetter(PCT_COL)}${rowNum}/100`,
+        f: `${colLetter(SHELFSTOCK_COL)}${rowNum}*${colLetter(PCT_COL)}${rowNum}`,
         v: 0,
       });
 
       s1Patches.set(rowNum, cols1);
 
-      // ── Sheet 2 (New for Link_IM) ─────────────────────────────────────────
+      // ── Sheet 2 ───────────────────────────────────────────────────────────
       const cols2 = new Map<number, CellPatch>();
       cols2.set(BARCODE2_COL, { t: "s", v: qry.barcode });
-      if (sm?.planofolder01)  cols2.set(DIV2_COL,    { t: "s", v: sm.planofolder01 });
-      if (productName)        { if (NAME2_COL  !== undefined) cols2.set(NAME2_COL,  { t: "s", v: productName }); }
-      if (sm?.planofolder04)  { if (POG04_2_COL !== undefined) cols2.set(POG04_2_COL, { t: "s", v: sm.planofolder04 }); }
-      if (sm?.planofolder03)  { if (POG03_2_COL !== undefined) cols2.set(POG03_2_COL, { t: "s", v: sm.planofolder03 }); }
-      if (sm?.planofolder02)  { if (DEPT2_COL   !== undefined) cols2.set(DEPT2_COL,   { t: "s", v: sm.planofolder02 }); }
+      if (divisionVal)        cols2.set(DIV2_COL,    { t: "s", v: divisionVal });
+      if (productName && NAME2_COL   !== undefined) cols2.set(NAME2_COL,   { t: "s", v: productName });
+      if (sm?.planofolder04 && POG04_2_COL !== undefined) cols2.set(POG04_2_COL, { t: "s", v: sm.planofolder04 });
+      if (sm?.planofolder03 && POG03_2_COL !== undefined) cols2.set(POG03_2_COL, { t: "s", v: sm.planofolder03 });
+      if (sm?.planofolder02 && DEPT2_COL   !== undefined) cols2.set(DEPT2_COL,   { t: "s", v: sm.planofolder02 });
       s2Patches.set(rowNum, cols2);
     }
 
@@ -728,20 +765,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const relsXml  = strFromU8(files["xl/_rels/workbook.xml.rels"]);
     const sstPath  = "xl/sharedStrings.xml";
     const sstStrings = files[sstPath] ? parseSST(strFromU8(files[sstPath])) : [];
-
     const allNewStrings: string[] = [];
 
     const path1 = findSheetPath(wbXml, relsXml, s1Name);
     if (!path1 || !files[path1]) throw new Error(`ไม่พบ ZIP path สำหรับ sheet "${s1Name}"`);
+    const sheet1Xml  = strFromU8(files[path1]);
+    const colStyles1 = parseColStyles(sheet1Xml);  // extract column % / date formats etc.
     progress(80, `Patch Sheet 1 (${s1Patches.size.toLocaleString()} rows)...`);
-    const r1 = patchSheetXml(strFromU8(files[path1]), [...sstStrings, ...allNewStrings], s1Patches);
+    const r1 = patchSheetXml(sheet1Xml, [...sstStrings, ...allNewStrings], s1Patches, colStyles1);
     files[path1] = strToU8(r1.sheetXml);
     allNewStrings.push(...r1.newStrings);
 
     const path2 = findSheetPath(wbXml, relsXml, s2Name);
     if (!path2 || !files[path2]) throw new Error(`ไม่พบ ZIP path สำหรับ sheet "${s2Name}"`);
+    const sheet2Xml  = strFromU8(files[path2]);
+    const colStyles2 = parseColStyles(sheet2Xml);
     progress(90, `Patch Sheet 2 (${s2Patches.size.toLocaleString()} rows)...`);
-    const r2 = patchSheetXml(strFromU8(files[path2]), [...sstStrings, ...allNewStrings], s2Patches);
+    const r2 = patchSheetXml(sheet2Xml, [...sstStrings, ...allNewStrings], s2Patches, colStyles2);
     files[path2] = strToU8(r2.sheetXml);
     allNewStrings.push(...r2.newStrings);
 
