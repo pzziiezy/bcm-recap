@@ -308,7 +308,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const qSegCol      = qHdrs.indexOf("SEGMENT");
     const qLocCol      = qHdrs.indexOf("LOCATION_ID");
     const qUnitsCol    = qHdrs.indexOf("TOTAL_UNITS");
-    const qNameCol     = (["PRODUCT_NAME","DESCRIPTION","LONG_DESC","SHORT_DESC","NAME"] as const)
+    // "NAME" column in QRY is the canonical source — search it first.
+    const qNameCol     = (["NAME","PRODUCT_NAME","DESCRIPTION","LONG_DESC","SHORT_DESC"] as const)
                            .map(n => qHdrs.indexOf(n)).find(i => i >= 0) ?? -1;
 
     const qryRows: QrySourceRow[] = [];
