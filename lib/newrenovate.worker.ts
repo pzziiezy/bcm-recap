@@ -602,6 +602,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       // ── Primary: INDEX BIG C mini cross-tab — derive STATUS from AS IS/TO BE ─
       const effectivePogCols = pogNameCols.length > 0 ? pogNameCols : [1, 4, 6, 9];
 
+      // Pair AS IS + TO BE columns by store (sorted order matches alternating pairs)
+      const sortedAsIs = [...asIsColumns].sort((a, b) => a - b);
+      const sortedToBe = [...toBeColumns].sort((a, b) => a - b);
+      const pairCount  = Math.min(sortedAsIs.length, sortedToBe.length);
+
       for (let r = iDataStart; r <= iRange.e.r; r++) {
         // Collect all POG NAME values in this row (skip header text / numeric totals)
         const pogNames: string[] = [];
@@ -614,22 +619,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         }
         if (pogNames.length === 0) continue;
 
-        // Check presence in AS IS and TO BE store-matrix columns
-        let hasAsIs = false, hasToBe = false;
-        for (const c of asIsColumns) {
-          const cell = indexWs[XLSX.utils.encode_cell({ r, c })];
-          if (cell?.v != null && cell.v !== "" && cell.v !== 0) { hasAsIs = true; break; }
-        }
-        for (const c of toBeColumns) {
-          const cell = indexWs[XLSX.utils.encode_cell({ r, c })];
-          if (cell?.v != null && cell.v !== "" && cell.v !== 0) { hasToBe = true; break; }
+        // Check presence within same-store pairs — EXISTING only if BOTH AS IS + TO BE in one store
+        let hasExisting = false, hasAsIs = false, hasToBe = false;
+        for (let i = 0; i < pairCount && !hasExisting; i++) {
+          const aCell = indexWs[XLSX.utils.encode_cell({ r, c: sortedAsIs[i] })];
+          const bCell = indexWs[XLSX.utils.encode_cell({ r, c: sortedToBe[i] })];
+          const aHas = aCell?.v != null && aCell.v !== "" && aCell.v !== 0;
+          const bHas = bCell?.v != null && bCell.v !== "" && bCell.v !== 0;
+          if (aHas && bHas) hasExisting = true;
+          else if (aHas) hasAsIs = true;
+          else if (bHas) hasToBe = true;
         }
 
-        // Derive status from AS IS / TO BE presence
+        // Derive status from same-store AS IS / TO BE presence
         let derivedStatus = "";
-        if      (hasAsIs && hasToBe) derivedStatus = "EXISTING";
-        else if (hasAsIs)            derivedStatus = "DELETE";
-        else if (hasToBe)            derivedStatus = "NEW";
+        if      (hasExisting) derivedStatus = "EXISTING";
+        else if (hasAsIs)     derivedStatus = "DELETE";
+        else if (hasToBe)     derivedStatus = "NEW";
 
         const primaryPog = pogNames[0];
         const entry: IndexEntry = { status: derivedStatus, store: "", planogramName: primaryPog };
