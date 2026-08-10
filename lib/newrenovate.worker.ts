@@ -473,15 +473,32 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const masterMap = new Map<string, MasterEntry>(); // key = barcodeMatchKey
 
     const mHdrs = Object.keys(masterAllRows[0] ?? {});
-    const findMHdr = (...names: string[]) =>
-      names.find(n => mHdrs.some(k => k.toUpperCase() === n.toUpperCase())) ??
-      names.find(n => mHdrs.some(k => k.toUpperCase().includes(n.toUpperCase())));
+    // Returns the ACTUAL header name from mHdrs — not the candidate — so row[key] works.
+    // Match priority: (1) exact case-insensitive, (2) normalized alphanumeric exact,
+    // (3) normalized alphanumeric substring. Normalizing strips spaces/underscores/hyphens
+    // so "SALE PACK CODE" matches "SALE_PACK_CODE" etc.
+    const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const findMHdr = (...names: string[]): string | undefined => {
+      for (const n of names) {
+        const h = mHdrs.find(k => k.toUpperCase() === n.toUpperCase());
+        if (h) return h;
+      }
+      for (const n of names) {
+        const h = mHdrs.find(k => mNorm(k) === mNorm(n));
+        if (h) return h;
+      }
+      for (const n of names) {
+        const h = mHdrs.find(k => mNorm(k).includes(mNorm(n)));
+        if (h) return h;
+      }
+      return undefined;
+    };
 
     const mBcKey     = findMHdr("BARCODE", "EAN", "UPC") ?? "BARCODE";
     const mNameKey   = findMHdr("DESCRIPTION","PRODUCT_NAME","LONG_DESC","NAME","SHORT_DESC","PROD_NAME") ?? "";
-    const mBarSingle = findMHdr("BAR_SINGLE","BAR_SINGLE_CODE","SALE_PACK_CODE","SALEPACKCODE") ?? "BAR_SINGLE";
-    const mSkuPack   = findMHdr("SKU_PACK","PACK_SIZE","PACK") ?? "SKU_PACK";
-    const mExtra     = findMHdr("EXTRA_INFO","EXTRA","REMARK") ?? "EXTRA_INFO";
+    const mBarSingle = findMHdr("SALE PACK CODE","BAR_SINGLE","BAR_SINGLE_CODE","SALE_PACK_CODE","SALEPACKCODE") ?? "SALE PACK CODE";
+    const mSkuPack   = findMHdr("PACK SIZE","SKU_PACK","PACK_SIZE","PACK") ?? "PACK SIZE";
+    const mExtra     = findMHdr("Extra info","EXTRA INFO","EXTRA_INFO","EXTRA","REMARK") ?? "Extra info";
     const mStatus    = findMHdr("STATUS","ITEM_STATUS","ORD_STATUS","ORDERABLE") ?? "STATUS";
     const mStore     = findMHdr("STORE","STORE_CODE","STORE_NAME","BRANCH") ?? "STORE";
 
