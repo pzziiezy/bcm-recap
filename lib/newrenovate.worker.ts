@@ -503,6 +503,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     progress(46, `Master Assortment: ${masterMap.size.toLocaleString()} barcodes`);
 
     // ── 4. INDEX → map by PLANOGRAM (normalised key) ─────────────────────────
+    // Handles INDEX BIG C mini cross-tab structure: status is derived from
+    // AS IS / TO BE store-matrix columns (not a dedicated STATUS column).
     progress(48, "อ่านไฟล์ INDEX...");
 
     const indexWb = XLSX.read(new Uint8Array(indexBuf), { type: "array" });
@@ -512,35 +514,137 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const indexWs = indexWb.Sheets[indexSheetName];
     if (!indexWs) throw new Error(`INDEX: ไม่พบ sheet "${indexSheetName}"`);
 
-    const indexAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(indexWs, { defval: "" });
+    const iRange  = XLSX.utils.decode_range(indexWs["!ref"] || "A1");
+    const iCell   = (r: number, c: number): string => {
+      const cell = indexWs[XLSX.utils.encode_cell({ r, c })];
+      return cell?.v != null ? String(cell.v).trim() : "";
+    };
+
+    // Expand merged cells so "AS IS"/"TO BE" that span multiple columns are detected
+    const expandRowMerges = (row: number): Map<number, string> => {
+      const map = new Map<number, string>();
+      const merges: Array<{ s: { r: number; c: number }; e: { r: number; c: number } }> =
+        (indexWs["!merges"] as Array<{ s: { r: number; c: number }; e: { r: number; c: number } }> | undefined) ?? [];
+      for (let c = 0; c <= iRange.e.c; c++) {
+        const v = iCell(row, c);
+        if (v) map.set(c, v);
+      }
+      for (const mg of merges) {
+        if (mg.s.r <= row && row <= mg.e.r) {
+          const v = iCell(mg.s.r, mg.s.c);
+          if (v) for (let c = mg.s.c; c <= mg.e.c; c++) if (!map.has(c)) map.set(c, v);
+        }
+      }
+      return map;
+    };
+
+    // Scan rows 0–30 for the "AS IS" / "TO BE" header row
+    let asisToBeRow = -1;
+    const asIsColumns = new Set<number>();
+    const toBeColumns = new Set<number>();
+
+    for (let r = 0; r <= Math.min(30, iRange.e.r); r++) {
+      const rowMap = expandRowMerges(r);
+      let foundA = false, foundB = false;
+      for (const [c, v] of rowMap) {
+        const up = v.toUpperCase();
+        if (up === "AS IS")  { asIsColumns.add(c); foundA = true; }
+        else if (up === "TO BE") { toBeColumns.add(c); foundB = true; }
+      }
+      if (foundA || foundB) { asisToBeRow = r; break; }
+    }
+
+    // Scan rows 0–20 for columns whose header contains "POG NAME" (case-insensitive)
+    let pogHdrRow = -1;
+    const pogNameCols: number[] = [];
+
+    for (let r = 0; r <= Math.min(20, iRange.e.r); r++) {
+      const found: number[] = [];
+      for (let c = 0; c <= Math.min(iRange.e.c, 30); c++) {
+        const v = iCell(r, c).toUpperCase();
+        if (v.includes("POG NAME") || v === "PLANOGRAM" || v === "PLANOGRAM NAME") found.push(c);
+      }
+      if (found.length > 0) { pogHdrRow = r; pogNameCols.push(...found); break; }
+    }
+
+    const iDataStart = pogHdrRow >= 0 ? pogHdrRow + 1
+                     : asisToBeRow >= 0 ? asisToBeRow + 8
+                     : 15;
+
     const indexMap = new Map<string, IndexEntry>(); // key = normalizeKey(planogram)
 
-    const iHdrs = Object.keys(indexAllRows[0] ?? {});
-    const findIHdr = (...names: string[]) =>
-      names.find(n => iHdrs.some(k => k.toUpperCase() === n.toUpperCase())) ??
-      names.find(n => iHdrs.some(k => k.toUpperCase().includes(n.toUpperCase())));
+    if (asIsColumns.size === 0 && toBeColumns.size === 0) {
+      // ── Fallback: flat-table INDEX with a STATUS column ────────────────────
+      const indexAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(indexWs, { defval: "" });
+      const iHdrs = Object.keys(indexAllRows[0] ?? {});
+      const findIHdr = (...names: string[]) =>
+        names.find(n => iHdrs.some(k => k.toUpperCase() === n.toUpperCase())) ??
+        names.find(n => iHdrs.some(k => k.toUpperCase().includes(n.toUpperCase())));
+      const iPlogKey  = findIHdr("PLANOGRAM","POG","POG_NAME","PLANOGRAM_NAME","POG NAME") ?? "PLANOGRAM";
+      const iStatKey  = findIHdr("STATUS","สถานะ","ITEM_STATUS") ?? "STATUS";
+      const iStoreKey = findIHdr("STORE","สาขา","STORE_NAME","STORE_CODE","BRANCH") ?? "STORE";
+      const iNameKey  = findIHdr("PLANOGRAM NAME","POG NAME","PLANOGRAM_NAME","POG_NAME") ?? "";
+      for (const row of indexAllRows) {
+        const plog = normalizeKey(String(row[iPlogKey] ?? ""));
+        if (!plog) continue;
+        if (!indexMap.has(plog)) {
+          const entry: IndexEntry = {
+            status:        String(row[iStatKey]  ?? ""),
+            store:         String(row[iStoreKey] ?? ""),
+            planogramName: iNameKey ? String(row[iNameKey] ?? "") : plog,
+          };
+          indexMap.set(plog, entry);
+          const upper = plog.toUpperCase();
+          if (!indexMap.has(upper)) indexMap.set(upper, entry);
+        }
+      }
+    } else {
+      // ── Primary: INDEX BIG C mini cross-tab — derive STATUS from AS IS/TO BE ─
+      const effectivePogCols = pogNameCols.length > 0 ? pogNameCols : [1, 4, 6, 9];
 
-    const iPlogKey  = findIHdr("PLANOGRAM","POG","POG_NAME","PLANOGRAM_NAME","POG NAME") ?? "PLANOGRAM";
-    const iStatKey  = findIHdr("STATUS","สถานะ","ITEM_STATUS") ?? "STATUS";
-    const iStoreKey = findIHdr("STORE","สาขา","STORE_NAME","STORE_CODE","BRANCH") ?? "STORE";
-    const iNameKey  = findIHdr("PLANOGRAM NAME","POG NAME","PLANOGRAM_NAME","POG_NAME") ?? "";
+      for (let r = iDataStart; r <= iRange.e.r; r++) {
+        // Collect all POG NAME values in this row (skip header text / numeric totals)
+        const pogNames: string[] = [];
+        for (const c of effectivePogCols) {
+          const v = normalizeKey(iCell(r, c));
+          if (!v) continue;
+          const up = v.toUpperCase();
+          if (up.includes("POG NAME") || up.startsWith("DEPARTMENT") || /^\d+$/.test(v)) continue;
+          pogNames.push(v);
+        }
+        if (pogNames.length === 0) continue;
 
-    for (const row of indexAllRows) {
-      const plog = normalizeKey(String(row[iPlogKey] ?? ""));
-      if (!plog) continue;
-      if (!indexMap.has(plog)) {
-        const entry: IndexEntry = {
-          status:        String(row[iStatKey]  ?? ""),
-          store:         String(row[iStoreKey] ?? ""),
-          planogramName: iNameKey ? String(row[iNameKey] ?? "") : plog,
-        };
-        indexMap.set(plog, entry);
-        // Also index by uppercase for case-insensitive fallback
-        const upper = plog.toUpperCase();
-        if (!indexMap.has(upper)) indexMap.set(upper, entry);
+        // Check presence in AS IS and TO BE store-matrix columns
+        let hasAsIs = false, hasToBe = false;
+        for (const c of asIsColumns) {
+          const cell = indexWs[XLSX.utils.encode_cell({ r, c })];
+          if (cell?.v != null && cell.v !== "" && cell.v !== 0) { hasAsIs = true; break; }
+        }
+        for (const c of toBeColumns) {
+          const cell = indexWs[XLSX.utils.encode_cell({ r, c })];
+          if (cell?.v != null && cell.v !== "" && cell.v !== 0) { hasToBe = true; break; }
+        }
+
+        // Derive status from AS IS / TO BE presence
+        let derivedStatus = "";
+        if      (hasAsIs && hasToBe) derivedStatus = "EXISTING";
+        else if (hasAsIs)            derivedStatus = "DELETE";
+        else if (hasToBe)            derivedStatus = "NEW";
+
+        const primaryPog = pogNames[0];
+        const entry: IndexEntry = { status: derivedStatus, store: "", planogramName: primaryPog };
+
+        // Index by ALL POG NAME column values so any variant of planogram name matches
+        for (const pog of pogNames) {
+          if (!indexMap.has(pog)) {
+            indexMap.set(pog, entry);
+            const upper = pog.toUpperCase();
+            if (!indexMap.has(upper)) indexMap.set(upper, entry);
+          }
+        }
       }
     }
-    progress(55, `INDEX: ${Math.ceil(indexMap.size / 2)} planograms`);
+    progress(55, `INDEX: ${Math.ceil(indexMap.size / 2)} planograms (asisRow=${asisToBeRow} AS IS cols=${asIsColumns.size} TO BE cols=${toBeColumns.size})`);
 
     // ── 5. Fixture Index → map by "SEG|POG" (pre-parsed rows from Fixture Index tab) ──
     progress(57, "สร้าง Fixture Index map...");
