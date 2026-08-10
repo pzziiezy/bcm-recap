@@ -517,7 +517,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         });
       }
     }
-    progress(46, `Master Assortment: ${masterMap.size.toLocaleString()} barcodes`);
+    progress(46, `Master: ${masterMap.size} barcodes | sheet="${masterSheetName}" hdrs=[${mHdrs.slice(0,12).join(" | ")}] → BC=${mBcKey} SALEPACK=${mBarSingle} PACK=${mSkuPack} EXTRA=${mExtra}`);
 
     // ── 4. INDEX → map by PLANOGRAM (normalised key) ─────────────────────────
     // Handles INDEX BIG C mini cross-tab structure: status is derived from
