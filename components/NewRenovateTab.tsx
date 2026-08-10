@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import DropZone from "./DropZone";
-import { Download, FileSpreadsheet } from "lucide-react";
+import { Download, FileSpreadsheet, X } from "lucide-react";
 import type { ExceptionConfig } from "@/lib/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -20,6 +19,54 @@ type ProcStatus = "idle" | "processing" | "done" | "error";
 interface Props {
   exceptionConfig?: ExceptionConfig[];
   fixtureRows?: Record<string, string>[];
+}
+
+// ─── Compact upload slot ──────────────────────────────────────────────────────
+
+function CompactUploadSlot({
+  num, title, hint, file, onFile, accept,
+}: {
+  num: number; title: string; hint: string;
+  file: File | null; onFile: (f: File | null) => void; accept: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const [drag, setDrag] = useState(false);
+  const pick = (list: FileList | null) => { if (list?.[0]) onFile(list[0]); };
+  return (
+    <div className={`rounded-xl border flex items-center gap-3 px-4 py-3 transition-all ${
+      file  ? "bg-green-50 border-green-200" :
+      drag  ? "bg-pink-50 border-[#E91E8C]"  :
+              "bg-white border-slate-200 hover:border-pink-200"
+    }`}>
+      <input ref={ref} type="file" accept={accept} className="hidden"
+        onChange={e => pick(e.target.files)} />
+      <span className={`w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 ${
+        file ? "bg-[#72BF44]" : "bg-[#E91E8C]"
+      }`}>{num}</span>
+      <div
+        className="flex-1 min-w-0 cursor-pointer"
+        onClick={() => { if (!file) ref.current?.click(); }}
+        onDragOver={e => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={e => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files); }}
+      >
+        <p className="text-sm font-semibold text-slate-700 truncate">{title}</p>
+        {file
+          ? <p className="text-xs text-green-600 font-medium truncate">✓ {file.name}</p>
+          : <p className="text-xs text-slate-400 truncate">{hint}</p>}
+      </div>
+      {file ? (
+        <button onClick={() => onFile(null)} className="flex-shrink-0 text-slate-300 hover:text-red-400 transition-colors">
+          <X className="w-4 h-4" />
+        </button>
+      ) : (
+        <button onClick={() => ref.current?.click()}
+          className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg border border-pink-200 text-pink-400 hover:border-[#E91E8C] hover:text-[#E91E8C] hover:bg-pink-50 transition-all font-medium whitespace-nowrap">
+          เลือกไฟล์
+        </button>
+      )}
+    </div>
+  );
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -156,54 +203,45 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     );
   };
 
-  const dropCard = (
-    num: number, title: string, hint: string,
-    file: File | null, setter: (f: File | null) => void, accept: string
-  ) => (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="w-6 h-6 rounded-full bg-[#E91E8C] text-white text-xs font-bold flex items-center justify-center flex-shrink-0">{num}</span>
-        <p className="text-sm font-semibold text-slate-700">{title}</p>
-      </div>
-      <DropZone label={title} accept={accept}
-        files={file ? [file] : []}
-        onFiles={(fs) => { setter(fs[0] ?? null); if (status !== "idle") handleReset(); }}
-        hint={hint} />
-    </div>
+  const slot = (num: number, title: string, hint: string, file: File | null, setter: (f: File | null) => void, accept: string) => (
+    <CompactUploadSlot key={num} num={num} title={title} hint={hint} accept={accept}
+      file={file} onFile={(f) => { setter(f); if (status !== "idle") handleReset(); }} />
   );
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
+    <div className="max-w-2xl mx-auto p-6 space-y-4">
 
       {/* Header */}
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 flex items-start gap-4">
-        <div className="bg-gradient-to-br from-pink-50 to-orange-50 rounded-xl p-3 flex-shrink-0">
-          <FileSpreadsheet className="w-8 h-8 text-[#E91E8C]" />
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
+        <div className="bg-gradient-to-br from-pink-50 to-orange-50 rounded-lg p-2 flex-shrink-0">
+          <FileSpreadsheet className="w-6 h-6 text-[#E91E8C]" />
         </div>
         <div>
-          <h2 className="text-lg font-bold text-slate-800">TO BE Mini New&amp;Renovate Report Filler</h2>
-          <p className="text-sm text-slate-500 mt-1">
-            อัปโหลด 5 ไฟล์ตามลำดับ แล้วกด Build — ข้อมูล Fixture Index อ่านจาก Tab Fixture Index อัตโนมัติ
+          <h2 className="text-base font-bold text-slate-800">TO BE Mini New&amp;Renovate Report Filler</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            อัปโหลด 5 ไฟล์ · ข้อมูล Fixture Index โหลดอัตโนมัติจาก Tab Fixture Index
           </p>
         </div>
       </div>
 
       {/* Upload zones */}
-      <div className="space-y-3">
-        {dropCard(1, "Template New&Renovate Report.xlsx", "ไฟล์ output — มี sheet New&Exsiting For Oder / New for Link_IM", targetFile,  setTargetFile,  ".xlsx")}
-        {dropCard(2, "QRY_Product by POG by Position",   "ข้อมูลตั้งต้น — BARCODE · SEGMENT · LOCATION_ID · TOTAL_UNITS",           qryFile,     setQryFile,     ".xlsx,.xls")}
-        {dropCard(3, "DATA_SPACEMAN",                    "lookup DIVISION / PF03 / PF04 / PLANOGRAM — ต้องมี sheet QRY_Product_by_POG", spacemanFile, setSpacemanFile, ".xlsx,.xlsb,.xls")}
-        {dropCard(4, "Master Assortment Orderable",      "lookup SALE PACK CODE (BAR_SINGLE) · Pack Size (SKU_PACK) · Extra info",   masterFile,  setMasterFile,  ".xlsx,.xls")}
-        {dropCard(5, "FILE INDEX",                       "lookup Status · Store — join by PLANOGRAM",                                  indexFile,   setIndexFile,   ".xlsx,.xls")}
-        {/* Fixture Index data is read automatically from the Fixture Index tab */}
-        <div className="bg-slate-50 rounded-2xl border border-dashed border-slate-200 px-5 py-4 flex items-center gap-3 text-sm text-slate-500">
-          <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-500 text-xs font-bold flex items-center justify-center flex-shrink-0">6</span>
-          <div>
-            <span className="font-medium text-slate-600">Fixture Index</span>
-            <span className="ml-2 text-slate-400">— อ่านข้อมูลอัตโนมัติจาก Tab Fixture Index</span>
+      <div className="space-y-2">
+        {slot(1, "Template New&Renovate Report.xlsx", "ไฟล์ output — มี sheet New&Exsiting For Oder / New for Link_IM", targetFile,  setTargetFile,  ".xlsx")}
+        {slot(2, "QRY_Product by POG by Position",   "ข้อมูลตั้งต้น — BARCODE · SEGMENT · LOCATION_ID · TOTAL_UNITS",            qryFile,      setQryFile,      ".xlsx,.xls")}
+        {slot(3, "DATA_SPACEMAN",                    "lookup DIVISION / PF03 / PF04 / PLANOGRAM — ต้องมี sheet QRY_Product_by_POG", spacemanFile, setSpacemanFile, ".xlsx,.xlsb,.xls")}
+        {slot(4, "Master Assortment Orderable",      "lookup SALE PACK CODE · Pack Size · Extra info",                              masterFile,   setMasterFile,   ".xlsx,.xls")}
+        {slot(5, "FILE INDEX",                       "lookup Status · Store — join by PLANOGRAM",                                   indexFile,    setIndexFile,    ".xlsx,.xls")}
+        <div className={`rounded-xl border flex items-center gap-3 px-4 py-3 ${
+          fixtureRows.length > 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"
+        }`}>
+          <span className={`w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 ${
+            fixtureRows.length > 0 ? "bg-[#72BF44]" : "bg-amber-400"
+          }`}>6</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-slate-700">Fixture Index</p>
             {fixtureRows.length > 0
-              ? <span className="ml-2 text-emerald-600 font-medium">✓ โหลดแล้ว {fixtureRows.length.toLocaleString()} rows</span>
-              : <span className="ml-2 text-amber-500">⚠ ยังไม่มีข้อมูล — กรุณาไปที่ Tab Fixture Index ก่อน</span>
+              ? <p className="text-xs text-green-600 font-medium">✓ โหลดแล้ว {fixtureRows.length.toLocaleString()} rows — อ่านจาก Tab Fixture Index</p>
+              : <p className="text-xs text-amber-600">⚠ ยังไม่มีข้อมูล — เปิด Tab Fixture Index เพื่อโหลด</p>
             }
           </div>
         </div>

@@ -962,8 +962,10 @@ export default function Home() {
             {/* New and Renovate tab */}
             {view === "newrenovate" && <NewRenovateTab exceptionConfig={exceptionConfig} fixtureRows={fixtureRows} />}
 
-            {/* Fixture Index tab */}
-            {view === "master" && <MasterTab onFixtureDataLoad={(rows) => setFixtureRows(rows)} />}
+            {/* Fixture Index tab — always mounted so Drive data loads in background on page load */}
+            <div className={view === "master" ? "" : "hidden"}>
+              <MasterTab onFixtureDataLoad={(rows) => setFixtureRows(rows)} />
+            </div>
 
             {/* Main upload flow */}
             {view === "main" && (
