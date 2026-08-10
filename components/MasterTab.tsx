@@ -22,7 +22,11 @@ function formatDateTime(isoString: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-export default function MasterTab() {
+interface Props {
+  onFixtureDataLoad?: (rows: DataRow[], headers: string[]) => void;
+}
+
+export default function MasterTab({ onFixtureDataLoad }: Props) {
   // File meta
   const [latestFile, setLatestFile] = useState<DriveFileInfo | null>(null);
   const [loadingMeta, setLoadingMeta] = useState(true);
@@ -163,6 +167,7 @@ export default function MasterTab() {
       setSheetUsed(targetSheet);
       setHeaders(hdrs);
       setTableData(raw);
+      onFixtureDataLoad?.(raw, hdrs);
       setParseProgress(100);
     } catch (err) {
       setDataError(String(err));

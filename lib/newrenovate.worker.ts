@@ -29,7 +29,7 @@ type InMsg = {
   spacemanBuf: ArrayBuffer;
   masterBuf:   ArrayBuffer;
   indexBuf:    ArrayBuffer;
-  fixtureBuf:  ArrayBuffer;
+  fixtureRows: Record<string, string>[];  // pre-parsed rows from Fixture Index tab
   exceptionConfig: ExceptionConfig[];
 };
 
@@ -333,7 +333,7 @@ function patchSheetXml(
 
 addEventListener("message", (e: MessageEvent<InMsg>) => {
   if (e.data.type !== "run") return;
-  const { targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf, exceptionConfig } = e.data;
+  const { targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureRows, exceptionConfig } = e.data;
 
   try {
     // ── 1. QRY → ordered row list ─────────────────────────────────────────────
@@ -542,23 +542,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
     progress(55, `INDEX: ${Math.ceil(indexMap.size / 2)} planograms`);
 
-    // ── 5. Fixture Index → map by "SEG|POG" ──────────────────────────────────
-    progress(57, "อ่านไฟล์ Fixture Index...");
+    // ── 5. Fixture Index → map by "SEG|POG" (pre-parsed rows from Fixture Index tab) ──
+    progress(57, "สร้าง Fixture Index map...");
 
-    const fixtureWb = XLSX.read(new Uint8Array(fixtureBuf), { type: "array" });
-    const fixtureSheetName =
-      fixtureWb.SheetNames.find(n => n === "Fixture_2026") ??
-      fixtureWb.SheetNames.find(n => n.toLowerCase().startsWith("fixture")) ??
-      fixtureWb.SheetNames.find(n => fixtureWb.Sheets[n]) ??
-      fixtureWb.SheetNames[0];
-    if (!fixtureSheetName)
-      throw new Error(`Fixture Index: ไม่พบ sheet — SheetNames: [${fixtureWb.SheetNames.join(", ") || "ว่าง"}]`);
-    const fixtureWs = fixtureWb.Sheets[fixtureSheetName];
-    if (!fixtureWs)
-      throw new Error(`Fixture Index: ไม่พบ sheet "${fixtureSheetName}"`);
-
-    // range:1 = skip REMARK row; actual headers (SEG / POG / Code Fixture) are in row 2
-    const fixtureRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(fixtureWs, { defval: "", range: 1 });
     const fixtureMap = new Map<string, string>();
     for (const row of fixtureRows) {
       const seg  = normalizeKey(String(row["SEG"]          ?? ""));

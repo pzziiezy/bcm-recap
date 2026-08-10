@@ -214,6 +214,9 @@ export default function Home() {
   });
   const [spacemanLoaded, setSpacemanLoaded] = useState(false);
 
+  // Fixture Index data shared from MasterTab → NewRenovateTab
+  const [fixtureRows, setFixtureRows] = useState<Record<string, string>[]>([]);
+
   // Queue state (display only — heavy data lives in refs)
   const [jobs, setJobs] = useState<BuildJob[]>([]);
   const [queuePanelOpen, setQueuePanelOpen] = useState(false);
@@ -895,7 +898,7 @@ export default function Home() {
             </TabBtn>
             <TabBtn active={view === "master"} onClick={() => setView("master")}>
               <Database className="w-4 h-4" />
-              Master
+              Fixture Index
             </TabBtn>
           </div>
           <div className="flex items-center gap-1">
@@ -957,10 +960,10 @@ export default function Home() {
             </div>
 
             {/* New and Renovate tab */}
-            {view === "newrenovate" && <NewRenovateTab exceptionConfig={exceptionConfig} />}
+            {view === "newrenovate" && <NewRenovateTab exceptionConfig={exceptionConfig} fixtureRows={fixtureRows} />}
 
-            {/* Master tab */}
-            {view === "master" && <MasterTab />}
+            {/* Fixture Index tab */}
+            {view === "master" && <MasterTab onFixtureDataLoad={(rows) => setFixtureRows(rows)} />}
 
             {/* Main upload flow */}
             {view === "main" && (

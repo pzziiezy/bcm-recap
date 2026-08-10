@@ -19,17 +19,17 @@ type ProcStatus = "idle" | "processing" | "done" | "error";
 
 interface Props {
   exceptionConfig?: ExceptionConfig[];
+  fixtureRows?: Record<string, string>[];
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
+export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] }: Props) {
   const [targetFile,  setTargetFile]  = useState<File | null>(null); // 1 Template
   const [qryFile,     setQryFile]     = useState<File | null>(null); // 2 QRY (primary)
   const [spacemanFile, setSpacemanFile] = useState<File | null>(null); // 3 DATA_SPACEMAN
   const [masterFile,  setMasterFile]  = useState<File | null>(null); // 4 Master Assortment
   const [indexFile,   setIndexFile]   = useState<File | null>(null); // 5 INDEX
-  const [fixtureFile, setFixtureFile] = useState<File | null>(null); // 6 Fixture Index
 
   const [status,    setStatus]    = useState<ProcStatus>("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -44,7 +44,7 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
 
   const canProcess =
     !!targetFile && !!qryFile && !!spacemanFile &&
-    !!masterFile && !!indexFile && !!fixtureFile &&
+    !!masterFile && !!indexFile &&
     status !== "processing";
 
   // ── Reset ─────────────────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     workerRef.current?.terminate();
     workerRef.current = null;
     setTargetFile(null); setQryFile(null); setSpacemanFile(null);
-    setMasterFile(null); setIndexFile(null); setFixtureFile(null);
+    setMasterFile(null); setIndexFile(null);
     setStatus("idle"); setStatusMsg(""); setPct(0);
     setStats(null); setErrorMsg("");
     outputRef.current = null;
@@ -62,7 +62,7 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
   // ── Process ───────────────────────────────────────────────────────────────
 
   const handleProcess = async () => {
-    if (!targetFile || !qryFile || !spacemanFile || !masterFile || !indexFile || !fixtureFile) return;
+    if (!targetFile || !qryFile || !spacemanFile || !masterFile || !indexFile) return;
 
     setStatus("processing");
     setStatusMsg("กำลังโหลดไฟล์...");
@@ -71,13 +71,12 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     setStats(null);
     outputRef.current = null;
 
-    const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf] = await Promise.all([
+    const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf] = await Promise.all([
       targetFile.arrayBuffer(),
       qryFile.arrayBuffer(),
       spacemanFile.arrayBuffer(),
       masterFile.arrayBuffer(),
       indexFile.arrayBuffer(),
-      fixtureFile.arrayBuffer(),
     ]);
 
     workerRef.current?.terminate();
@@ -119,8 +118,8 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     };
 
     worker.postMessage(
-      { type: "run", targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf, exceptionConfig },
-      [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf]
+      { type: "run", targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureRows, exceptionConfig },
+      [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf]
     );
   };
 
@@ -184,7 +183,7 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
         <div>
           <h2 className="text-lg font-bold text-slate-800">TO BE Mini New&amp;Renovate Report Filler</h2>
           <p className="text-sm text-slate-500 mt-1">
-            อัปโหลด 6 ไฟล์ตามลำดับ แล้วกด Build — ประมวลผลบน Background Thread (UI ไม่กระตุก)
+            อัปโหลด 5 ไฟล์ตามลำดับ แล้วกด Build — ข้อมูล Fixture Index อ่านจาก Tab Fixture Index อัตโนมัติ
           </p>
         </div>
       </div>
@@ -196,7 +195,18 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
         {dropCard(3, "DATA_SPACEMAN",                    "lookup DIVISION / PF03 / PF04 / PLANOGRAM — ต้องมี sheet QRY_Product_by_POG", spacemanFile, setSpacemanFile, ".xlsx,.xlsb,.xls")}
         {dropCard(4, "Master Assortment Orderable",      "lookup SALE PACK CODE (BAR_SINGLE) · Pack Size (SKU_PACK) · Extra info",   masterFile,  setMasterFile,  ".xlsx,.xls")}
         {dropCard(5, "FILE INDEX",                       "lookup Status · Store — join by PLANOGRAM",                                  indexFile,   setIndexFile,   ".xlsx,.xls")}
-        {dropCard(6, "Fixture Index",                    "lookup New Fixture (Code Fixture) — join by SEG|POG · row 1 = REMARK",      fixtureFile, setFixtureFile, ".xlsx,.xls")}
+        {/* Fixture Index data is read automatically from the Fixture Index tab */}
+        <div className="bg-slate-50 rounded-2xl border border-dashed border-slate-200 px-5 py-4 flex items-center gap-3 text-sm text-slate-500">
+          <span className="w-6 h-6 rounded-full bg-slate-200 text-slate-500 text-xs font-bold flex items-center justify-center flex-shrink-0">6</span>
+          <div>
+            <span className="font-medium text-slate-600">Fixture Index</span>
+            <span className="ml-2 text-slate-400">— อ่านข้อมูลอัตโนมัติจาก Tab Fixture Index</span>
+            {fixtureRows.length > 0
+              ? <span className="ml-2 text-emerald-600 font-medium">✓ โหลดแล้ว {fixtureRows.length.toLocaleString()} rows</span>
+              : <span className="ml-2 text-amber-500">⚠ ยังไม่มีข้อมูล — กรุณาไปที่ Tab Fixture Index ก่อน</span>
+            }
+          </div>
+        </div>
       </div>
 
       {/* Action */}
