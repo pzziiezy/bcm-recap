@@ -639,7 +639,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
         // Check presence within same-store pairs — EXISTING only if BOTH AS IS + TO BE in one store
         let hasExisting = false, hasAsIs = false, hasToBe = false;
-        const storeSet = new Set<string>();
+        const asIsStores = new Set<string>();
+        const toBeStores = new Set<string>();
         for (let i = 0; i < pairCount; i++) {
           const aCell = indexWs[XLSX.utils.encode_cell({ r, c: sortedAsIs[i] })];
           const bCell = indexWs[XLSX.utils.encode_cell({ r, c: sortedToBe[i] })];
@@ -648,17 +649,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           if (aHas && bHas) hasExisting = true;
           else if (aHas) hasAsIs = true;
           else if (bHas) hasToBe = true;
-          if ((aHas || bHas) && pairStoreCodes[i]) storeSet.add(pairStoreCodes[i]);
+          if (aHas && pairStoreCodes[i]) asIsStores.add(pairStoreCodes[i]);
+          if (bHas && pairStoreCodes[i]) toBeStores.add(pairStoreCodes[i]);
         }
 
-        // Derive status and store from same-store AS IS / TO BE presence
+        // Derive status from same-store AS IS / TO BE presence
         let derivedStatus = "";
         if      (hasExisting) derivedStatus = "EXISTING";
         else if (hasAsIs)     derivedStatus = "DELETE";
         else if (hasToBe)     derivedStatus = "NEW";
 
+        // DELETE → AS IS store codes; NEW / EXISTING → TO BE store codes
+        const derivedStore = derivedStatus === "DELETE"
+          ? [...asIsStores].join(",")
+          : [...toBeStores].join(",");
+
         const primaryPog = pogNames[0];
-        const entry: IndexEntry = { status: derivedStatus, store: [...storeSet].join(","), planogramName: primaryPog };
+        const entry: IndexEntry = { status: derivedStatus, store: derivedStore, planogramName: primaryPog };
 
         // Index by ALL POG NAME column values so any variant of planogram name matches
         for (const pog of pogNames) {
