@@ -607,6 +607,24 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const sortedToBe = [...toBeColumns].sort((a, b) => a - b);
       const pairCount  = Math.min(sortedAsIs.length, sortedToBe.length);
 
+      // Find Store Code row — label column is immediately left of first AS IS column
+      const labelCol = sortedAsIs.length > 0 ? sortedAsIs[0] - 1 : -1;
+      let storeCodeRow = -1;
+      if (labelCol >= 0) {
+        const scanFrom = asisToBeRow >= 0 ? asisToBeRow + 1 : 0;
+        for (let r = scanFrom; r <= Math.min(scanFrom + 25, iRange.e.r); r++) {
+          if (iCell(r, labelCol).toUpperCase().replace(/\s+/g, "") === "STORECODE") {
+            storeCodeRow = r; break;
+          }
+        }
+      }
+      // Pre-read store code per pair index (each pair's AS IS col shares the store code)
+      const pairStoreCodes: string[] = Array.from({ length: pairCount }, (_, i) => {
+        if (storeCodeRow < 0) return "";
+        const cell = indexWs[XLSX.utils.encode_cell({ r: storeCodeRow, c: sortedAsIs[i] })];
+        return cell?.v != null ? String(cell.v).trim() : "";
+      });
+
       for (let r = iDataStart; r <= iRange.e.r; r++) {
         // Collect all POG NAME values in this row (skip header text / numeric totals)
         const pogNames: string[] = [];
@@ -621,7 +639,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
         // Check presence within same-store pairs — EXISTING only if BOTH AS IS + TO BE in one store
         let hasExisting = false, hasAsIs = false, hasToBe = false;
-        for (let i = 0; i < pairCount && !hasExisting; i++) {
+        const storeSet = new Set<string>();
+        for (let i = 0; i < pairCount; i++) {
           const aCell = indexWs[XLSX.utils.encode_cell({ r, c: sortedAsIs[i] })];
           const bCell = indexWs[XLSX.utils.encode_cell({ r, c: sortedToBe[i] })];
           const aHas = aCell?.v != null && aCell.v !== "" && aCell.v !== 0;
@@ -629,16 +648,17 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           if (aHas && bHas) hasExisting = true;
           else if (aHas) hasAsIs = true;
           else if (bHas) hasToBe = true;
+          if ((aHas || bHas) && pairStoreCodes[i]) storeSet.add(pairStoreCodes[i]);
         }
 
-        // Derive status from same-store AS IS / TO BE presence
+        // Derive status and store from same-store AS IS / TO BE presence
         let derivedStatus = "";
         if      (hasExisting) derivedStatus = "EXISTING";
         else if (hasAsIs)     derivedStatus = "DELETE";
         else if (hasToBe)     derivedStatus = "NEW";
 
         const primaryPog = pogNames[0];
-        const entry: IndexEntry = { status: derivedStatus, store: "", planogramName: primaryPog };
+        const entry: IndexEntry = { status: derivedStatus, store: [...storeSet].join(","), planogramName: primaryPog };
 
         // Index by ALL POG NAME column values so any variant of planogram name matches
         for (const pog of pogNames) {
