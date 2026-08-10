@@ -469,7 +469,17 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     if (!masterWs)
       throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}"`);
 
-    const masterAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(masterWs, { defval: "" });
+    // Auto-detect header row (file may have title rows before actual column headers)
+    const mWsRange = XLSX.utils.decode_range(masterWs["!ref"] ?? "A1");
+    let mHdrRow = 0;
+    mHdrScan: for (let r = 0; r <= Math.min(9, mWsRange.e.r); r++) {
+      for (let c = 0; c <= Math.min(mWsRange.e.c, 50); c++) {
+        const v = String(masterWs[XLSX.utils.encode_cell({ r, c })]?.v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        if (v === "BARCODE" || v === "EAN" || v === "UPC") { mHdrRow = r; break mHdrScan; }
+      }
+    }
+
+    const masterAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(masterWs, { defval: "", range: mHdrRow });
     const masterMap = new Map<string, MasterEntry>(); // key = barcodeMatchKey
 
     const mHdrs = Object.keys(masterAllRows[0] ?? {});
@@ -517,7 +527,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         });
       }
     }
-    progress(46, `Master: ${masterMap.size} barcodes | sheet="${masterSheetName}" hdrs=[${mHdrs.slice(0,12).join(" | ")}] → BC=${mBcKey} SALEPACK=${mBarSingle} PACK=${mSkuPack} EXTRA=${mExtra}`);
+    progress(46, `Master: ${masterMap.size} barcodes | sheet="${masterSheetName}" hdrRow=${mHdrRow} hdrs=[${mHdrs.slice(0,10).join(" | ")}] → BC=${mBcKey} SALEPACK=${mBarSingle} PACK=${mSkuPack} EXTRA=${mExtra}`);
 
     // ── 4. INDEX → map by PLANOGRAM (normalised key) ─────────────────────────
     // Handles INDEX BIG C mini cross-tab structure: status is derived from
