@@ -856,21 +856,21 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       ss(SEQ_COL,   qry.locationId);
       sn(SHELFSTOCK_COL, qry.totalUnits || undefined);
 
-      // % Ordering — stored as DECIMAL (1.0 = 100%, 0.8 = 80%).
-      // The column's percentage format (from <cols> in sheet XML) is applied via
-      // parseColStyles → colStyles → s="N" on each cell, so Excel shows "100%".
+      // % Ordering — written as text "100%", "80%", etc. so it displays correctly
+      // regardless of whether the template column has a percentage number format style.
       const pctVal = getOrderingPct(
         exceptionConfig,
         sm?.planofolder01 ?? "",
         sm?.planofolder03 ?? "",
         sm?.planofolder04 ?? "",
       );
-      cols1.set(PCT_COL, { t: "n", v: pctVal });
+      const pctText = Math.round(pctVal * 100) + "%";
+      cols1.set(PCT_COL, { t: "s", v: pctText });
 
-      // Net Capacity = SHELF STOCK × % Ordering (both in matching units: pieces × decimal)
+      // Net Capacity = SHELF STOCK × % Ordering — use VALUE() to convert text "100%" → 1.0
       cols1.set(NETCAP_COL, {
         t: "f",
-        f: `${colLetter(SHELFSTOCK_COL)}${rowNum}*${colLetter(PCT_COL)}${rowNum}`,
+        f: `${colLetter(SHELFSTOCK_COL)}${rowNum}*VALUE(${colLetter(PCT_COL)}${rowNum})`,
         v: 0,
       });
 
