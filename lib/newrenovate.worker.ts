@@ -987,12 +987,42 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         if (k.toLowerCase().replace(/\s+/g, " ").includes(nl)) return v;
       return undefined;
     };
-    const BARCODE2_COL  = colMap2.get("BARCODE")    ?? fc2("BARCODE")    ?? 4;
-    const DIV2_COL      = colMap2.get("DIVISION")   ?? fc2("DIVISION")   ?? 1;
-    const NAME2_COL     = colMap2.get("Name")       ?? fc2("name")       ?? fc2("ชื่อ");
-    const POG04_2_COL   = colMap2.get("POG 04")     ?? fc2("POG 04")     ?? fc2("PLANOFOLDER04") ?? fc2("PF04");
-    const POG03_2_COL   = colMap2.get("POG 03")     ?? fc2("POG 03")     ?? fc2("PLANOFOLDER03") ?? fc2("PF03");
-    const DEPT2_COL     = colMap2.get("DEPARTMENT") ?? fc2("DEPARTMENT") ?? fc2("DEPT");
+    const BARCODE2_COL     = colMap2.get("BARCODE")    ?? fc2("BARCODE")    ?? 4;
+    const DIV2_COL         = colMap2.get("DIVISION")   ?? fc2("DIVISION")   ?? 1;
+    const NAME2_COL        = colMap2.get("Name")       ?? fc2("name")       ?? fc2("ชื่อ");
+    const POG04_2_COL      = colMap2.get("POG 04")     ?? fc2("POG 04")     ?? fc2("PLANOFOLDER04") ?? fc2("PF04");
+    const POG03_2_COL      = colMap2.get("POG 03")     ?? fc2("POG 03")     ?? fc2("PLANOFOLDER03") ?? fc2("PF03");
+    const DEPT2_COL        = colMap2.get("DEPARTMENT") ?? fc2("DEPARTMENT") ?? fc2("DEPT");
+    const STATUS2_COL      = colMap2.get("STATUS")     ?? fc2("status");
+    const STORECOUNT2_COL  = fc2("number store")       ?? fc2("store");
+
+    // ── Delete for Exception_ IM sheet ───────────────────────────────────────
+    const s3Name = targetWb.SheetNames.find(n => /delete.*exception/i.test(n.trim()));
+    let DIV3_COL = 1, DEPT3_COL = 2, POG3_COL = 3, BARCODE3_COL = 4;
+    let NAME3_COL = 5, STATUS3_COL = 6, STORE3_COL = 7;
+    if (s3Name) {
+      const ws3  = targetWb.Sheets[s3Name];
+      const ref3 = XLSX.utils.decode_range(ws3?.["!ref"] ?? "A1:I7");
+      const colMap3 = new Map<string, number>();
+      for (let c = 0; c <= Math.max(ref3.e.c, 15); c++) {
+        const cell = ws3[XLSX.utils.encode_cell({ r: 5, c })];
+        const h = cell?.v != null ? String(cell.v).replace(/\s+/g, " ").trim() : "";
+        if (h) colMap3.set(h, c);
+      }
+      const fc3 = (needle: string): number | undefined => {
+        const nl = needle.toLowerCase().replace(/\s+/g, " ");
+        for (const [k, v] of colMap3)
+          if (k.toLowerCase().replace(/\s+/g, " ").includes(nl)) return v;
+        return undefined;
+      };
+      DIV3_COL     = colMap3.get("DIVISION")   ?? fc3("division")   ?? 1;
+      DEPT3_COL    = colMap3.get("DEPARTMENT") ?? fc3("department") ?? 2;
+      POG3_COL     = fc3("pog cate") ?? fc3("pog") ?? 3;
+      BARCODE3_COL = colMap3.get("BARCODE")    ?? fc3("barcode")    ?? 4;
+      NAME3_COL    = fc3("name") ?? fc3("ชื่อ") ?? 5;
+      STATUS3_COL  = colMap3.get("STATUS")     ?? fc3("status")     ?? 6;
+      STORE3_COL   = fc3("store exception") ?? fc3("store") ?? 7;
+    }
 
     // ── 7. Build row patches ──────────────────────────────────────────────────
     progress(68, `สร้าง patches จาก ${qryRows.length.toLocaleString()} QRY rows...`);
@@ -1000,9 +1030,12 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const DATA_START_ROW = 7;
     const s1Patches = new Map<number, Map<number, CellPatch>>();
     const s2Patches = new Map<number, Map<number, CellPatch>>();
+    const s3Patches = new Map<number, Map<number, CellPatch>>();
 
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
-    let outIdx = 0; // tracks output row index (> qryRows index when stores expand)
+    let outIdx   = 0; // tracks Sheet 1 output row (expands per store)
+    let s2OutIdx = 0; // tracks Sheet 2 output row (one row per item, NEW/EXISTING only)
+    let s3OutIdx = 0; // tracks Delete sheet row (DELETE-status rows only)
 
     for (let i = 0; i < qryRows.length; i++) {
       const qry = qryRows[i];
@@ -1095,20 +1128,12 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (NETCAP_COL !== undefined && netCapVal > 0)
         cols1.set(NETCAP_COL, { t: "n", v: netCapVal });
 
-      // ── Sheet 2 base (same for all store expansions) ──────────────────────
-      const cols2 = new Map<number, CellPatch>();
-      cols2.set(BARCODE2_COL, { t: "s", v: qry.barcode });
-      if (divisionVal)        cols2.set(DIV2_COL,    { t: "s", v: divisionVal });
-      if (productName && NAME2_COL   !== undefined) cols2.set(NAME2_COL,   { t: "s", v: productName });
-      if (sm?.planofolder04 && POG04_2_COL !== undefined) cols2.set(POG04_2_COL, { t: "s", v: sm.planofolder04 });
-      if (sm?.planofolder03 && POG03_2_COL !== undefined) cols2.set(POG03_2_COL, { t: "s", v: sm.planofolder03 });
-      if (sm?.planofolder02 && DEPT2_COL   !== undefined) cols2.set(DEPT2_COL,   { t: "s", v: sm.planofolder02 });
-
-      // ── Expand stores: one output row per store code ───────────────────────
+      // ── Expand stores: one output row per store code (Sheet 1 + Delete sheet) ─
       const storeRaw = idxEntry?.store ?? "";
       const stores   = storeRaw
         ? storeRaw.split(",").map(s => s.trim()).filter(Boolean)
         : [""];
+      const storeCount = stores.filter(Boolean).length;
 
       for (const storeVal of stores) {
         const rowNum = DATA_START_ROW + outIdx;
@@ -1120,7 +1145,41 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           cols1s.set(STORE_COL, { t: "s", v: storeVal });
 
         s1Patches.set(rowNum, cols1s);
-        s2Patches.set(rowNum, new Map(cols2)); // identical cols2 per expanded row
+
+        // Delete for Exception_ IM — one row per DELETE-status store entry
+        if (s3Name && (idxEntry?.status ?? "").toUpperCase().startsWith("DELETE")) {
+          const cols3 = new Map<number, CellPatch>();
+          const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
+          ss3(DIV3_COL,     sm?.planofolder01 || sm?.planofolder02 || "");
+          ss3(DEPT3_COL,    sm?.planofolder02 || "");
+          ss3(POG3_COL,     sm?.planofolder04 || sm?.planofolder03 || "");
+          ss3(BARCODE3_COL, qry.barcode);
+          ss3(NAME3_COL,    productName);
+          ss3(STATUS3_COL,  idxEntry?.status ?? "");
+          ss3(STORE3_COL,   storeVal);
+          s3Patches.set(DATA_START_ROW + s3OutIdx, cols3);
+          s3OutIdx++;
+        }
+      }
+
+      // ── Sheet 2 (New for Link_IM) — one row per item, NEW and EXISTING only ──
+      // For EXISTING: Number STORE = count of store codes (not expanded)
+      // For NEW:      Number STORE = count of store codes
+      const statusUpper2 = (idxEntry?.status ?? "").toUpperCase();
+      if (statusUpper2 === "NEW" || statusUpper2.includes("EXIST")) {
+        const cols2 = new Map<number, CellPatch>();
+        const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
+        ss2(BARCODE2_COL, qry.barcode);
+        ss2(DIV2_COL,     divisionVal);
+        ss2(NAME2_COL,    productName);
+        ss2(POG04_2_COL,  sm?.planofolder04 ?? "");
+        ss2(POG03_2_COL,  sm?.planofolder03 ?? "");
+        ss2(DEPT2_COL,    sm?.planofolder02 ?? "");
+        ss2(STATUS2_COL,  idxEntry?.status ?? "");
+        if (STORECOUNT2_COL !== undefined && storeCount > 0)
+          cols2.set(STORECOUNT2_COL, { t: "n", v: storeCount });
+        s2Patches.set(DATA_START_ROW + s2OutIdx, cols2);
+        s2OutIdx++;
       }
     }
 
@@ -1151,6 +1210,19 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const r2 = patchSheetXml(sheet2Xml, [...sstStrings, ...allNewStrings], s2Patches, colStyles2);
     files[path2] = strToU8(r2.sheetXml);
     allNewStrings.push(...r2.newStrings);
+
+    // Delete for Exception_ IM sheet
+    if (s3Name && s3Patches.size > 0) {
+      const path3 = findSheetPath(wbXml, relsXml, s3Name);
+      if (path3 && files[path3]) {
+        const sheet3Xml  = strFromU8(files[path3]);
+        const colStyles3 = parseColStyles(sheet3Xml);
+        progress(92, `Patch Delete sheet (${s3Patches.size.toLocaleString()} rows)...`);
+        const r3 = patchSheetXml(sheet3Xml, [...sstStrings, ...allNewStrings], s3Patches, colStyles3);
+        files[path3] = strToU8(r3.sheetXml);
+        allNewStrings.push(...r3.newStrings);
+      }
+    }
 
     if (allNewStrings.length > 0) {
       files[sstPath] = strToU8(
