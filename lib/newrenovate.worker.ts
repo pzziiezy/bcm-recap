@@ -1002,10 +1002,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const s2Patches = new Map<number, Map<number, CellPatch>>();
 
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
+    let outIdx = 0; // tracks output row index (> qryRows index when stores expand)
 
     for (let i = 0; i < qryRows.length; i++) {
-      const qry    = qryRows[i];
-      const rowNum = DATA_START_ROW + i;
+      const qry = qryRows[i];
 
       // All lookups use barcodeMatchKey (leading zeros stripped) for consistency
       const sm     = spacemanMap.get(qry.matchKey);
@@ -1058,9 +1058,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         sn(PACKSIZE_COL, master.skuPack);
         ss(EXTRA_COL,    master.extraInfo);
       }
-      // STATUS and STORE always come from INDEX only
+      // STATUS always from INDEX
       ss(STATUS_COL, idxEntry?.status ?? "");
-      ss(STORE_COL,  idxEntry?.store  ?? "");
+      // STORE is set per-store in the expansion loop below
 
       // Constants
       if (FIXTYPE_COL !== undefined) cols1.set(FIXTYPE_COL, { t: "n", v: 0 });
@@ -1095,9 +1095,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (NETCAP_COL !== undefined && netCapVal > 0)
         cols1.set(NETCAP_COL, { t: "n", v: netCapVal });
 
-      s1Patches.set(rowNum, cols1);
-
-      // ── Sheet 2 ───────────────────────────────────────────────────────────
+      // ── Sheet 2 base (same for all store expansions) ──────────────────────
       const cols2 = new Map<number, CellPatch>();
       cols2.set(BARCODE2_COL, { t: "s", v: qry.barcode });
       if (divisionVal)        cols2.set(DIV2_COL,    { t: "s", v: divisionVal });
@@ -1105,7 +1103,25 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (sm?.planofolder04 && POG04_2_COL !== undefined) cols2.set(POG04_2_COL, { t: "s", v: sm.planofolder04 });
       if (sm?.planofolder03 && POG03_2_COL !== undefined) cols2.set(POG03_2_COL, { t: "s", v: sm.planofolder03 });
       if (sm?.planofolder02 && DEPT2_COL   !== undefined) cols2.set(DEPT2_COL,   { t: "s", v: sm.planofolder02 });
-      s2Patches.set(rowNum, cols2);
+
+      // ── Expand stores: one output row per store code ───────────────────────
+      const storeRaw = idxEntry?.store ?? "";
+      const stores   = storeRaw
+        ? storeRaw.split(",").map(s => s.trim()).filter(Boolean)
+        : [""];
+
+      for (const storeVal of stores) {
+        const rowNum = DATA_START_ROW + outIdx;
+        outIdx++;
+
+        // Clone cols1 and inject this store's value
+        const cols1s = new Map(cols1);
+        if (STORE_COL !== undefined && storeVal)
+          cols1s.set(STORE_COL, { t: "s", v: storeVal });
+
+        s1Patches.set(rowNum, cols1s);
+        s2Patches.set(rowNum, new Map(cols2)); // identical cols2 per expanded row
+      }
     }
 
     // ── 8. ZIP-patch template ─────────────────────────────────────────────────
