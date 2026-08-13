@@ -468,12 +468,31 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // Normalize helper: strips spaces/underscores/hyphens for fuzzy column matching
     const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-    // Always pick the sheet with the most rows — the data sheet has thousands of rows,
-    // any summary/legend/explanation sheet will have far fewer.
+    // Pick the correct data sheet from Master Assortment:
+    // 1. Prefer standard data sheet names (Sheet1, Data, Master, etc.)
+    // 2. Skip known non-data sheets (Explanation, Legend, README, etc.)
+    // 3. Fall back to the sheet with the most rows
+    const skipSheetNames = new Set([
+      "explanation", "legend", "readme", "info",
+      "instructions", "instruction", "manual", "note", "notes", "remark",
+    ]);
+    const preferSheetNames = ["Sheet1", "Sheet 1", "DATA", "Data", "MASTER", "Master", "SHEET1"];
+
     const pickMasterSheet = (): string => {
+      // Pass 1: exact preferred name match
+      for (const preferred of preferSheetNames) {
+        if (masterWb.Sheets[preferred]) return preferred;
+      }
+      // Pass 2: case-insensitive preferred name match
+      for (const preferred of preferSheetNames) {
+        const found = masterWb.SheetNames.find(n => n.toLowerCase() === preferred.toLowerCase());
+        if (found && masterWb.Sheets[found]) return found;
+      }
+      // Pass 3: largest sheet that is NOT a known non-data sheet
       let best = masterWb.SheetNames[0];
       let bestRows = -1;
       for (const name of masterWb.SheetNames) {
+        if (skipSheetNames.has(name.toLowerCase())) continue;
         const ws = masterWb.Sheets[name];
         if (!ws) continue;
         const rows = XLSX.utils.decode_range(ws["!ref"] ?? "A1").e.r;
@@ -481,14 +500,6 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
       return best;
     };
-
-    // Log all sheets so we can see what's in the file
-    const sheetSummary = masterWb.SheetNames.map(name => {
-      const ws = masterWb.Sheets[name];
-      const rows = ws ? XLSX.utils.decode_range(ws["!ref"] ?? "A1").e.r : 0;
-      return `"${name}"(${rows}rows)`;
-    }).join(", ");
-    progress(35, `[DEBUG] Master Assortment sheets: [${sheetSummary}]`);
 
     const masterSheetName = pickMasterSheet();
     const masterWs = masterWb.Sheets[masterSheetName];
