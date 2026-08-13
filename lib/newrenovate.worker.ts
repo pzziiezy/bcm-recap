@@ -572,10 +572,22 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     })();
 
     const mSheetZipKey = mSheetByName[masterSheetName] ?? "";
-    if (!mSheetZipKey || !mZip[mSheetZipKey])
-      throw new Error(`Master Assortment: ไม่พบ sheet XML "${masterSheetName}" (key="${mSheetZipKey}" allSheets=[${mAllSheetNames.join(",")}])`);
+    const mSheetData  = mSheetZipKey ? mZip[mSheetZipKey] : undefined;
+    if (!mSheetZipKey || !mSheetData)
+      throw new Error(
+        `Master Assortment: ไม่พบ sheet XML "${masterSheetName}" ` +
+        `(key="${mSheetZipKey}" allSheets=[${mAllSheetNames.join(",")}] ` +
+        `wsRelsByRId=${JSON.stringify(mWsRelsByRId)} allWsKeys=[${mAllWsKeys.join(",")}])`
+      );
 
-    const mSheetXml = strFromU8(mZip[mSheetZipKey]);
+    const mSheetXml = strFromU8(mSheetData);
+    if (!mSheetXml)
+      throw new Error(
+        `Master Assortment: sheet XML ว่าง — ` +
+        `key="${mSheetZipKey}" dataLen=${mSheetData.length} ` +
+        `allWsKeys=[${mAllWsKeys.join(",")}] ` +
+        `wsRels=${JSON.stringify(mWsRelsByRId)}`
+      );
 
     // ── parse shared strings ──────────────────────────────────────────────────
     const mSstKey2  = mFindKey("xl/sharedStrings.xml");
