@@ -333,9 +333,9 @@ function patchSheetXml(
 
 addEventListener("message", (e: MessageEvent<InMsg>) => {
   if (e.data.type !== "run") return;
-  const { targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureRows, exceptionConfig } = e.data;
 
   try {
+    const { targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureRows, exceptionConfig } = e.data;
     // ── 1. QRY → ordered row list ─────────────────────────────────────────────
     progress(3, "อ่านไฟล์ QRY_Product_by_POG_by_Position...");
 

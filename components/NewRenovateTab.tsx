@@ -161,7 +161,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
     worker.onerror = (e: ErrorEvent) => {
       setStatus("error");
-      setErrorMsg(e.message ?? "Worker crashed");
+      const details = [e.message, e.filename ? `${e.filename}:${e.lineno}` : ""].filter(Boolean).join(" @ ");
+      setErrorMsg(details || "Worker crashed (ดู Console สำหรับ error details)");
       workerRef.current = null;
     };
 
