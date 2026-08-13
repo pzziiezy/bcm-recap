@@ -493,33 +493,60 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         `Master Assortment: ไม่พบ xl/workbook.xml ใน ZIP — paths ที่พบ: [${mZipKeys.slice(0, 20).join(", ")}]`
       );
 
-    const mWbXml   = strFromU8(mZip[mWbKey]);
-    const mRelsXml = mRelsKey ? strFromU8(mZip[mRelsKey]) : "";
+    const mWbXml = strFromU8(mZip[mWbKey]);
 
     // workbook.xml: <sheet name="Sheet1" sheetId="1" r:Id="rId1"/>  OR  <sheet ...>
-    // — may be self-closing OR non-self-closing; match both with (?:\/?>)
-    // — attr order varies; namespace prefix for Id may vary (r:Id, rel:Id…)
-    const mSheetByName: Record<string, string> = {}; // display name → rId
+    // Extract name + sheetId only — do NOT require r:Id (some generators omit/vary it)
+    interface MSheetDef { name: string; sheetId: number; rId: string }
+    const mSheetDefs: MSheetDef[] = [];
     for (const m of mWbXml.matchAll(/<sheet\b([^>]*?)(?:\/>|>)/g)) {
-      const attrs = m[1];
-      const name  = /\bname="([^"]*)"/.exec(attrs)?.[1];
-      const rId   = /\w+:Id="([^"]*)"/.exec(attrs)?.[1];  // any NS prefix: r:Id, rel:Id, …
-      if (name && rId) mSheetByName[name] = rId;
+      const attrs   = m[1];
+      const name    = /\bname="([^"]*)"/.exec(attrs)?.[1];
+      const sheetId = parseInt(/\bsheetId="(\d+)"/.exec(attrs)?.[1] ?? "0", 10);
+      // Any namespace-prefixed :Id attr (r:Id, rel:Id…) — \b ensures we skip "sheetId"
+      const rId     = /\b\w+:[Ii]d="([^"]*)"/.exec(attrs)?.[1] ?? "";
+      if (name) mSheetDefs.push({ name, sheetId: isNaN(sheetId) ? 99 : sheetId, rId });
     }
-    // _rels: <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
-    const mRIdToPath: Record<string, string> = {};
+    mSheetDefs.sort((a, b) => a.sheetId - b.sheetId);
+
+    // _rels: rId → worksheet ZIP key (used only when r:Id is present)
+    const mRelsXml = mRelsKey ? strFromU8(mZip[mRelsKey]) : "";
+    const mWsRelsByRId: Record<string, string> = {};
     for (const m of mRelsXml.matchAll(/<Relationship\b([^>]*?)(?:\/>|>)/g)) {
       const attrs  = m[1];
-      const id     = /\bId="([^"]*)"/.exec(attrs)?.[1];
-      const target = /\bTarget="([^"]*)"/.exec(attrs)?.[1];
-      if (id && target) mRIdToPath[id] = target;
+      const id     = /\bId="([^"]*)"/.exec(attrs)?.[1] ?? "";
+      const target = /\bTarget="([^"]*)"/.exec(attrs)?.[1] ?? "";
+      const type   = /\bType="([^"]*)"/.exec(attrs)?.[1] ?? "";
+      if (id && target && type.toLowerCase().includes("worksheet")) {
+        const raw = target.startsWith("xl/") ? target : `xl/${target}`;
+        mWsRelsByRId[id] = mFindKey(raw) || raw;
+      }
     }
 
+    // Fallback list: all xl/worksheets/sheetN.xml in ZIP, sorted by N
+    const mAllWsKeys = mZipKeys
+      .filter(k => /xl[/\\]worksheets[/\\]sheet\d+\.xml$/i.test(k))
+      .sort((a, b) => {
+        const na = parseInt(a.match(/(\d+)\.xml$/i)?.[1] ?? "0");
+        const nb = parseInt(b.match(/(\d+)\.xml$/i)?.[1] ?? "0");
+        return na - nb;
+      });
+
+    // Map sheet name → ZIP key (primary: rId lookup; fallback: index order)
+    const mSheetByName: Record<string, string> = {};
+    mSheetDefs.forEach(({ name, rId }, i) => {
+      const key = (rId && mWsRelsByRId[rId]) ? mWsRelsByRId[rId] : (mAllWsKeys[i] ?? "");
+      if (name && key) mSheetByName[name] = key;
+    });
+
     const mAllSheetNames = Object.keys(mSheetByName);
-    if (!mAllSheetNames.length)
+    if (!mAllSheetNames.length) {
+      const sheetTagPos = mWbXml.indexOf("<sheet");
       throw new Error(
-        `Master Assortment: ไม่พบ sheet ในไฟล์ — workbook.xml snippet: ${mWbXml.slice(0, 300)}`
+        `Master Assortment: ไม่พบ sheet — defs=${mSheetDefs.length} wsKeys=[${mAllWsKeys.join(",")}] ` +
+        `sheetTagAt=${sheetTagPos} near="${mWbXml.slice(Math.max(0, sheetTagPos), sheetTagPos + 150)}"`
       );
+    }
 
     // Pick data sheet: prefer Sheet1/Data/Master; skip Explanation/Legend/etc.
     const mSkipSheets  = new Set(["explanation","legend","readme","info","instructions","instruction","manual","note","notes","remark"]);
@@ -538,12 +565,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       return mAllSheetNames[0];
     })();
 
-    const mSheetRelPath = mRIdToPath[mSheetByName[masterSheetName] ?? ""] ?? "";
-    const mSheetZipRaw  = mSheetRelPath.startsWith("xl/") ? mSheetRelPath
-                        : mSheetRelPath ? `xl/${mSheetRelPath}` : "";
-    const mSheetZipKey  = mSheetZipRaw ? (mFindKey(mSheetZipRaw) || mSheetZipRaw) : "";
+    const mSheetZipKey = mSheetByName[masterSheetName] ?? "";
     if (!mSheetZipKey || !mZip[mSheetZipKey])
-      throw new Error(`Master Assortment: ไม่พบไฟล์ sheet XML สำหรับ "${masterSheetName}" (path: ${mSheetZipKey || "ไม่ระบุ"}, relsKeys: [${Object.keys(mRIdToPath).join(",")}])`);
+      throw new Error(`Master Assortment: ไม่พบ sheet XML "${masterSheetName}" (key="${mSheetZipKey}" allSheets=[${mAllSheetNames.join(",")}])`);
 
     const mSheetXml = strFromU8(mZip[mSheetZipKey]);
 
