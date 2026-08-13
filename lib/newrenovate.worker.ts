@@ -911,12 +911,13 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const pctText = Math.round(pctVal * 100) + "%";
       cols1.set(PCT_COL, { t: "s", v: pctText });
 
-      // Net Capacity = SHELF STOCK × % Ordering — use VALUE() to convert text "100%" → 1.0
-      cols1.set(NETCAP_COL, {
-        t: "f",
-        f: `${colLetter(SHELFSTOCK_COL)}${rowNum}*VALUE(${colLetter(PCT_COL)}${rowNum})`,
-        v: 0,
-      });
+      // Net Capacity = SHELF STOCK × % Ordering — computed in worker, written as number.
+      // Formula approach was unreliable because VALUE("100%") cached value=0 and
+      // some Excel contexts don't recalculate immediately on open.
+      const shelfStock = Number(qry.totalUnits) || 0;
+      const netCapVal  = Math.round(shelfStock * pctVal);
+      if (NETCAP_COL !== undefined && netCapVal > 0)
+        cols1.set(NETCAP_COL, { t: "n", v: netCapVal });
 
       s1Patches.set(rowNum, cols1);
 
