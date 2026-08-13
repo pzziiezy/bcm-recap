@@ -580,18 +580,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         `wsRelsByRId=${JSON.stringify(mWsRelsByRId)} allWsKeys=[${mAllWsKeys.join(",")}])`
       );
 
-    const mSheetXml = strFromU8(mSheetData);
-    if (!mSheetXml)
-      throw new Error(
-        `Master Assortment: sheet XML ว่าง — ` +
-        `key="${mSheetZipKey}" dataLen=${mSheetData.length} ` +
-        `allWsKeys=[${mAllWsKeys.join(",")}] ` +
-        `wsRels=${JSON.stringify(mWsRelsByRId)}`
-      );
-
-    // ── parse shared strings ──────────────────────────────────────────────────
-    const mSstKey2  = mFindKey("xl/sharedStrings.xml");
-    const mSstRaw   = mSstKey2 ? strFromU8(mZip[mSstKey2]) : "";
+    // ── parse shared strings (SST is small — safe to load as string) ─────────
+    const mSstKey2 = mFindKey("xl/sharedStrings.xml");
+    const mSstRaw  = mSstKey2 ? strFromU8(mZip[mSstKey2]) : "";
     const mSst: string[] = [];
     for (const si of mSstRaw.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
       const texts: string[] = [];
@@ -599,11 +590,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       mSst.push(mDecode(texts.join("")));
     }
 
-    // ── parse sheet rows ──────────────────────────────────────────────────────
+    // ── cell parser (operates on one row's XML string) ────────────────────────
     const mGetCell = (rowXml: string): Record<number, string> => {
       const cells: Record<number, string> = {};
       for (const c of rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
-        // Case-insensitive column letters (XLSX spec says uppercase, but be safe)
         const rAttr  = /\br="([A-Za-z]+)\d+"/i.exec(c[1])?.[1]?.toUpperCase();
         if (!rAttr) continue;
         const colIdx   = mColIdx(rAttr);
@@ -619,73 +609,101 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       return cells;
     };
 
-    let mHdrRowNum = -1;
-    const mHdrCols: Record<number, string> = {};
-
-    // First pass: detect header row from first 15 rows.
-    // r= attribute is optional — fall back to sequential counter.
-    let mHdrSeq = 0;
-    for (const row of mSheetXml.matchAll(/<row\b([^>]*?)>([\s\S]*?)<\/row>/g)) {
-      mHdrSeq++;
-      const rowNum = parseInt(/\br="(\d+)"/.exec(row[1])?.[1] ?? String(mHdrSeq));
-      if (rowNum > 15) break;
-      const cells = mGetCell(row[2]);
-      const vals  = Object.values(cells);
-      const hasHeaderKw = vals.some(v => {
-        const n = mNorm(v);
-        return n === "BARCODE" || n === "EAN" || n === "UPC" || n === "BARSINGLE"
-            || n === "BARINGREDIENT" || n === "SKUPACK" || n === "EXTRAINFO";
-      });
-      if (hasHeaderKw || (mHdrRowNum < 0 && vals.filter(v => v.trim()).length >= 5)) {
-        mHdrRowNum = rowNum;
-        Object.assign(mHdrCols, cells);
-        if (hasHeaderKw) break;
-      }
-    }
-    if (mHdrRowNum < 0) mHdrRowNum = 1;
-
-    // Build normalized header lookup: mNorm(label) → colIdx
-    const mNormToCol: Record<string, number> = {};
-    for (const [ci, label] of Object.entries(mHdrCols)) mNormToCol[mNorm(label)] = +ci;
-
-    const findMCol = (...candidates: string[]): number => {
-      for (const c of candidates) {
-        const k = mNorm(c);
-        if (k in mNormToCol) return mNormToCol[k];
-      }
-      // substring fallback
-      for (const c of candidates) {
-        const k = mNorm(c);
-        for (const [normLabel, col] of Object.entries(mNormToCol)) {
-          if (normLabel.includes(k) || k.includes(normLabel)) return col;
+    // ── stream-parse sheet XML in 4 MB chunks — avoids V8 string-length limit ─
+    // mSheetData is the raw decompressed Uint8Array (can be 500 MB+).
+    // Converting it to a JS string with strFromU8 fails silently on large files.
+    // Instead we decode chunk-by-chunk, yielding one complete <row>…</row> at a time.
+    function* streamRows(data: Uint8Array): Generator<{ rowNum: number; rowXml: string }> {
+      const td   = new TextDecoder("utf-8");
+      const CHUNK = 4 << 20; // 4 MB
+      let   buf   = "";
+      let   seq   = 0;
+      for (let off = 0; off < data.length; off += CHUNK) {
+        const isLast = off + CHUNK >= data.length;
+        buf += td.decode(data.subarray(off, isLast ? data.length : off + CHUNK), { stream: !isLast });
+        let pos = 0;
+        while (true) {
+          const rs = buf.indexOf("<row", pos);
+          if (rs < 0) { buf = ""; break; }
+          // Find the matching </row> — look past the opening tag first
+          const tagEnd = buf.indexOf(">", rs);
+          if (tagEnd < 0) { buf = buf.slice(rs); break; }
+          // Self-closing <row ... /> has no </row>; real data rows always have children
+          if (buf[tagEnd - 1] === "/") { pos = tagEnd + 1; continue; }
+          const re = buf.indexOf("</row>", tagEnd);
+          if (re < 0) { buf = buf.slice(rs); break; }
+          seq++;
+          const rowXml = buf.slice(rs, re + 6);
+          const rn = /\br="(\d+)"/.exec(buf.slice(rs, tagEnd + 1))?.[1];
+          yield { rowNum: rn ? parseInt(rn) : seq, rowXml };
+          pos = re + 6;
         }
       }
-      return -1;
-    };
-
-    const mBcCol       = findMCol("BARCODE","EAN","UPC");
-    const mBarSingleCol = findMCol("BAR_SINGLE","BAR_INGREDIENT","BARSINGLE","BARINGREDIENT","SALEPACKCODE","SALE_PACK_CODE");
-    const mSkuPackCol   = findMCol("SKU_PACK","SKUPACK","PACK_SIZE","PACKSIZE","PACK SIZE","PACK");
-    const mExtraCol     = findMCol("EXTRA_INFO","EXTRAINFO","EXTRA INFO","EXTRA","REMARK");
-
-    if (mBcCol < 0) {
-      const totalRowTags = (mSheetXml.match(/<row\b/g) ?? []).length;
-      throw new Error(
-        `Master Assortment: ไม่พบคอลัมน์ BARCODE — ` +
-        `headers=[${Object.values(mHdrCols).join("|")}] ` +
-        `sst=${mSst.length} hdrRow=${mHdrRowNum} rowTags=${totalRowTags} ` +
-        `xml="${mSheetXml.slice(0, 400)}"`
-      );
     }
 
-    // Second pass: build masterMap from all data rows (r= optional, same as header scan)
+    // ── single-pass: detect header then accumulate masterMap ──────────────────
+    let mHdrRowNum  = -1;
+    let mBcCol      = -1;
+    let mBarSingleCol = -1;
+    let mSkuPackCol   = -1;
+    let mExtraCol     = -1;
+    const mHdrCols: Record<number, string> = {};
+    let   mRow1Cells: Record<number, string> = {}; // row-1 backup for header fallback
     const masterMap = new Map<string, MasterEntry>();
-    let mDataSeq = 0;
-    for (const row of mSheetXml.matchAll(/<row\b([^>]*?)>([\s\S]*?)<\/row>/g)) {
-      mDataSeq++;
-      const rowNum = parseInt(/\br="(\d+)"/.exec(row[1])?.[1] ?? String(mDataSeq));
+    let   mHdrDone  = false;
+
+    const mSetupCols = () => {
+      const mNormToCol: Record<string, number> = {};
+      for (const [ci, label] of Object.entries(mHdrCols)) mNormToCol[mNorm(label)] = +ci;
+      const fmc = (...cands: string[]): number => {
+        for (const c of cands) { const k = mNorm(c); if (k in mNormToCol) return mNormToCol[k]; }
+        for (const c of cands) {
+          const k = mNorm(c);
+          for (const [nl, col] of Object.entries(mNormToCol))
+            if (nl.includes(k) || k.includes(nl)) return col;
+        }
+        return -1;
+      };
+      mBcCol        = fmc("BARCODE","EAN","UPC");
+      mBarSingleCol = fmc("BAR_SINGLE","BAR_INGREDIENT","BARSINGLE","BARINGREDIENT","SALEPACKCODE","SALE_PACK_CODE");
+      mSkuPackCol   = fmc("SKU_PACK","SKUPACK","PACK_SIZE","PACKSIZE","PACK SIZE","PACK");
+      mExtraCol     = fmc("EXTRA_INFO","EXTRAINFO","EXTRA INFO","EXTRA","REMARK");
+    };
+
+    for (const { rowNum, rowXml } of streamRows(mSheetData)) {
+      if (!mHdrDone) {
+        // Scan first 15 rows for header
+        const cells = mGetCell(rowXml);
+        if (rowNum === 1) mRow1Cells = { ...cells };
+        const vals     = Object.values(cells);
+        const hasHdrKw = vals.some(v => {
+          const n = mNorm(v);
+          return n === "BARCODE" || n === "EAN" || n === "UPC"
+              || n === "BARSINGLE" || n === "BARINGREDIENT"
+              || n === "SKUPACK"   || n === "EXTRAINFO";
+        });
+        if (hasHdrKw || vals.filter(v => v.trim()).length >= 5) {
+          mHdrRowNum = rowNum;
+          Object.assign(mHdrCols, cells);
+          mSetupCols();
+          mHdrDone = true;
+        } else if (rowNum >= 15) {
+          // No clear header found — fall back to row 1
+          mHdrRowNum = 1;
+          Object.assign(mHdrCols, mRow1Cells);
+          mSetupCols();
+          mHdrDone = true;
+          if (mBcCol < 0)
+            throw new Error(
+              `Master Assortment: ไม่พบคอลัมน์ BARCODE — ` +
+              `headers=[${Object.values(mHdrCols).join("|")}] sst=${mSst.length}`
+            );
+        }
+        continue; // skip header rows as data
+      }
+      // Data rows
       if (rowNum <= mHdrRowNum) continue;
-      const cells = mGetCell(row[2]);
+      const cells = mGetCell(rowXml);
       const bc    = normalizeBarcode(cells[mBcCol] ?? "");
       const key   = barcodeMatchKey(bc);
       if (!key) continue;
@@ -700,6 +718,13 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         });
       }
     }
+
+    if (!mHdrDone || mBcCol < 0)
+      throw new Error(
+        `Master Assortment: ไม่พบคอลัมน์ BARCODE — ` +
+        `headers=[${Object.values(mHdrCols).join("|")}] sst=${mSst.length} hdrRow=${mHdrRowNum}`
+      );
+
     progress(46, `Master: ${masterMap.size} barcodes | sheet="${masterSheetName}" hdrRow=${mHdrRowNum} sst=${mSst.length} cols=[BC:${mBcCol} SALEPACK:${mBarSingleCol} PACK:${mSkuPackCol} EXTRA:${mExtraCol}]`);
 
     // ── 4. INDEX → map by PLANOGRAM (normalised key) ─────────────────────────
