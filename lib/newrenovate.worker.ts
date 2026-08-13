@@ -496,10 +496,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const mWbXml   = strFromU8(mZip[mWbKey]);
     const mRelsXml = mRelsKey ? strFromU8(mZip[mRelsKey]) : "";
 
-    // workbook.xml: <sheet name="Sheet1" sheetId="1" r:Id="rId1"/>
-    // — self-closing, attr order varies, namespace prefix for Id may vary (r:Id, rel:Id…)
+    // workbook.xml: <sheet name="Sheet1" sheetId="1" r:Id="rId1"/>  OR  <sheet ...>
+    // — may be self-closing OR non-self-closing; match both with (?:\/?>)
+    // — attr order varies; namespace prefix for Id may vary (r:Id, rel:Id…)
     const mSheetByName: Record<string, string> = {}; // display name → rId
-    for (const m of mWbXml.matchAll(/<sheet\b([^>]*?)\/>/g)) {
+    for (const m of mWbXml.matchAll(/<sheet\b([^>]*?)(?:\/>|>)/g)) {
       const attrs = m[1];
       const name  = /\bname="([^"]*)"/.exec(attrs)?.[1];
       const rId   = /\w+:Id="([^"]*)"/.exec(attrs)?.[1];  // any NS prefix: r:Id, rel:Id, …
@@ -507,7 +508,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
     // _rels: <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
     const mRIdToPath: Record<string, string> = {};
-    for (const m of mRelsXml.matchAll(/<Relationship\b([^>]*?)\/>/g)) {
+    for (const m of mRelsXml.matchAll(/<Relationship\b([^>]*?)(?:\/>|>)/g)) {
       const attrs  = m[1];
       const id     = /\bId="([^"]*)"/.exec(attrs)?.[1];
       const target = /\bTarget="([^"]*)"/.exec(attrs)?.[1];
