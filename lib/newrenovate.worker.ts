@@ -480,9 +480,14 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const mZip = unzipSync(new Uint8Array(masterBuf));
     const mZipKeys = Object.keys(mZip);
 
-    // Case-insensitive path lookup — some generators capitalise filenames differently
-    const mFindKey = (path: string): string =>
-      mZipKeys.find(k => k.toLowerCase() === path.toLowerCase()) ?? "";
+    // Lookup ZIP key: case-insensitive + leading-slash-insensitive.
+    // Returns the ACTUAL key (with whatever casing/slashes the ZIP uses),
+    // so mZip[mFindKey(path)] always works correctly.
+    const norm = (s: string) => s.replace(/^[/\\]+/, "").toLowerCase();
+    const mFindKey = (path: string): string => {
+      const n = norm(path);
+      return mZipKeys.find(k => norm(k) === n) ?? "";
+    };
 
     // ── resolve sheet name → XML file path ───────────────────────────────────
     const mWbKey    = mFindKey("xl/workbook.xml");
