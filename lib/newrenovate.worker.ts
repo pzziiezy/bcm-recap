@@ -588,11 +588,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
 
     // ── parse sheet rows ──────────────────────────────────────────────────────
-    // Scan first 15 rows for header, then process all data rows
     const mGetCell = (rowXml: string): Record<number, string> => {
       const cells: Record<number, string> = {};
       for (const c of rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
-        const rAttr    = /\br="([A-Z]+)\d+"/.exec(c[1])?.[1];
+        // Case-insensitive column letters (XLSX spec says uppercase, but be safe)
+        const rAttr  = /\br="([A-Za-z]+)\d+"/i.exec(c[1])?.[1]?.toUpperCase();
         if (!rAttr) continue;
         const colIdx   = mColIdx(rAttr);
         const isShared = /\bt="s"/.test(c[1]);
@@ -601,18 +601,21 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           cells[colIdx] = mDecode(/<t[^>]*>([^<]*)<\/t>/.exec(c[2])?.[1] ?? "");
         } else {
           const val = /<v>([^<]*)<\/v>/.exec(c[2])?.[1] ?? "";
-          cells[colIdx] = isShared ? (mSst[parseInt(val)] ?? "") : val;
+          cells[colIdx] = isShared ? (mSst[parseInt(val)] ?? "") : mDecode(val);
         }
       }
       return cells;
     };
 
     let mHdrRowNum = -1;
-    const mHdrCols: Record<number, string> = {}; // colIdx → header label
+    const mHdrCols: Record<number, string> = {};
 
-    // First pass: detect header row from first 15 rows
-    for (const row of mSheetXml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)) {
-      const rowNum = parseInt(row[1]);
+    // First pass: detect header row from first 15 rows.
+    // r= attribute is optional — fall back to sequential counter.
+    let mHdrSeq = 0;
+    for (const row of mSheetXml.matchAll(/<row\b([^>]*?)>([\s\S]*?)<\/row>/g)) {
+      mHdrSeq++;
+      const rowNum = parseInt(/\br="(\d+)"/.exec(row[1])?.[1] ?? String(mHdrSeq));
       if (rowNum > 15) break;
       const cells = mGetCell(row[2]);
       const vals  = Object.values(cells);
@@ -653,13 +656,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const mSkuPackCol   = findMCol("SKU_PACK","SKUPACK","PACK_SIZE","PACKSIZE","PACK SIZE","PACK");
     const mExtraCol     = findMCol("EXTRA_INFO","EXTRAINFO","EXTRA INFO","EXTRA","REMARK");
 
-    if (mBcCol < 0)
-      throw new Error(`Master Assortment: ไม่พบคอลัมน์ BARCODE — headers พบ: [${Object.values(mHdrCols).join(", ")}]`);
+    if (mBcCol < 0) {
+      const totalRowTags = (mSheetXml.match(/<row\b/g) ?? []).length;
+      throw new Error(
+        `Master Assortment: ไม่พบคอลัมน์ BARCODE — ` +
+        `headers=[${Object.values(mHdrCols).join("|")}] ` +
+        `sst=${mSst.length} hdrRow=${mHdrRowNum} rowTags=${totalRowTags} ` +
+        `xml="${mSheetXml.slice(0, 400)}"`
+      );
+    }
 
-    // Second pass: build masterMap from all data rows
+    // Second pass: build masterMap from all data rows (r= optional, same as header scan)
     const masterMap = new Map<string, MasterEntry>();
-    for (const row of mSheetXml.matchAll(/<row\b[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/g)) {
-      if (parseInt(row[1]) <= mHdrRowNum) continue;
+    let mDataSeq = 0;
+    for (const row of mSheetXml.matchAll(/<row\b([^>]*?)>([\s\S]*?)<\/row>/g)) {
+      mDataSeq++;
+      const rowNum = parseInt(/\br="(\d+)"/.exec(row[1])?.[1] ?? String(mDataSeq));
+      if (rowNum <= mHdrRowNum) continue;
       const cells = mGetCell(row[2]);
       const bc    = normalizeBarcode(cells[mBcCol] ?? "");
       const key   = barcodeMatchKey(bc);
@@ -675,7 +688,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         });
       }
     }
-    progress(46, `Master: ${masterMap.size} barcodes | sheet="${masterSheetName}" hdrRow=${mHdrRowNum} cols=[BC:${mBcCol} SALEPACK:${mBarSingleCol} PACK:${mSkuPackCol} EXTRA:${mExtraCol}]`);
+    progress(46, `Master: ${masterMap.size} barcodes | sheet="${masterSheetName}" hdrRow=${mHdrRowNum} sst=${mSst.length} cols=[BC:${mBcCol} SALEPACK:${mBarSingleCol} PACK:${mSkuPackCol} EXTRA:${mExtraCol}]`);
 
     // ── 4. INDEX → map by PLANOGRAM (normalised key) ─────────────────────────
     // Handles INDEX BIG C mini cross-tab structure: status is derived from
