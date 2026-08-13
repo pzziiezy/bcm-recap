@@ -478,22 +478,36 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     };
 
     const mZip = unzipSync(new Uint8Array(masterBuf));
+    const mZipKeys = Object.keys(mZip);
+
+    // Case-insensitive path lookup — some generators capitalise filenames differently
+    const mFindKey = (path: string): string =>
+      mZipKeys.find(k => k.toLowerCase() === path.toLowerCase()) ?? "";
 
     // ── resolve sheet name → XML file path ───────────────────────────────────
-    const mWbXml   = strFromU8(mZip["xl/workbook.xml"]            ?? new Uint8Array());
-    const mRelsXml = strFromU8(mZip["xl/_rels/workbook.xml.rels"] ?? new Uint8Array());
+    const mWbKey    = mFindKey("xl/workbook.xml");
+    const mRelsKey  = mFindKey("xl/_rels/workbook.xml.rels");
 
-    // workbook.xml: <sheet name="Sheet1" sheetId="1" r:Id="rId1"/>  (attr order varies)
+    if (!mWbKey)
+      throw new Error(
+        `Master Assortment: ไม่พบ xl/workbook.xml ใน ZIP — paths ที่พบ: [${mZipKeys.slice(0, 20).join(", ")}]`
+      );
+
+    const mWbXml   = strFromU8(mZip[mWbKey]);
+    const mRelsXml = mRelsKey ? strFromU8(mZip[mRelsKey]) : "";
+
+    // workbook.xml: <sheet name="Sheet1" sheetId="1" r:Id="rId1"/>
+    // — self-closing, attr order varies, namespace prefix for Id may vary (r:Id, rel:Id…)
     const mSheetByName: Record<string, string> = {}; // display name → rId
-    for (const m of mWbXml.matchAll(/<sheet\b([^/\n>]*)\/?>/g)) {
+    for (const m of mWbXml.matchAll(/<sheet\b([^>]*?)\/>/g)) {
       const attrs = m[1];
       const name  = /\bname="([^"]*)"/.exec(attrs)?.[1];
-      const rId   = /\br:Id="([^"]*)"/.exec(attrs)?.[1];
+      const rId   = /\w+:Id="([^"]*)"/.exec(attrs)?.[1];  // any NS prefix: r:Id, rel:Id, …
       if (name && rId) mSheetByName[name] = rId;
     }
     // _rels: <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
     const mRIdToPath: Record<string, string> = {};
-    for (const m of mRelsXml.matchAll(/<Relationship\b([^/\n>]*)\/?>/g)) {
+    for (const m of mRelsXml.matchAll(/<Relationship\b([^>]*?)\/>/g)) {
       const attrs  = m[1];
       const id     = /\bId="([^"]*)"/.exec(attrs)?.[1];
       const target = /\bTarget="([^"]*)"/.exec(attrs)?.[1];
@@ -501,7 +515,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
 
     const mAllSheetNames = Object.keys(mSheetByName);
-    if (!mAllSheetNames.length) throw new Error("Master Assortment: ไม่พบ sheet ในไฟล์");
+    if (!mAllSheetNames.length)
+      throw new Error(
+        `Master Assortment: ไม่พบ sheet ในไฟล์ — workbook.xml snippet: ${mWbXml.slice(0, 300)}`
+      );
 
     // Pick data sheet: prefer Sheet1/Data/Master; skip Explanation/Legend/etc.
     const mSkipSheets  = new Set(["explanation","legend","readme","info","instructions","instruction","manual","note","notes","remark"]);
