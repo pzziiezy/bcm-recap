@@ -468,32 +468,40 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // Normalize helper: strips spaces/underscores/hyphens for fuzzy column matching
     const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-    // Pick the sheet that contains a BARCODE/EAN/UPC/BAR_SINGLE header in the first 10 rows.
-    // Fallback: sheet with the most rows. This handles files where sheet[0] is a summary/legend.
+    // Scan ALL sheets. Among sheets that have a BARCODE/EAN/BAR_SINGLE header in
+    // the first 10 rows, pick the one with the MOST data rows (not just the first hit).
+    // Fallback: largest sheet by row count (handles files with no standard header keyword).
     const pickMasterSheet = (): string => {
+      let bestWithHeader = "";
+      let bestWithHeaderRows = -1;
+      let bestFallback = masterWb.SheetNames[0];
+      let bestFallbackRows = -1;
+
       for (const name of masterWb.SheetNames) {
         const ws = masterWb.Sheets[name];
         if (!ws) continue;
         const range = XLSX.utils.decode_range(ws["!ref"] ?? "A1");
-        for (let r = 0; r <= Math.min(9, range.e.r); r++) {
+        const rowCount = range.e.r;
+
+        if (rowCount > bestFallbackRows) { bestFallbackRows = rowCount; bestFallback = name; }
+
+        let hasHeader = false;
+        hdrScan: for (let r = 0; r <= Math.min(9, range.e.r); r++) {
           for (let c = 0; c <= Math.min(range.e.c, 80); c++) {
             const v = mNorm(String(ws[XLSX.utils.encode_cell({ r, c })]?.v ?? ""));
             if (v.includes("BARCODE") || v === "EAN" || v === "UPC" || v.startsWith("EAN") ||
-                v === "BARSINGLE" || v === "BARINGREDIENT" || v === "SKUPACK" || v === "EXTRAINFO")
-              return name;
+                v === "BARSINGLE" || v === "BARINGREDIENT" || v === "SKUPACK" || v === "EXTRAINFO") {
+              hasHeader = true; break hdrScan;
+            }
           }
         }
+        // Among sheets with the right header, prefer the one with the most rows
+        if (hasHeader && rowCount > bestWithHeaderRows) {
+          bestWithHeaderRows = rowCount;
+          bestWithHeader = name;
+        }
       }
-      // Fallback: largest sheet by row count
-      let best = masterWb.SheetNames[0];
-      let bestRows = 0;
-      for (const name of masterWb.SheetNames) {
-        const ws = masterWb.Sheets[name];
-        if (!ws) continue;
-        const rows = XLSX.utils.decode_range(ws["!ref"] ?? "A1").e.r;
-        if (rows > bestRows) { bestRows = rows; best = name; }
-      }
-      return best;
+      return bestWithHeader || bestFallback;
     };
 
     const masterSheetName = pickMasterSheet();
@@ -1010,7 +1018,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       {
         type: "done",
         buffer: output,
-        stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture, masterMapSize: masterMap.size },
+        stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture, masterMapSize: masterMap.size, masterSheetName },
       },
       [output],
     );
