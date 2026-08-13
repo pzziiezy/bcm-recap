@@ -482,6 +482,14 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       return best;
     };
 
+    // Log all sheets so we can see what's in the file
+    const sheetSummary = masterWb.SheetNames.map(name => {
+      const ws = masterWb.Sheets[name];
+      const rows = ws ? XLSX.utils.decode_range(ws["!ref"] ?? "A1").e.r : 0;
+      return `"${name}"(${rows}rows)`;
+    }).join(", ");
+    progress(35, `[DEBUG] Master Assortment sheets: [${sheetSummary}]`);
+
     const masterSheetName = pickMasterSheet();
     const masterWs = masterWb.Sheets[masterSheetName];
     if (!masterWs)
