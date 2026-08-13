@@ -1052,12 +1052,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       ss(PLOGNAME_COL,  idxEntry?.planogramName || sm?.planogram || "");
 
       // Master Assortment → SALE PACK CODE, Pack Size, Extra info only
+      // SALE PACK CODE is a barcode/EAN — always write as text, never numeric
       if (master) {
-        const barSingleNum = Number(master.barSingle);
-        if (!isNaN(barSingleNum) && master.barSingle !== "")
-          cols1.set(SALEPACK_COL, { t: "n", v: barSingleNum });
-        else
-          ss(SALEPACK_COL, master.barSingle);
+        ss(SALEPACK_COL, master.barSingle);
         sn(PACKSIZE_COL, master.skuPack);
         ss(EXTRA_COL,    master.extraInfo);
       }
