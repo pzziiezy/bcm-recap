@@ -461,50 +461,48 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 3. Master Assortment → map by BARCODE matchKey ───────────────────────
     progress(34, "อ่านไฟล์ Master Assortment Orderable...");
 
-    const masterWb = XLSX.read(new Uint8Array(masterBuf), { type: "array", cellText: true });
-    if (!masterWb.SheetNames.length)
-      throw new Error(`Master Assortment: ไม่พบ sheet — SheetNames: [ว่าง]`);
-
     // Normalize helper: strips spaces/underscores/hyphens for fuzzy column matching
     const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-    // Pick the correct data sheet from Master Assortment:
-    // 1. Prefer standard data sheet names (Sheet1, Data, Master, etc.)
-    // 2. Skip known non-data sheets (Explanation, Legend, README, etc.)
-    // 3. Fall back to the sheet with the most rows
+    // Pass 1: read workbook metadata only (bookSheets:true skips parsing all sheet XMLs).
+    // This avoids SheetJS silently failing on very large sheets when reading all at once.
+    const masterMeta = XLSX.read(new Uint8Array(masterBuf), { type: "array", bookSheets: true });
+    if (!masterMeta.SheetNames.length)
+      throw new Error("Master Assortment: ไม่พบ sheet ในไฟล์");
+
+    // Pick the data sheet by name (no sheet data available yet, name-based only)
     const skipSheetNames = new Set([
       "explanation", "legend", "readme", "info",
       "instructions", "instruction", "manual", "note", "notes", "remark",
     ]);
     const preferSheetNames = ["Sheet1", "Sheet 1", "DATA", "Data", "MASTER", "Master", "SHEET1"];
 
-    const pickMasterSheet = (): string => {
-      // Pass 1: exact preferred name match
-      for (const preferred of preferSheetNames) {
-        if (masterWb.Sheets[preferred]) return preferred;
+    const pickMasterSheet = (names: string[]): string => {
+      // exact match
+      for (const p of preferSheetNames) {
+        if (names.includes(p)) return p;
       }
-      // Pass 2: case-insensitive preferred name match
-      for (const preferred of preferSheetNames) {
-        const found = masterWb.SheetNames.find(n => n.toLowerCase() === preferred.toLowerCase());
-        if (found && masterWb.Sheets[found]) return found;
+      // case-insensitive match
+      for (const p of preferSheetNames) {
+        const found = names.find(n => n.toLowerCase() === p.toLowerCase());
+        if (found) return found;
       }
-      // Pass 3: largest sheet that is NOT a known non-data sheet
-      let best = masterWb.SheetNames[0];
-      let bestRows = -1;
-      for (const name of masterWb.SheetNames) {
-        if (skipSheetNames.has(name.toLowerCase())) continue;
-        const ws = masterWb.Sheets[name];
-        if (!ws) continue;
-        const rows = XLSX.utils.decode_range(ws["!ref"] ?? "A1").e.r;
-        if (rows > bestRows) { bestRows = rows; best = name; }
+      // first sheet not in skip list
+      for (const n of names) {
+        if (!skipSheetNames.has(n.toLowerCase())) return n;
       }
-      return best;
+      return names[0];
     };
 
-    const masterSheetName = pickMasterSheet();
+    const masterSheetName = pickMasterSheet(masterMeta.SheetNames);
+
+    // Pass 2: read ONLY the target sheet — efficient for large files, avoids OOM on Sheet1
+    const masterWb = XLSX.read(new Uint8Array(masterBuf), {
+      type: "array", cellText: true, sheets: masterSheetName,
+    });
     const masterWs = masterWb.Sheets[masterSheetName];
     if (!masterWs)
-      throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}"`);
+      throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}" (SheetNames: [${masterMeta.SheetNames.join(", ")}])`);
 
     // Auto-detect header row (file may have title/merged rows before actual column headers)
     // Pass 1: look for any cell whose normalized value contains BARCODE/EAN/UPC
