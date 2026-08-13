@@ -871,7 +871,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       ss(PF04_COL,      sm?.planofolder04 ?? "");
       ss(PLOGNAME_COL,  idxEntry?.planogramName || sm?.planogram || "");
 
-      // Master Assortment (Status/Store from master first; fallback to INDEX)
+      // Master Assortment → SALE PACK CODE, Pack Size, Extra info only
       if (master) {
         const barSingleNum = Number(master.barSingle);
         if (!isNaN(barSingleNum) && master.barSingle !== "")
@@ -880,12 +880,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           ss(SALEPACK_COL, master.barSingle);
         sn(PACKSIZE_COL, master.skuPack);
         ss(EXTRA_COL,    master.extraInfo);
-        ss(STATUS_COL, master.status || idxEntry?.status || "");
-        ss(STORE_COL,  master.store  || idxEntry?.store  || "");
-      } else {
-        ss(STATUS_COL, idxEntry?.status ?? "");
-        ss(STORE_COL,  idxEntry?.store  ?? "");
       }
+      // STATUS and STORE always come from INDEX only
+      ss(STATUS_COL, idxEntry?.status ?? "");
+      ss(STORE_COL,  idxEntry?.store  ?? "");
 
       // Constants
       if (FIXTYPE_COL !== undefined) cols1.set(FIXTYPE_COL, { t: "n", v: 0 });
