@@ -462,15 +462,44 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     progress(34, "อ่านไฟล์ Master Assortment Orderable...");
 
     const masterWb = XLSX.read(new Uint8Array(masterBuf), { type: "array", cellText: true });
-    const masterSheetName = masterWb.SheetNames.find(n => masterWb.Sheets[n]) ?? masterWb.SheetNames[0];
-    if (!masterSheetName)
-      throw new Error(`Master Assortment: ไม่พบ sheet — SheetNames: [${masterWb.SheetNames.join(", ") || "ว่าง"}]`);
-    const masterWs = masterWb.Sheets[masterSheetName];
-    if (!masterWs)
-      throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}"`);
+    if (!masterWb.SheetNames.length)
+      throw new Error(`Master Assortment: ไม่พบ sheet — SheetNames: [ว่าง]`);
 
     // Normalize helper: strips spaces/underscores/hyphens for fuzzy column matching
     const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+    // Pick the sheet that contains a BARCODE/EAN/UPC/BAR_SINGLE header in the first 10 rows.
+    // Fallback: sheet with the most rows. This handles files where sheet[0] is a summary/legend.
+    const pickMasterSheet = (): string => {
+      for (const name of masterWb.SheetNames) {
+        const ws = masterWb.Sheets[name];
+        if (!ws) continue;
+        const range = XLSX.utils.decode_range(ws["!ref"] ?? "A1");
+        for (let r = 0; r <= Math.min(9, range.e.r); r++) {
+          for (let c = 0; c <= Math.min(range.e.c, 80); c++) {
+            const v = mNorm(String(ws[XLSX.utils.encode_cell({ r, c })]?.v ?? ""));
+            if (v.includes("BARCODE") || v === "EAN" || v === "UPC" || v.startsWith("EAN") ||
+                v === "BARSINGLE" || v === "BARINGREDIENT" || v === "SKUPACK" || v === "EXTRAINFO")
+              return name;
+          }
+        }
+      }
+      // Fallback: largest sheet by row count
+      let best = masterWb.SheetNames[0];
+      let bestRows = 0;
+      for (const name of masterWb.SheetNames) {
+        const ws = masterWb.Sheets[name];
+        if (!ws) continue;
+        const rows = XLSX.utils.decode_range(ws["!ref"] ?? "A1").e.r;
+        if (rows > bestRows) { bestRows = rows; best = name; }
+      }
+      return best;
+    };
+
+    const masterSheetName = pickMasterSheet();
+    const masterWs = masterWb.Sheets[masterSheetName];
+    if (!masterWs)
+      throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}"`);
 
     // Auto-detect header row (file may have title/merged rows before actual column headers)
     // Pass 1: look for any cell whose normalized value contains BARCODE/EAN/UPC
