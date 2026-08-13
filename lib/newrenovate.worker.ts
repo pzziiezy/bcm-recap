@@ -518,7 +518,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const target = /\bTarget="([^"]*)"/.exec(attrs)?.[1] ?? "";
       const type   = /\bType="([^"]*)"/.exec(attrs)?.[1] ?? "";
       if (id && target && type.toLowerCase().includes("worksheet")) {
-        const raw = target.startsWith("xl/") ? target : `xl/${target}`;
+        const clean = target.replace(/^\/+/, "");  // strip leading slashes e.g. /xl/...
+        const raw   = clean.startsWith("xl/") ? clean : `xl/${clean}`;
         mWsRelsByRId[id] = mFindKey(raw) || raw;
       }
     }
