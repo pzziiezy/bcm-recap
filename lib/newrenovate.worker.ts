@@ -468,40 +468,18 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // Normalize helper: strips spaces/underscores/hyphens for fuzzy column matching
     const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
 
-    // Scan ALL sheets. Among sheets that have a BARCODE/EAN/BAR_SINGLE header in
-    // the first 10 rows, pick the one with the MOST data rows (not just the first hit).
-    // Fallback: largest sheet by row count (handles files with no standard header keyword).
+    // Always pick the sheet with the most rows — the data sheet has thousands of rows,
+    // any summary/legend/explanation sheet will have far fewer.
     const pickMasterSheet = (): string => {
-      let bestWithHeader = "";
-      let bestWithHeaderRows = -1;
-      let bestFallback = masterWb.SheetNames[0];
-      let bestFallbackRows = -1;
-
+      let best = masterWb.SheetNames[0];
+      let bestRows = -1;
       for (const name of masterWb.SheetNames) {
         const ws = masterWb.Sheets[name];
         if (!ws) continue;
-        const range = XLSX.utils.decode_range(ws["!ref"] ?? "A1");
-        const rowCount = range.e.r;
-
-        if (rowCount > bestFallbackRows) { bestFallbackRows = rowCount; bestFallback = name; }
-
-        let hasHeader = false;
-        hdrScan: for (let r = 0; r <= Math.min(9, range.e.r); r++) {
-          for (let c = 0; c <= Math.min(range.e.c, 80); c++) {
-            const v = mNorm(String(ws[XLSX.utils.encode_cell({ r, c })]?.v ?? ""));
-            if (v.includes("BARCODE") || v === "EAN" || v === "UPC" || v.startsWith("EAN") ||
-                v === "BARSINGLE" || v === "BARINGREDIENT" || v === "SKUPACK" || v === "EXTRAINFO") {
-              hasHeader = true; break hdrScan;
-            }
-          }
-        }
-        // Among sheets with the right header, prefer the one with the most rows
-        if (hasHeader && rowCount > bestWithHeaderRows) {
-          bestWithHeaderRows = rowCount;
-          bestWithHeader = name;
-        }
+        const rows = XLSX.utils.decode_range(ws["!ref"] ?? "A1").e.r;
+        if (rows > bestRows) { bestRows = rows; best = name; }
       }
-      return bestWithHeader || bestFallback;
+      return best;
     };
 
     const masterSheetName = pickMasterSheet();
