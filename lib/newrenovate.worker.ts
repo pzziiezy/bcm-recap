@@ -469,15 +469,33 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     if (!masterWs)
       throw new Error(`Master Assortment: ไม่พบ sheet "${masterSheetName}"`);
 
-    // Auto-detect header row (file may have title rows before actual column headers)
+    // Normalize helper: strips spaces/underscores/hyphens for fuzzy column matching
+    const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+    // Auto-detect header row (file may have title/merged rows before actual column headers)
+    // Pass 1: look for any cell whose normalized value contains BARCODE/EAN/UPC
+    // Pass 2 fallback: first row that has ≥5 non-empty string-typed cells (looks like headers)
     const mWsRange = XLSX.utils.decode_range(masterWs["!ref"] ?? "A1");
-    let mHdrRow = 0;
+    let mHdrRow = -1;
     mHdrScan: for (let r = 0; r <= Math.min(9, mWsRange.e.r); r++) {
-      for (let c = 0; c <= Math.min(mWsRange.e.c, 50); c++) {
-        const v = String(masterWs[XLSX.utils.encode_cell({ r, c })]?.v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-        if (v === "BARCODE" || v === "EAN" || v === "UPC") { mHdrRow = r; break mHdrScan; }
+      for (let c = 0; c <= Math.min(mWsRange.e.c, 80); c++) {
+        const v = mNorm(String(masterWs[XLSX.utils.encode_cell({ r, c })]?.v ?? ""));
+        if (v.includes("BARCODE") || v === "EAN" || v === "UPC" || v.startsWith("EAN")) {
+          mHdrRow = r; break mHdrScan;
+        }
       }
     }
+    if (mHdrRow < 0) {
+      for (let r = 0; r <= Math.min(9, mWsRange.e.r); r++) {
+        let strCnt = 0;
+        for (let c = 0; c <= Math.min(mWsRange.e.c, 80); c++) {
+          const cell = masterWs[XLSX.utils.encode_cell({ r, c })];
+          if (cell?.t === "s" && String(cell.v ?? "").trim()) strCnt++;
+        }
+        if (strCnt >= 5) { mHdrRow = r; break; }
+      }
+    }
+    if (mHdrRow < 0) mHdrRow = 0;
 
     const masterAllRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(masterWs, { defval: "", range: mHdrRow });
     const masterMap = new Map<string, MasterEntry>(); // key = barcodeMatchKey
@@ -487,7 +505,6 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // Match priority: (1) exact case-insensitive, (2) normalized alphanumeric exact,
     // (3) normalized alphanumeric substring. Normalizing strips spaces/underscores/hyphens
     // so "SALE PACK CODE" matches "SALE_PACK_CODE" etc.
-    const mNorm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
     const findMHdr = (...names: string[]): string | undefined => {
       for (const n of names) {
         const h = mHdrs.find(k => k.toUpperCase() === n.toUpperCase());
