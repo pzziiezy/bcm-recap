@@ -480,7 +480,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     mHdrScan: for (let r = 0; r <= Math.min(9, mWsRange.e.r); r++) {
       for (let c = 0; c <= Math.min(mWsRange.e.c, 80); c++) {
         const v = mNorm(String(masterWs[XLSX.utils.encode_cell({ r, c })]?.v ?? ""));
-        if (v.includes("BARCODE") || v === "EAN" || v === "UPC" || v.startsWith("EAN")) {
+        if (v.includes("BARCODE") || v === "EAN" || v === "UPC" || v.startsWith("EAN") ||
+            v === "BARSINGLE" || v === "BARINGREDIENT" || v === "SKUPACK" || v === "EXTRAINFO") {
           mHdrRow = r; break mHdrScan;
         }
       }
@@ -523,9 +524,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     const mBcKey     = findMHdr("BARCODE", "EAN", "UPC") ?? "BARCODE";
     const mNameKey   = findMHdr("DESCRIPTION","PRODUCT_NAME","LONG_DESC","NAME","SHORT_DESC","PROD_NAME") ?? "";
-    const mBarSingle = findMHdr("SALE PACK CODE","BAR_SINGLE","BAR_SINGLE_CODE","SALE_PACK_CODE","SALEPACKCODE") ?? "SALE PACK CODE";
-    const mSkuPack   = findMHdr("PACK SIZE","SKU_PACK","PACK_SIZE","PACK") ?? "PACK SIZE";
-    const mExtra     = findMHdr("Extra info","EXTRA INFO","EXTRA_INFO","EXTRA","REMARK") ?? "Extra info";
+    const mBarSingle = findMHdr("BAR_SINGLE","BAR_INGREDIENT","SALE PACK CODE","BAR_SINGLE_CODE","SALE_PACK_CODE","SALEPACKCODE") ?? "BAR_SINGLE";
+    const mSkuPack   = findMHdr("SKU_PACK","PACK SIZE","PACK_SIZE","PACK") ?? "SKU_PACK";
+    const mExtra     = findMHdr("EXTRA_INFO","Extra info","EXTRA INFO","EXTRA","REMARK") ?? "EXTRA_INFO";
     const mStatus    = findMHdr("STATUS","ITEM_STATUS","ORD_STATUS","ORDERABLE") ?? "STATUS";
     const mStore     = findMHdr("STORE","STORE_CODE","STORE_NAME","BRANCH") ?? "STORE";
 
