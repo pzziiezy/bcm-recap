@@ -539,15 +539,17 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     })();
 
     const mSheetRelPath = mRIdToPath[mSheetByName[masterSheetName] ?? ""] ?? "";
-    const mSheetZipKey  = mSheetRelPath.startsWith("xl/") ? mSheetRelPath
+    const mSheetZipRaw  = mSheetRelPath.startsWith("xl/") ? mSheetRelPath
                         : mSheetRelPath ? `xl/${mSheetRelPath}` : "";
+    const mSheetZipKey  = mSheetZipRaw ? (mFindKey(mSheetZipRaw) || mSheetZipRaw) : "";
     if (!mSheetZipKey || !mZip[mSheetZipKey])
-      throw new Error(`Master Assortment: ไม่พบไฟล์ sheet XML สำหรับ "${masterSheetName}" (path: ${mSheetZipKey || "ไม่ระบุ"})`);
+      throw new Error(`Master Assortment: ไม่พบไฟล์ sheet XML สำหรับ "${masterSheetName}" (path: ${mSheetZipKey || "ไม่ระบุ"}, relsKeys: [${Object.keys(mRIdToPath).join(",")}])`);
 
     const mSheetXml = strFromU8(mZip[mSheetZipKey]);
 
     // ── parse shared strings ──────────────────────────────────────────────────
-    const mSstRaw = mZip["xl/sharedStrings.xml"] ? strFromU8(mZip["xl/sharedStrings.xml"]) : "";
+    const mSstKey2  = mFindKey("xl/sharedStrings.xml");
+    const mSstRaw   = mSstKey2 ? strFromU8(mZip[mSstKey2]) : "";
     const mSst: string[] = [];
     for (const si of mSstRaw.matchAll(/<si>([\s\S]*?)<\/si>/g)) {
       const texts: string[] = [];
