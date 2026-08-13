@@ -969,6 +969,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       );
     }
 
+    // Debug: show sample keys from masterMap vs QRY to diagnose mismatch
+    const sampleMasterKeys = [...masterMap.keys()].slice(0, 3).join(" | ");
+    const sampleQryKeys    = qryRows.slice(0, 3).map(r => r.matchKey).join(" | ");
+    progress(94, `[DEBUG] masterMap size=${masterMap.size} | sample keys: [${sampleMasterKeys || "ว่าง"}] vs QRY: [${sampleQryKeys || "ว่าง"}]`);
+
     progress(96, "บีบอัดไฟล์ผลลัพธ์...");
     const zipped = zipSync(files);
     const output = zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength);
@@ -978,7 +983,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       {
         type: "done",
         buffer: output,
-        stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture },
+        stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture, masterMapSize: masterMap.size },
       },
       [output],
     );

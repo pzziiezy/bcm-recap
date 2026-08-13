@@ -12,6 +12,7 @@ interface Stats {
   matchedMaster: number;
   matchedIndex: number;
   matchedFixture: number;
+  masterMapSize?: number;
 }
 
 type ProcStatus = "idle" | "processing" | "done" | "error";
@@ -307,6 +308,11 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             </div>
             <div className="mt-2 text-xs text-slate-400">
               Config Rules active: {exceptionConfig.filter(e => e.status === "active").length} rules
+              {stats.masterMapSize !== undefined && (
+                <span className="ml-4 text-amber-500 font-semibold">
+                  [Debug] Master Assortment loaded: {stats.masterMapSize.toLocaleString()} barcodes
+                </span>
+              )}
             </div>
           </div>
 
