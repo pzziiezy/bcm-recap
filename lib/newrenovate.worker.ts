@@ -1035,12 +1035,12 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const s2Patches = new Map<number, Map<number, CellPatch>>();
     const s3Patches = new Map<number, Map<number, CellPatch>>();
 
-    // s2 rows collected here first so they can be sorted by store code before writing
+    // s2/s3 rows collected here first so they can be sorted by store code before writing
     const s2Staging: { storeVal: string; cols: Map<number, CellPatch> }[] = [];
+    const s3Staging: { storeVal: string; cols: Map<number, CellPatch> }[] = [];
 
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
-    let outIdx   = 0; // tracks Sheet 1 output row (expands per store)
-    let s3OutIdx = 0; // tracks Delete sheet row (DELETE-status rows only)
+    let outIdx = 0; // tracks Sheet 1 output row (expands per store)
 
     for (let i = 0; i < qryRows.length; i++) {
       const qry = qryRows[i];
@@ -1161,7 +1161,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         // Req: DELETE rows go only to Delete sheet, not Sheet 1
         if (!isDelete) s1Patches.set(rowNum, cols1s);
 
-        // Delete for Exception_ IM — one row per DELETE-status store entry
+        // Delete for Exception_ IM — collect in s3Staging for sort before writing
         if (s3Name && isDelete) {
           const cols3 = new Map<number, CellPatch>();
           const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
@@ -1170,10 +1170,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           ss3(POG3_COL,     sm?.planofolder04 || sm?.planofolder03 || "");
           ss3(BARCODE3_COL, qry.barcode);
           ss3(NAME3_COL,    productName);
-          ss3(STATUS3_COL,  idxEntry?.status ?? "");
+          ss3(STATUS3_COL,  idxEntry.status);
           ss3(STORE3_COL,   storeVal);
-          s3Patches.set(DATA_START_ROW + s3OutIdx, cols3);
-          s3OutIdx++;
+          s3Staging.push({ storeVal, cols: cols3 });
         }
       }
 
@@ -1197,16 +1196,17 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
     }
 
-    // Sort s2Staging by store code (numeric ascending) then assign row numbers
-    s2Staging.sort((a, b) => {
-      const na = parseInt(a.storeVal, 10);
-      const nb = parseInt(b.storeVal, 10);
-      if (!isNaN(na) && !isNaN(nb)) return na - nb;
-      return a.storeVal.localeCompare(b.storeVal);
-    });
-    s2Staging.forEach(({ cols }, i) => {
-      s2Patches.set(DATA_START_ROW + i, cols);
-    });
+    // Sort staging arrays by store code (numeric ascending) then assign row numbers
+    const sortByStore = (arr: { storeVal: string; cols: Map<number, CellPatch> }[]) =>
+      arr.sort((a, b) => {
+        const na = parseInt(a.storeVal, 10);
+        const nb = parseInt(b.storeVal, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.storeVal.localeCompare(b.storeVal);
+      });
+
+    sortByStore(s2Staging).forEach(({ cols }, i) => s2Patches.set(DATA_START_ROW + i, cols));
+    sortByStore(s3Staging).forEach(({ cols }, i) => s3Patches.set(DATA_START_ROW + i, cols));
 
     // ── 8. ZIP-patch template ─────────────────────────────────────────────────
     progress(75, "เปิด Template ZIP...");
