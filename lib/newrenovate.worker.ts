@@ -38,6 +38,7 @@ interface SpacemanEntry {
   planofolder02: string;
   planofolder03: string;
   planofolder04: string;
+  planofolder05: string;
   planogram:     string;
   category:      string;
   subcategory:   string;
@@ -427,6 +428,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const pf02Idx  = sHdrs.indexOf("PLANOFOLDER02");
     const pf03Idx  = sHdrs.indexOf("PLANOFOLDER03");
     const pf04Idx  = sHdrs.indexOf("PLANOFOLDER04");
+    const pf05Idx  = sHdrs.indexOf("PLANOFOLDER05");
     const plogIdx  = sHdrs.indexOf("PLANOGRAM") >= 0 ? sHdrs.indexOf("PLANOGRAM") : 3;
     const catIdx   = sHdrs.indexOf("CATEGORY");
     const subIdx   = sHdrs.indexOf("SUBCATEGORY");
@@ -450,6 +452,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           planofolder02: pf02Idx >= 0 ? getS(r, pf02Idx) : "",
           planofolder03: pf03Idx >= 0 ? getS(r, pf03Idx) : "",
           planofolder04: pf04Idx >= 0 ? getS(r, pf04Idx) : "",
+          planofolder05: pf05Idx >= 0 ? getS(r, pf05Idx) : "",
           planogram:     getS(r, plogIdx),
           category:      catIdx   >= 0 ? getS(r, catIdx)   : "",
           subcategory:   subIdx   >= 0 ? getS(r, subIdx)   : "",
@@ -1089,7 +1092,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
       // DATA_SPACEMAN
       // DIVISION: prefer PLANOFOLDER01; if absent fall back to PLANOFOLDER02
-      const divisionVal = sm?.planofolder01 || sm?.planofolder02 || "";
+      const divisionVal = sm?.planofolder02 || "";
       ss(DIVISION_COL,  divisionVal);
       ss(PF03_COL,      sm?.planofolder03 ?? "");
       ss(PF04_COL,      sm?.planofolder04 ?? "");
@@ -1172,9 +1175,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         if (s3Name && isDelete) {
           const cols3 = new Map<number, CellPatch>();
           const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
-          ss3(DIV3_COL,     sm?.planofolder01 || sm?.planofolder02 || "");
-          ss3(DEPT3_COL,    sm?.planofolder02 || "");
-          ss3(POG3_COL,     sm?.planofolder04 || sm?.planofolder03 || "");
+          ss3(DIV3_COL,     sm?.planofolder02 || "");
+          ss3(DEPT3_COL,    sm?.planofolder04 || "");
+          ss3(POG3_COL,     sm?.planofolder05 || "");
           ss3(BARCODE3_COL, qry.barcode);
           ss3(NAME3_COL,    productName);
           ss3(STATUS3_COL,  idxEntry.status);
@@ -1192,9 +1195,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           ss2(BARCODE2_COL, qry.barcode);
           ss2(DIV2_COL,     divisionVal);
           ss2(NAME2_COL,    productName);
-          ss2(POG04_2_COL,  sm?.planofolder04 ?? "");
-          ss2(POG03_2_COL,  sm?.planofolder03 ?? "");
-          ss2(DEPT2_COL,    sm?.planofolder02 ?? "");
+          ss2(POG04_2_COL,  sm?.planofolder05 ?? "");
+          ss2(POG03_2_COL,  sm?.planofolder05 ?? "");
+          ss2(DEPT2_COL,    sm?.planofolder04 ?? "");
           ss2(STATUS2_COL,  idxEntry.status);
           if (STORECOUNT2_COL !== undefined && storeVal)
             cols2.set(STORECOUNT2_COL, { t: "s", v: storeVal });
