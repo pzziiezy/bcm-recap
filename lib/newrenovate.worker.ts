@@ -1047,8 +1047,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const sm     = spacemanMap.get(qry.matchKey);
       const master = masterMap.get(qry.matchKey);
 
-      // QRY planogram is the authoritative POG for this row; Spaceman is fallback
-      const planogram = normalizeKey(qry.planogram || sm?.planogram || "");
+      // Use QRY PLANOGRAM only — no fallback to Spaceman
+      const planogram = normalizeKey(qry.planogram);
       const idxEntry  = planogram
         ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
         : undefined;
