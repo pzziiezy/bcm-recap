@@ -1175,10 +1175,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         }
       }
 
-      // ── Sheet 2 (New for Link_IM) — one row per item, NEW and EXISTING only ──
-      // For EXISTING: Number STORE = count of store codes (not expanded)
-      // For NEW:      Number STORE = count of store codes
-      if (!isDelete) {
+      // ── Sheet 2 (New for Link_IM) — one row per item, NEW status only ──
+      if (idxEntry.status.toUpperCase() === "NEW") {
         const cols2 = new Map<number, CellPatch>();
         const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
         ss2(BARCODE2_COL, qry.barcode);
