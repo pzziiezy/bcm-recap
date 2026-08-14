@@ -1089,7 +1089,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       ss(DIVISION_COL,  divisionVal);
       ss(PF03_COL,      sm?.planofolder03 ?? "");
       ss(PF04_COL,      sm?.planofolder04 ?? "");
-      ss(PLOGNAME_COL,  idxEntry?.planogramName || sm?.planogram || "");
+      ss(PLOGNAME_COL,  idxEntry.planogramName);
 
       // Master Assortment → SALE PACK CODE, Pack Size, Extra info only
       // SALE PACK CODE is a barcode/EAN — always write as text, never numeric
