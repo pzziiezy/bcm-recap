@@ -62,6 +62,7 @@ interface IndexEntry {
 interface QrySourceRow {
   barcode:    string; // display form (preserves leading zeros)
   matchKey:   string; // stripped leading zeros — used for all map lookups
+  planogram:  string; // PLANOGRAM column from QRY — primary key for INDEX lookup
   segment:    string;
   locationId: string;
   totalUnits: string;
@@ -367,6 +368,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     };
 
     const qBarcodeCol = findQCol("BARCODE", "UPC", "EAN", "Barcode", "barcode");
+    const qPlogCol    = findQCol("PLANOGRAM", "POG", "POG_NAME", "PLANOGRAM_NAME");
     const qSegCol     = findQCol("SEGMENT", "Segment", "segment");
     const qLocCol     = findQCol("LOCATION_ID", "LOCATIONID", "Location_ID", "location_id");
     const qUnitsCol   = findQCol("TOTAL_UNITS", "TOTALUNITS", "Total_Units", "QTY", "UNITS", "total_units");
@@ -396,6 +398,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       qryRows.push({
         barcode:    bc,
         matchKey:   barcodeMatchKey(bc),   // stripped for all map lookups
+        planogram:  str(qPlogCol),         // PLANOGRAM from QRY — primary for INDEX lookup
         segment:    str(qSegCol),
         locationId: str(qLocCol),
         totalUnits: numStr(qUnitsCol),
@@ -1044,7 +1047,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const sm     = spacemanMap.get(qry.matchKey);
       const master = masterMap.get(qry.matchKey);
 
-      const planogram = normalizeKey(sm?.planogram ?? "");
+      // QRY planogram is the authoritative POG for this row; Spaceman is fallback
+      const planogram = normalizeKey(qry.planogram || sm?.planogram || "");
       const idxEntry  = planogram
         ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
         : undefined;
