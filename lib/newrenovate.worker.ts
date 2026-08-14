@@ -1035,9 +1035,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const s2Patches = new Map<number, Map<number, CellPatch>>();
     const s3Patches = new Map<number, Map<number, CellPatch>>();
 
+    // s2 rows collected here first so they can be sorted by store code before writing
+    const s2Staging: { storeVal: string; cols: Map<number, CellPatch> }[] = [];
+
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
     let outIdx   = 0; // tracks Sheet 1 output row (expands per store)
-    let s2OutIdx = 0; // tracks Sheet 2 output row (one row per item, NEW/EXISTING only)
     let s3OutIdx = 0; // tracks Delete sheet row (DELETE-status rows only)
 
     for (let i = 0; i < qryRows.length; i++) {
@@ -1175,23 +1177,36 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         }
       }
 
-      // ── Sheet 2 (New for Link_IM) — one row per item, NEW status only ──
+      // ── Sheet 2 (New for Link_IM) — one row per store, NEW status only ──
+      // Collected in s2Staging so rows can be sorted by store code before writing
       if (idxEntry.status.toUpperCase() === "NEW") {
-        const cols2 = new Map<number, CellPatch>();
-        const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
-        ss2(BARCODE2_COL, qry.barcode);
-        ss2(DIV2_COL,     divisionVal);
-        ss2(NAME2_COL,    productName);
-        ss2(POG04_2_COL,  sm?.planofolder04 ?? "");
-        ss2(POG03_2_COL,  sm?.planofolder03 ?? "");
-        ss2(DEPT2_COL,    sm?.planofolder02 ?? "");
-        ss2(STATUS2_COL,  idxEntry?.status ?? "");
-        if (STORECOUNT2_COL !== undefined && storeCount > 0)
-          cols2.set(STORECOUNT2_COL, { t: "n", v: storeCount });
-        s2Patches.set(DATA_START_ROW + s2OutIdx, cols2);
-        s2OutIdx++;
+        for (const storeVal of stores) {
+          const cols2 = new Map<number, CellPatch>();
+          const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
+          ss2(BARCODE2_COL, qry.barcode);
+          ss2(DIV2_COL,     divisionVal);
+          ss2(NAME2_COL,    productName);
+          ss2(POG04_2_COL,  sm?.planofolder04 ?? "");
+          ss2(POG03_2_COL,  sm?.planofolder03 ?? "");
+          ss2(DEPT2_COL,    sm?.planofolder02 ?? "");
+          ss2(STATUS2_COL,  idxEntry.status);
+          if (STORECOUNT2_COL !== undefined && storeVal)
+            cols2.set(STORECOUNT2_COL, { t: "s", v: storeVal });
+          s2Staging.push({ storeVal, cols: cols2 });
+        }
       }
     }
+
+    // Sort s2Staging by store code (numeric ascending) then assign row numbers
+    s2Staging.sort((a, b) => {
+      const na = parseInt(a.storeVal, 10);
+      const nb = parseInt(b.storeVal, 10);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return a.storeVal.localeCompare(b.storeVal);
+    });
+    s2Staging.forEach(({ cols }, i) => {
+      s2Patches.set(DATA_START_ROW + i, cols);
+    });
 
     // ── 8. ZIP-patch template ─────────────────────────────────────────────────
     progress(75, "เปิด Template ZIP...");
