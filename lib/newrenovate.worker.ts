@@ -1035,12 +1035,14 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const s2Patches = new Map<number, Map<number, CellPatch>>();
     const s3Patches = new Map<number, Map<number, CellPatch>>();
 
-    // s2/s3 rows collected here first so they can be sorted by store code before writing
-    const s2Staging: { storeVal: string; cols: Map<number, CellPatch> }[] = [];
-    const s3Staging: { storeVal: string; cols: Map<number, CellPatch> }[] = [];
+    // All three sheets staged first, then sorted before row numbers are assigned
+    type S1Row = { storeVal: string; planogramName: string; noBay: string; seq: string; cols: Map<number, CellPatch> };
+    type StoreRow = { storeVal: string; cols: Map<number, CellPatch> };
+    const s1Staging: S1Row[]    = [];
+    const s2Staging: StoreRow[] = [];
+    const s3Staging: StoreRow[] = [];
 
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
-    let outIdx = 0; // tracks Sheet 1 output row (expands per store)
 
     for (let i = 0; i < qryRows.length; i++) {
       const qry = qryRows[i];
@@ -1150,16 +1152,21 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const isDelete = idxEntry.status.toUpperCase().startsWith("DELETE");
 
       for (const storeVal of stores) {
-        const rowNum = DATA_START_ROW + outIdx;
-        outIdx++;
-
         // Clone cols1 and inject this store's value
         const cols1s = new Map(cols1);
         if (STORE_COL !== undefined && storeVal)
           cols1s.set(STORE_COL, { t: "s", v: storeVal });
 
         // Req: DELETE rows go only to Delete sheet, not Sheet 1
-        if (!isDelete) s1Patches.set(rowNum, cols1s);
+        if (!isDelete) {
+          s1Staging.push({
+            storeVal,
+            planogramName: idxEntry.planogramName,
+            noBay:         qry.segment,
+            seq:           qry.locationId,
+            cols:          cols1s,
+          });
+        }
 
         // Delete for Exception_ IM — collect in s3Staging for sort before writing
         if (s3Name && isDelete) {
@@ -1196,14 +1203,25 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
     }
 
-    // Sort staging arrays by store code (numeric ascending) then assign row numbers
-    const sortByStore = (arr: { storeVal: string; cols: Map<number, CellPatch> }[]) =>
-      arr.sort((a, b) => {
-        const na = parseInt(a.storeVal, 10);
-        const nb = parseInt(b.storeVal, 10);
-        if (!isNaN(na) && !isNaN(nb)) return na - nb;
-        return a.storeVal.localeCompare(b.storeVal);
-      });
+    // ── Sort all staging arrays then assign row numbers ───────────────────────
+    const cmpNum = (a: string, b: string): number => {
+      const na = parseFloat(a), nb = parseFloat(b);
+      return (!isNaN(na) && !isNaN(nb)) ? na - nb : a.localeCompare(b);
+    };
+    const cmpStr = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+
+    // Sheet 1: priority 1=store 2=planogramName 3=noBay 4=seq
+    s1Staging.sort((a, b) =>
+      cmpNum(a.storeVal,      b.storeVal)      ||
+      cmpStr(a.planogramName, b.planogramName) ||
+      cmpNum(a.noBay,         b.noBay)         ||
+      cmpNum(a.seq,           b.seq)
+    );
+    s1Staging.forEach(({ cols }, i) => s1Patches.set(DATA_START_ROW + i, cols));
+
+    // Sheet 2 & 3: sort by store code only
+    const sortByStore = (arr: StoreRow[]) =>
+      arr.sort((a, b) => cmpNum(a.storeVal, b.storeVal));
 
     sortByStore(s2Staging).forEach(({ cols }, i) => s2Patches.set(DATA_START_ROW + i, cols));
     sortByStore(s3Staging).forEach(({ cols }, i) => s3Patches.set(DATA_START_ROW + i, cols));
