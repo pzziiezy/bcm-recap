@@ -949,8 +949,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const BARCODE_COL    = c1("BARCODE", 5);
     // DIVISION = PLANOFOLDER01 (topmost). Fallback: PF02 if PF01 is absent in DS.
     const DIVISION_COL   = c1("DIVISION", 1);
-    const PF03_COL       = colMap1.get("PLANOFOLDER03") ?? fc1("PF03") ?? 2;
-    const PF04_COL       = colMap1.get("PLANOFOLDER04") ?? fc1("PF04") ?? 3;
+    const PF03_COL       = colMap1.get("DEPARTMENT") ?? fc1("DEPARTMENT") ?? fc1("DEPT") ?? 2;
+    const PF04_COL       = colMap1.get("POG CATE")   ?? fc1("POG CATE") ?? fc1("POG")  ?? 3;
     const PLOGNAME_COL   = fc1("PLANOGRAM NAME") ?? fc1("POG NAME") ?? fc1("PLANOGRAM");
     // Exact case-insensitive match first — avoids false hits on "PLANOGRAM NAME" etc.
     const exactCI1 = (needle: string) => {
@@ -996,8 +996,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const BARCODE2_COL     = colMap2.get("BARCODE")    ?? fc2("BARCODE")    ?? 4;
     const DIV2_COL         = colMap2.get("DIVISION")   ?? fc2("DIVISION")   ?? 1;
     const NAME2_COL        = colMap2.get("Name")       ?? fc2("name")       ?? fc2("ชื่อ");
-    const POG04_2_COL      = colMap2.get("POG 04")     ?? fc2("POG 04")     ?? fc2("PLANOFOLDER04") ?? fc2("PF04");
-    const POG03_2_COL      = colMap2.get("POG 03")     ?? fc2("POG 03")     ?? fc2("PLANOFOLDER03") ?? fc2("PF03");
+    const POG04_2_COL      = colMap2.get("POG CATE") ?? fc2("POG CATE") ?? fc2("POG");
+    const POG03_2_COL      = POG04_2_COL; // same column — POG CATE is a single column in this sheet
     const DEPT2_COL        = colMap2.get("DEPARTMENT") ?? fc2("DEPARTMENT") ?? fc2("DEPT");
     const STATUS2_COL      = colMap2.get("STATUS")     ?? fc2("status");
     const STORECOUNT2_COL  = fc2("number store")       ?? fc2("store");
