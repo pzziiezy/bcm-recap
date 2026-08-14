@@ -1049,6 +1049,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
         : undefined;
 
+      // Req: skip rows with no INDEX match (no POG NAME found in Index file)
+      if (!idxEntry) continue;
+
       const fixtureKey  = qry.segment && planogram ? `${qry.segment}|${planogram}` : "";
       const fixtureCode = fixtureKey ? (fixtureMap.get(fixtureKey) ?? "") : "";
 
@@ -1129,11 +1132,16 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         cols1.set(NETCAP_COL, { t: "n", v: netCapVal });
 
       // ── Expand stores: one output row per store code (Sheet 1 + Delete sheet) ─
-      const storeRaw = idxEntry?.store ?? "";
-      const stores   = storeRaw
+      const storeRaw   = idxEntry.store;
+      const stores     = storeRaw
         ? storeRaw.split(",").map(s => s.trim()).filter(Boolean)
-        : [""];
-      const storeCount = stores.filter(Boolean).length;
+        : [];
+      const storeCount = stores.length;
+
+      // Req: skip rows where neither AS IS nor TO BE has any store codes
+      if (storeCount === 0) continue;
+
+      const isDelete = idxEntry.status.toUpperCase().startsWith("DELETE");
 
       for (const storeVal of stores) {
         const rowNum = DATA_START_ROW + outIdx;
@@ -1144,10 +1152,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         if (STORE_COL !== undefined && storeVal)
           cols1s.set(STORE_COL, { t: "s", v: storeVal });
 
-        s1Patches.set(rowNum, cols1s);
+        // Req: DELETE rows go only to Delete sheet, not Sheet 1
+        if (!isDelete) s1Patches.set(rowNum, cols1s);
 
         // Delete for Exception_ IM — one row per DELETE-status store entry
-        if (s3Name && (idxEntry?.status ?? "").toUpperCase().startsWith("DELETE")) {
+        if (s3Name && isDelete) {
           const cols3 = new Map<number, CellPatch>();
           const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
           ss3(DIV3_COL,     sm?.planofolder01 || sm?.planofolder02 || "");
@@ -1165,8 +1174,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       // ── Sheet 2 (New for Link_IM) — one row per item, NEW and EXISTING only ──
       // For EXISTING: Number STORE = count of store codes (not expanded)
       // For NEW:      Number STORE = count of store codes
-      const statusUpper2 = (idxEntry?.status ?? "").toUpperCase();
-      if (statusUpper2 === "NEW" || statusUpper2.includes("EXIST")) {
+      if (!isDelete) {
         const cols2 = new Map<number, CellPatch>();
         const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
         ss2(BARCODE2_COL, qry.barcode);
