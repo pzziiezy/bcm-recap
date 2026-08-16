@@ -58,6 +58,9 @@ interface IndexEntry {
   status:        string;
   store:         string;
   planogramName: string;
+  existingStores: string[];
+  newStores:      string[];
+  deleteStores:   string[];
 }
 
 interface QrySourceRow {
@@ -819,10 +822,16 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         const plog = normalizeKey(String(row[iPlogKey] ?? ""));
         if (!plog) continue;
         if (!indexMap.has(plog)) {
+          const _fStatus = String(row[iStatKey]  ?? "");
+          const _fStore  = String(row[iStoreKey] ?? "").split(",").map(s => s.trim()).filter(Boolean);
+          const _fUp     = _fStatus.toUpperCase();
           const entry: IndexEntry = {
-            status:        String(row[iStatKey]  ?? ""),
+            status:        _fStatus,
             store:         String(row[iStoreKey] ?? ""),
             planogramName: iNameKey ? String(row[iNameKey] ?? "") : plog,
+            existingStores: _fUp === "EXISTING"           ? _fStore : [],
+            newStores:      _fUp === "NEW"                ? _fStore : [],
+            deleteStores:   _fUp.startsWith("DELETE")     ? _fStore : [],
           };
           indexMap.set(plog, entry);
           const upper = plog.toUpperCase();
@@ -884,19 +893,31 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           if (bHas && pairStoreCodes[i]) toBeStores.add(pairStoreCodes[i]);
         }
 
-        // Derive status from same-store AS IS / TO BE presence
+        // Per-store status: each store classified independently
+        const existingStoresList = [...asIsStores].filter(s =>  toBeStores.has(s));
+        const newStoresList      = [...toBeStores].filter(s => !asIsStores.has(s));
+        const deleteStoresList   = [...asIsStores].filter(s => !toBeStores.has(s));
+
+        // Dominant planogram status (for reporting / progress messages)
         let derivedStatus = "";
         if      (hasExisting) derivedStatus = "EXISTING";
         else if (hasAsIs)     derivedStatus = "DELETE";
         else if (hasToBe)     derivedStatus = "NEW";
 
-        // DELETE → AS IS store codes; NEW / EXISTING → TO BE store codes
+        // derivedStore kept for compat (EXISTING/NEW → toBeStores; DELETE → asIsStores)
         const derivedStore = derivedStatus === "DELETE"
           ? [...asIsStores].join(",")
           : [...toBeStores].join(",");
 
         const primaryPog = pogNames[0];
-        const entry: IndexEntry = { status: derivedStatus, store: derivedStore, planogramName: primaryPog };
+        const entry: IndexEntry = {
+          status:         derivedStatus,
+          store:          derivedStore,
+          planogramName:  primaryPog,
+          existingStores: existingStoresList,
+          newStores:      newStoresList,
+          deleteStores:   deleteStoresList,
+        };
 
         // Index by ALL POG NAME column values so any variant of planogram name matches
         for (const pog of pogNames) {
@@ -1033,7 +1054,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 7. Build row patches ──────────────────────────────────────────────────
     progress(68, `สร้าง patches จาก ${qryRows.length.toLocaleString()} QRY rows...`);
 
-    const DATA_START_ROW = 7;
+    const DATA_START_ROW   = 7; // header at row 6 (idx 5), blank row 7, data row 8 (Sheet 1 & 2)
+    const S3_DATA_START_ROW = 6; // Sheet 3: header at row 6 (idx 5), data starts row 7 (idx 6)
     const s1Patches = new Map<number, Map<number, CellPatch>>();
     const s2Patches = new Map<number, Map<number, CellPatch>>();
     const s3Patches = new Map<number, Map<number, CellPatch>>();
@@ -1142,37 +1164,30 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (NETCAP_COL !== undefined && netCapVal > 0)
         cols1.set(NETCAP_COL, { t: "n", v: netCapVal });
 
-      // ── Expand stores: one output row per store code (Sheet 1 + Delete sheet) ─
-      const storeRaw   = idxEntry.store;
-      const stores     = storeRaw
-        ? storeRaw.split(",").map(s => s.trim()).filter(Boolean)
-        : [];
-      const storeCount = stores.length;
+      // ── Per-store status: Sheet 1=EXISTING+NEW, Sheet 2=NEW only, Sheet 3=DELETE only ──
+      const stores     = [...idxEntry.existingStores, ...idxEntry.newStores];
+      const storeCount = stores.length + idxEntry.deleteStores.length;
 
-      // Req: skip rows where neither AS IS nor TO BE has any store codes
+      // Req: skip rows where no stores in any category
       if (storeCount === 0) continue;
 
-      const isDelete = idxEntry.status.toUpperCase().startsWith("DELETE");
-
+      // ── Sheet 1: EXISTING and NEW stores ─────────────────────────────────────
       for (const storeVal of stores) {
-        // Clone cols1 and inject this store's value
         const cols1s = new Map(cols1);
         if (STORE_COL !== undefined && storeVal)
           cols1s.set(STORE_COL, { t: "s", v: storeVal });
+        s1Staging.push({
+          storeVal,
+          planogramName: idxEntry.planogramName,
+          noBay:         qry.segment,
+          seq:           qry.locationId,
+          cols:          cols1s,
+        });
+      }
 
-        // Req: DELETE rows go only to Delete sheet, not Sheet 1
-        if (!isDelete) {
-          s1Staging.push({
-            storeVal,
-            planogramName: idxEntry.planogramName,
-            noBay:         qry.segment,
-            seq:           qry.locationId,
-            cols:          cols1s,
-          });
-        }
-
-        // Delete for Exception_ IM — collect in s3Staging for sort before writing
-        if (s3Name && isDelete) {
+      // ── Sheet 3: DELETE stores (per-store — each store classified independently) ──
+      if (s3Name) {
+        for (const storeVal of idxEntry.deleteStores) {
           const cols3 = new Map<number, CellPatch>();
           const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
           ss3(DIV3_COL,     sm?.planofolder02 || "");
@@ -1180,29 +1195,26 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           ss3(POG3_COL,     sm?.planofolder05 || "");
           ss3(BARCODE3_COL, qry.barcode);
           ss3(NAME3_COL,    productName);
-          ss3(STATUS3_COL,  idxEntry.status);
+          ss3(STATUS3_COL,  "DELETE");
           ss3(STORE3_COL,   storeVal);
           s3Staging.push({ storeVal, cols: cols3 });
         }
       }
 
-      // ── Sheet 2 (New for Link_IM) — one row per store, NEW status only ──
-      // Collected in s2Staging so rows can be sorted by store code before writing
-      if (idxEntry.status.toUpperCase() === "NEW") {
-        for (const storeVal of stores) {
-          const cols2 = new Map<number, CellPatch>();
-          const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
-          ss2(BARCODE2_COL, qry.barcode);
-          ss2(DIV2_COL,     divisionVal);
-          ss2(NAME2_COL,    productName);
-          ss2(POG04_2_COL,  sm?.planofolder05 ?? "");
-          ss2(POG03_2_COL,  sm?.planofolder05 ?? "");
-          ss2(DEPT2_COL,    sm?.planofolder04 ?? "");
-          ss2(STATUS2_COL,  idxEntry.status);
-          if (STORECOUNT2_COL !== undefined && storeVal)
-            cols2.set(STORECOUNT2_COL, { t: "s", v: storeVal });
-          s2Staging.push({ storeVal, cols: cols2 });
-        }
+      // ── Sheet 2 (New for Link_IM) — NEW stores only ──
+      for (const storeVal of idxEntry.newStores) {
+        const cols2 = new Map<number, CellPatch>();
+        const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
+        ss2(BARCODE2_COL, qry.barcode);
+        ss2(DIV2_COL,     divisionVal);
+        ss2(NAME2_COL,    productName);
+        ss2(POG04_2_COL,  sm?.planofolder05 ?? "");
+        ss2(POG03_2_COL,  sm?.planofolder05 ?? "");
+        ss2(DEPT2_COL,    sm?.planofolder04 ?? "");
+        ss2(STATUS2_COL,  "NEW");
+        if (STORECOUNT2_COL !== undefined && storeVal)
+          cols2.set(STORECOUNT2_COL, { t: "s", v: storeVal });
+        s2Staging.push({ storeVal, cols: cols2 });
       }
     }
 
@@ -1227,7 +1239,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       arr.sort((a, b) => cmpNum(a.storeVal, b.storeVal));
 
     sortByStore(s2Staging).forEach(({ cols }, i) => s2Patches.set(DATA_START_ROW + i, cols));
-    sortByStore(s3Staging).forEach(({ cols }, i) => s3Patches.set(DATA_START_ROW + i, cols));
+    sortByStore(s3Staging).forEach(({ cols }, i) => s3Patches.set(S3_DATA_START_ROW + i, cols));
 
     // ── 8. ZIP-patch template ─────────────────────────────────────────────────
     progress(75, "เปิด Template ZIP...");
