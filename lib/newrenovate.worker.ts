@@ -1113,11 +1113,11 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       ss(NAME_COL, productName);
 
       // DATA_SPACEMAN
-      // DIVISION: prefer PLANOFOLDER01; if absent fall back to PLANOFOLDER02
+      // DIVISION=PF02, DEPARTMENT(PF03_COL)=PF04, POG CATE(PF04_COL)=PF05
       const divisionVal = sm?.planofolder02 || "";
       ss(DIVISION_COL,  divisionVal);
-      ss(PF03_COL,      sm?.planofolder03 ?? "");
-      ss(PF04_COL,      sm?.planofolder04 ?? "");
+      ss(PF03_COL,      sm?.planofolder04 ?? "");
+      ss(PF04_COL,      sm?.planofolder05 ?? "");
       ss(PLOGNAME_COL,  idxEntry.planogramName);
 
       // Master Assortment → SALE PACK CODE, Pack Size, Extra info only
