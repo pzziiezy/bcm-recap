@@ -424,18 +424,21 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const sHdrs: string[] = [];
     for (let c = 0; c <= sRange.e.c; c++) {
       const cell = spacemanWs[XLSX.utils.encode_cell({ r: 0, c })];
-      sHdrs.push(cell?.v != null ? String(cell.v).trim() : "");
+      sHdrs.push(cell?.v != null ? String(cell.v).replace(/\s+/g, "").toUpperCase() : "");
     }
-    const upcIdx   = sHdrs.indexOf("UPC");
-    const pf01Idx  = sHdrs.indexOf("PLANOFOLDER01");
-    const pf02Idx  = sHdrs.indexOf("PLANOFOLDER02");
-    const pf03Idx  = sHdrs.indexOf("PLANOFOLDER03");
-    const pf04Idx  = sHdrs.indexOf("PLANOFOLDER04");
-    const pf05Idx  = sHdrs.indexOf("PLANOFOLDER05");
-    const plogIdx  = sHdrs.indexOf("PLANOGRAM") >= 0 ? sHdrs.indexOf("PLANOGRAM") : 3;
-    const catIdx   = sHdrs.indexOf("CATEGORY");
-    const subIdx   = sHdrs.indexOf("SUBCATEGORY");
-    const descCIdx = sHdrs.indexOf("DESC_C");
+    // Case-insensitive + whitespace-stripped exact match
+    const sIdx = (name: string) => sHdrs.indexOf(name.replace(/\s+/g, "").toUpperCase());
+    const upcIdx   = sIdx("UPC");
+    const pf01Idx  = sIdx("PLANOFOLDER01");
+    const pf02Idx  = sIdx("PLANOFOLDER02");
+    const pf03Idx  = sIdx("PLANOFOLDER03");
+    const pf04Idx  = sIdx("PLANOFOLDER04");
+    const pf05Idx  = sIdx("PLANOFOLDER05");
+    const plogIdx  = sIdx("PLANOGRAM") >= 0 ? sIdx("PLANOGRAM") : 3;
+    const catIdx   = sIdx("CATEGORY");
+    const subIdx   = sIdx("SUBCATEGORY");
+    const descCIdx = sIdx("DESC_C");
+    progress(14, `DATA_SPACEMAN headers: UPC=${upcIdx} PF02=${pf02Idx} PF04=${pf04Idx} PF05=${pf05Idx}`);
 
     const getS = (r: number, c: number, useW = false): string => {
       const cell = spacemanWs[XLSX.utils.encode_cell({ r, c })];
