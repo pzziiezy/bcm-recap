@@ -1078,7 +1078,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     progress(68, `สร้าง patches จาก ${qryRows.length.toLocaleString()} QRY rows...`);
 
     const DATA_START_ROW   = 7; // header at row 6 (idx 5), blank row 7, data row 8 (Sheet 1 & 2)
-    const S3_DATA_START_ROW = 6; // Sheet 3: header at row 6 (idx 5), data starts row 7 (idx 6)
+    const S3_DATA_START_ROW = 7; // Sheet 3: header at Excel row 6, data starts at Excel row 7
     const s1Patches = new Map<number, Map<number, CellPatch>>();
     const s2Patches = new Map<number, Map<number, CellPatch>>();
     const s3Patches = new Map<number, Map<number, CellPatch>>();
