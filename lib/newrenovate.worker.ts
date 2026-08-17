@@ -1164,28 +1164,38 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (NETCAP_COL !== undefined && netCapVal > 0)
         cols1.set(NETCAP_COL, { t: "n", v: netCapVal });
 
-      // ── Per-store status: Sheet 1=EXISTING+NEW, Sheet 2=NEW only, Sheet 3=DELETE only ──
-      const stores     = [...idxEntry.existingStores, ...idxEntry.newStores];
-      const storeCount = stores.length + idxEntry.deleteStores.length;
+      // ── Expand stores: one output row per store code ──────────────────────────
+      const storeRaw   = idxEntry.store;
+      const stores     = storeRaw
+        ? storeRaw.split(",").map(s => s.trim()).filter(Boolean)
+        : [];
+      const storeCount = stores.length;
 
-      // Req: skip rows where no stores in any category
+      // Req: skip rows where neither AS IS nor TO BE has any store codes
       if (storeCount === 0) continue;
 
-      // ── Sheet 1: EXISTING and NEW stores ─────────────────────────────────────
+      const isDelete = idxEntry.status.toUpperCase().startsWith("DELETE");
+
+      // ── Sheet 1: same logic as before (DELETE rows excluded) ─────────────────
       for (const storeVal of stores) {
         const cols1s = new Map(cols1);
         if (STORE_COL !== undefined && storeVal)
           cols1s.set(STORE_COL, { t: "s", v: storeVal });
-        s1Staging.push({
-          storeVal,
-          planogramName: idxEntry.planogramName,
-          noBay:         qry.segment,
-          seq:           qry.locationId,
-          cols:          cols1s,
-        });
+
+        if (!isDelete) {
+          s1Staging.push({
+            storeVal,
+            planogramName: idxEntry.planogramName,
+            noBay:         qry.segment,
+            seq:           qry.locationId,
+            cols:          cols1s,
+          });
+        }
       }
 
-      // ── Sheet 3: DELETE stores (per-store — each store classified independently) ──
+      // ── Sheet 3: DELETE stores — iterate deleteStores directly so mixed-status
+      //    planograms (some stores EXISTING, some DELETE) are handled correctly.
+      //    Previously used `if (isDelete)` which only caught purely-DELETE planograms.
       if (s3Name) {
         for (const storeVal of idxEntry.deleteStores) {
           const cols3 = new Map<number, CellPatch>();
@@ -1201,20 +1211,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         }
       }
 
-      // ── Sheet 2 (New for Link_IM) — NEW stores only ──
-      for (const storeVal of idxEntry.newStores) {
-        const cols2 = new Map<number, CellPatch>();
-        const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
-        ss2(BARCODE2_COL, qry.barcode);
-        ss2(DIV2_COL,     divisionVal);
-        ss2(NAME2_COL,    productName);
-        ss2(POG04_2_COL,  sm?.planofolder05 ?? "");
-        ss2(POG03_2_COL,  sm?.planofolder05 ?? "");
-        ss2(DEPT2_COL,    sm?.planofolder04 ?? "");
-        ss2(STATUS2_COL,  "NEW");
-        if (STORECOUNT2_COL !== undefined && storeVal)
-          cols2.set(STORECOUNT2_COL, { t: "s", v: storeVal });
-        s2Staging.push({ storeVal, cols: cols2 });
+      // ── Sheet 2 (New for Link_IM) — one row per store, NEW status only ──
+      // Collected in s2Staging so rows can be sorted by store code before writing
+      if (idxEntry.status.toUpperCase() === "NEW") {
+        for (const storeVal of stores) {
+          const cols2 = new Map<number, CellPatch>();
+          const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
+          ss2(BARCODE2_COL, qry.barcode);
+          ss2(DIV2_COL,     divisionVal);
+          ss2(NAME2_COL,    productName);
+          ss2(POG04_2_COL,  sm?.planofolder05 ?? "");
+          ss2(POG03_2_COL,  sm?.planofolder05 ?? "");
+          ss2(DEPT2_COL,    sm?.planofolder04 ?? "");
+          ss2(STATUS2_COL,  idxEntry.status);
+          if (STORECOUNT2_COL !== undefined && storeVal)
+            cols2.set(STORECOUNT2_COL, { t: "s", v: storeVal });
+          s2Staging.push({ storeVal, cols: cols2 });
+        }
       }
     }
 
