@@ -826,7 +826,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           const _fStore  = String(row[iStoreKey] ?? "").split(",").map(s => s.trim()).filter(Boolean);
           const _fUp     = _fStatus.toUpperCase();
           const entry: IndexEntry = {
-            status:        _fStatus,
+            status:        _fUp === "NEW" ? "NEW EXPAND" : _fStatus,
             store:         String(row[iStoreKey] ?? ""),
             planogramName: iNameKey ? String(row[iNameKey] ?? "") : plog,
             existingStores: _fUp === "EXISTING"           ? _fStore : [],
@@ -902,7 +902,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         let derivedStatus = "";
         if      (hasExisting) derivedStatus = "EXISTING";
         else if (hasAsIs)     derivedStatus = "DELETE";
-        else if (hasToBe)     derivedStatus = "NEW";
+        else if (hasToBe)     derivedStatus = "NEW EXPAND";
 
         // derivedStore kept for compat (EXISTING/NEW → toBeStores; DELETE → asIsStores)
         const derivedStore = derivedStatus === "DELETE"
@@ -1213,7 +1213,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
       // ── Sheet 2 (New for Link_IM) — one row per store, NEW status only ──
       // Collected in s2Staging so rows can be sorted by store code before writing
-      if (idxEntry.status.toUpperCase() === "NEW") {
+      if (idxEntry.status.toUpperCase() === "NEW EXPAND" || idxEntry.status.toUpperCase() === "NEW") {
         for (const storeVal of stores) {
           const cols2 = new Map<number, CellPatch>();
           const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
