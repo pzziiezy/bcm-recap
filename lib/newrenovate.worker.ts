@@ -799,7 +799,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const found: number[] = [];
       for (let c = 0; c <= Math.min(iRange.e.c, 30); c++) {
         const v = iCell(r, c).toUpperCase();
-        if (v.includes("POG NAME") || v === "PLANOGRAM" || v === "PLANOGRAM NAME") found.push(c);
+        if (v === "POG NAME" || v === "PLANOGRAM" || v === "PLANOGRAM NAME") found.push(c);
       }
       if (found.length > 0) { pogHdrRow = r; pogNameCols.push(...found); break; }
     }
@@ -843,7 +843,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
     } else {
       // ── Primary: INDEX BIG C mini cross-tab — derive STATUS from AS IS/TO BE ─
-      const effectivePogCols = pogNameCols.length > 0 ? pogNameCols : [1, 4, 6, 9];
+      const effectivePogCols = pogNameCols;
 
       // Pair AS IS + TO BE columns by store (sorted order matches alternating pairs)
       const sortedAsIs = [...asIsColumns].sort((a, b) => a - b);
