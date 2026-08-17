@@ -61,7 +61,20 @@ interface IndexEntry {
   existingStores: string[];
   newStores:      string[];
   deleteStores:   string[];
+  asIsStores:     string[]; // existingStores + deleteStores — stores with AS IS value
+  toBeStores:     string[]; // existingStores + newStores   — stores with TO BE value
 }
+
+type GroupEntry = {
+  barcode:     string;
+  storeVal:    string;
+  qry:         QrySourceRow;
+  sm:          SpacemanEntry | undefined;
+  master:      MasterEntry | undefined;
+  productName: string;
+  divisionVal: string;
+  fixtureCode: string;
+};
 
 interface QrySourceRow {
   barcode:    string; // display form (preserves leading zeros)
@@ -828,13 +841,18 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           const _fStatus = String(row[iStatKey]  ?? "");
           const _fStore  = String(row[iStoreKey] ?? "").split(",").map(s => s.trim()).filter(Boolean);
           const _fUp     = _fStatus.toUpperCase();
+          const _isExisting = _fUp === "EXISTING";
+          const _isNew      = _fUp === "NEW" || _fUp === "NEW EXPAND";
+          const _isDelete   = _fUp.startsWith("DELETE");
           const entry: IndexEntry = {
             status:        _fUp === "NEW" ? "NEW EXPAND" : _fStatus,
             store:         String(row[iStoreKey] ?? ""),
             planogramName: iNameKey ? String(row[iNameKey] ?? "") : plog,
-            existingStores: _fUp === "EXISTING"           ? _fStore : [],
-            newStores:      _fUp === "NEW"                ? _fStore : [],
-            deleteStores:   _fUp.startsWith("DELETE")     ? _fStore : [],
+            existingStores: _isExisting             ? _fStore : [],
+            newStores:      _isNew                  ? _fStore : [],
+            deleteStores:   _isDelete               ? _fStore : [],
+            asIsStores:     _isExisting || _isDelete ? _fStore : [],
+            toBeStores:     _isExisting || _isNew    ? _fStore : [],
           };
           indexMap.set(plog, entry);
           const upper = plog.toUpperCase();
@@ -920,6 +938,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           existingStores: existingStoresList,
           newStores:      newStoresList,
           deleteStores:   deleteStoresList,
+          asIsStores:     [...asIsStores], // stores with AS IS value (existing + delete)
+          toBeStores:     [...toBeStores], // stores with TO BE value (existing + new)
         };
 
         // Index by ALL POG NAME column values so any variant of planogram name matches
@@ -1072,33 +1092,54 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
 
+    // ── Phase 1: Build Group A (AS IS stores) and Group B (TO BE stores) ─────────
+    // Each group is a flat list of (barcode, store, qryRow, lookupData) tuples.
+    // Group A = stores with AS IS value for this planogram (existingStores + deleteStores).
+    // Group B = stores with TO BE value for this planogram (existingStores + newStores).
+    const groupA: GroupEntry[] = [];
+    const groupB: GroupEntry[] = [];
+
     for (let i = 0; i < qryRows.length; i++) {
       const qry = qryRows[i];
 
-      // All lookups use barcodeMatchKey (leading zeros stripped) for consistency
       const sm     = spacemanMap.get(qry.matchKey);
       const master = masterMap.get(qry.matchKey);
 
-      // Use QRY PLANOGRAM only — no fallback to Spaceman
       const planogram = normalizeKey(qry.planogram);
       const idxEntry  = planogram
         ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
         : undefined;
 
-      // Req: skip rows with no INDEX match (no POG NAME found in Index file)
       if (!idxEntry) continue;
 
       const fixtureKey  = qry.segment && planogram ? `${qry.segment}|${planogram}` : "";
       const fixtureCode = fixtureKey ? (fixtureMap.get(fixtureKey) ?? "") : "";
+      const productName = qry.name || master?.name || "";
+      const divisionVal = sm?.planofolder02 || "";
 
       if (sm)          matchedSpaceman++;
       if (master)      matchedMaster++;
-      if (idxEntry)    matchedIndex++;
+      matchedIndex++;
       if (fixtureCode) matchedFixture++;
 
-      // ── Sheet 1 ───────────────────────────────────────────────────────────
-      const cols1 = new Map<number, CellPatch>();
+      for (const storeVal of idxEntry.asIsStores) {
+        groupA.push({ barcode: qry.barcode, storeVal, qry, sm, master, productName, divisionVal, fixtureCode });
+      }
+      for (const storeVal of idxEntry.toBeStores) {
+        groupB.push({ barcode: qry.barcode, storeVal, qry, sm, master, productName, divisionVal, fixtureCode });
+      }
+    }
 
+    // ── Phase 2: Build cross-group lookup sets — key = "barcode||store" ──────────
+    const setA = new Set(groupA.map(e => `${e.barcode}||${e.storeVal}`));
+    const setB = new Set(groupB.map(e => `${e.barcode}||${e.storeVal}`));
+
+    // ── Phase 3: Process Group B → Sheet 1 (EXISTING + NEW EXPAND) & Sheet 2 (NEW EXPAND) ──
+    for (const bEntry of groupB) {
+      const key       = `${bEntry.barcode}||${bEntry.storeVal}`;
+      const rowStatus = setA.has(key) ? "EXISTING" : "NEW EXPAND";
+
+      const cols1 = new Map<number, CellPatch>();
       const ss = (col: number | undefined, v: string) => {
         if (col !== undefined && v !== "") cols1.set(col, { t: "s", v });
       };
@@ -1108,129 +1149,90 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         if (!isNaN(n)) cols1.set(col, { t: "n", v: n });
       };
 
-      // BARCODE (display form — preserves leading zeros)
-      cols1.set(BARCODE_COL, { t: "s", v: qry.barcode });
+      cols1.set(BARCODE_COL, { t: "s", v: bEntry.barcode });
+      ss(NAME_COL,      bEntry.productName);
+      ss(DIVISION_COL,  bEntry.divisionVal);
+      ss(PF03_COL,      bEntry.sm?.planofolder04 ?? "");
+      ss(PF04_COL,      bEntry.sm?.planofolder05 ?? "");
+      // PLANOGRAM NAME = QRY planogram name (from Group B's row), per requirement
+      ss(PLOGNAME_COL,  bEntry.qry.planogram);
 
-      // Name — QRY's own NAME column is primary source
-      const productName = qry.name || master?.name || "";
-      ss(NAME_COL, productName);
-
-      // DATA_SPACEMAN
-      // DIVISION=PF02, DEPARTMENT(PF03_COL)=PF04, POG CATE(PF04_COL)=PF05
-      const divisionVal = sm?.planofolder02 || "";
-      ss(DIVISION_COL,  divisionVal);
-      ss(PF03_COL,      sm?.planofolder04 ?? "");
-      ss(PF04_COL,      sm?.planofolder05 ?? "");
-      ss(PLOGNAME_COL,  idxEntry.planogramName);
-
-      // Master Assortment → SALE PACK CODE, Pack Size, Extra info only
-      // SALE PACK CODE is a barcode/EAN — always write as text, never numeric
-      if (master) {
-        ss(SALEPACK_COL, master.barSingle);
-        sn(PACKSIZE_COL, master.skuPack);
-        ss(EXTRA_COL,    master.extraInfo);
+      if (bEntry.master) {
+        ss(SALEPACK_COL, bEntry.master.barSingle);
+        sn(PACKSIZE_COL, bEntry.master.skuPack);
+        ss(EXTRA_COL,    bEntry.master.extraInfo);
       }
-      // STATUS always from INDEX
-      ss(STATUS_COL, idxEntry?.status ?? "");
-      // STORE is set per-store in the expansion loop below
 
-      // Constants
+      ss(STATUS_COL, rowStatus);
+
       if (FIXTYPE_COL !== undefined) cols1.set(FIXTYPE_COL, { t: "n", v: 0 });
       if (W_COL       !== undefined) cols1.set(W_COL,       { t: "n", v: 2 });
       if (H_COL       !== undefined) cols1.set(H_COL,       { t: "n", v: 1 });
       if (D_COL       !== undefined) cols1.set(D_COL,       { t: "n", v: 1 });
 
-      // Fixture Index
-      ss(NEWFIXTURE_COL, fixtureCode);
+      ss(NEWFIXTURE_COL, bEntry.fixtureCode);
+      ss(NOBAY_COL,      bEntry.qry.segment);
+      ss(SEQ_COL,        bEntry.qry.locationId);
+      sn(SHELFSTOCK_COL, bEntry.qry.totalUnits || undefined);
 
-      // QRY direct
-      ss(NOBAY_COL, qry.segment);
-      ss(SEQ_COL,   qry.locationId);
-      sn(SHELFSTOCK_COL, qry.totalUnits || undefined);
-
-      // % Ordering — written as text "100%", "80%", etc. so it displays correctly
-      // regardless of whether the template column has a percentage number format style.
-      const pctVal = getOrderingPct(
+      const pctVal  = getOrderingPct(
         exceptionConfig,
-        sm?.planofolder01 ?? "",
-        sm?.planofolder03 ?? "",
-        sm?.planofolder04 ?? "",
+        bEntry.sm?.planofolder01 ?? "",
+        bEntry.sm?.planofolder03 ?? "",
+        bEntry.sm?.planofolder04 ?? "",
       );
       const pctText = Math.round(pctVal * 100) + "%";
       cols1.set(PCT_COL, { t: "s", v: pctText });
 
-      // Net Capacity = SHELF STOCK × % Ordering — computed in worker, written as number.
-      // Formula approach was unreliable because VALUE("100%") cached value=0 and
-      // some Excel contexts don't recalculate immediately on open.
-      const shelfStock = Number(qry.totalUnits) || 0;
+      const shelfStock = Number(bEntry.qry.totalUnits) || 0;
       const netCapVal  = Math.round(shelfStock * pctVal);
       if (NETCAP_COL !== undefined && netCapVal > 0)
         cols1.set(NETCAP_COL, { t: "n", v: netCapVal });
 
-      // ── Expand stores: one output row per store code ──────────────────────────
-      const storeRaw   = idxEntry.store;
-      const stores     = storeRaw
-        ? storeRaw.split(",").map(s => s.trim()).filter(Boolean)
-        : [];
-      const storeCount = stores.length;
+      if (STORE_COL !== undefined && bEntry.storeVal)
+        cols1.set(STORE_COL, { t: "s", v: bEntry.storeVal });
 
-      // Req: skip rows where neither AS IS nor TO BE has any store codes
-      if (storeCount === 0) continue;
+      s1Staging.push({
+        storeVal:      bEntry.storeVal,
+        planogramName: bEntry.qry.planogram,
+        noBay:         bEntry.qry.segment,
+        seq:           bEntry.qry.locationId,
+        cols:          cols1,
+      });
 
-      const isDelete = idxEntry.status.toUpperCase().startsWith("DELETE");
-
-      // ── Sheet 1: same logic as before (DELETE rows excluded) ─────────────────
-      for (const storeVal of stores) {
-        const cols1s = new Map(cols1);
-        if (STORE_COL !== undefined && storeVal)
-          cols1s.set(STORE_COL, { t: "s", v: storeVal });
-
-        if (!isDelete) {
-          s1Staging.push({
-            storeVal,
-            planogramName: idxEntry.planogramName,
-            noBay:         qry.segment,
-            seq:           qry.locationId,
-            cols:          cols1s,
-          });
-        }
+      // Sheet 2: NEW EXPAND only
+      if (rowStatus === "NEW EXPAND") {
+        const cols2 = new Map<number, CellPatch>();
+        const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
+        ss2(BARCODE2_COL, bEntry.barcode);
+        ss2(DIV2_COL,     bEntry.divisionVal);
+        ss2(NAME2_COL,    bEntry.productName);
+        ss2(POG04_2_COL,  bEntry.sm?.planofolder05 ?? "");
+        ss2(POG03_2_COL,  bEntry.sm?.planofolder05 ?? "");
+        ss2(DEPT2_COL,    bEntry.sm?.planofolder04 ?? "");
+        ss2(STATUS2_COL,  rowStatus);
+        if (STORECOUNT2_COL !== undefined && bEntry.storeVal)
+          cols2.set(STORECOUNT2_COL, { t: "s", v: bEntry.storeVal });
+        s2Staging.push({ storeVal: bEntry.storeVal, cols: cols2 });
       }
+    }
 
-      // ── Sheet 3: DELETE stores — iterate deleteStores directly so mixed-status
-      //    planograms (some stores EXISTING, some DELETE) are handled correctly.
-      //    Previously used `if (isDelete)` which only caught purely-DELETE planograms.
-      if (s3Name) {
-        for (const storeVal of idxEntry.deleteStores) {
-          const cols3 = new Map<number, CellPatch>();
-          const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
-          ss3(DIV3_COL,     sm?.planofolder02 || "");
-          ss3(DEPT3_COL,    sm?.planofolder04 || "");
-          ss3(POG3_COL,     sm?.planofolder05 || "");
-          ss3(BARCODE3_COL, qry.barcode);
-          ss3(NAME3_COL,    productName);
-          ss3(STATUS3_COL,  "DELETE");
-          ss3(STORE3_COL,   storeVal);
-          s3Staging.push({ storeVal, cols: cols3 });
-        }
-      }
+    // ── Phase 4: Process Group A → Sheet 3 (DELETE: in A but not in B) ──────────
+    if (s3Name) {
+      for (const aEntry of groupA) {
+        const key = `${aEntry.barcode}||${aEntry.storeVal}`;
+        if (setB.has(key)) continue; // also in B → EXISTING, handled in Sheet 1
 
-      // ── Sheet 2 (New for Link_IM) — one row per store, NEW status only ──
-      // Collected in s2Staging so rows can be sorted by store code before writing
-      if (idxEntry.status.toUpperCase() === "NEW EXPAND" || idxEntry.status.toUpperCase() === "NEW") {
-        for (const storeVal of stores) {
-          const cols2 = new Map<number, CellPatch>();
-          const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
-          ss2(BARCODE2_COL, qry.barcode);
-          ss2(DIV2_COL,     divisionVal);
-          ss2(NAME2_COL,    productName);
-          ss2(POG04_2_COL,  sm?.planofolder05 ?? "");
-          ss2(POG03_2_COL,  sm?.planofolder05 ?? "");
-          ss2(DEPT2_COL,    sm?.planofolder04 ?? "");
-          ss2(STATUS2_COL,  idxEntry.status);
-          if (STORECOUNT2_COL !== undefined && storeVal)
-            cols2.set(STORECOUNT2_COL, { t: "s", v: storeVal });
-          s2Staging.push({ storeVal, cols: cols2 });
-        }
+        const cols3 = new Map<number, CellPatch>();
+        const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
+        ss3(DIV3_COL,     aEntry.sm?.planofolder02 || "");
+        ss3(DEPT3_COL,    aEntry.sm?.planofolder04 || "");
+        ss3(POG3_COL,     aEntry.sm?.planofolder05 || "");
+        ss3(BARCODE3_COL, aEntry.barcode);
+        ss3(NAME3_COL,    aEntry.productName);
+        ss3(STATUS3_COL,  "DELETE");
+        ss3(STORE3_COL,   aEntry.storeVal);
+        s3Staging.push({ storeVal: aEntry.storeVal, cols: cols3 });
       }
     }
 
