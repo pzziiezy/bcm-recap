@@ -1130,14 +1130,15 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
     }
 
-    // ── Phase 2: Build cross-group lookup sets — key = "barcode||store" ──────────
-    const setA = new Set(groupA.map(e => `${e.barcode}||${e.storeVal}`));
-    const setB = new Set(groupB.map(e => `${e.barcode}||${e.storeVal}`));
+    // ── Phase 2: Build cross-group lookup sets — key = barcode only ─────────────
+    // Status is determined per barcode (across all stores/planograms).
+    // The store in each group entry is used only when filling the report rows.
+    const setA = new Set(groupA.map(e => e.barcode));
+    const setB = new Set(groupB.map(e => e.barcode));
 
     // ── Phase 3: Process Group B → Sheet 1 (EXISTING + NEW EXPAND) & Sheet 2 (NEW EXPAND) ──
     for (const bEntry of groupB) {
-      const key       = `${bEntry.barcode}||${bEntry.storeVal}`;
-      const rowStatus = setA.has(key) ? "EXISTING" : "NEW EXPAND";
+      const rowStatus = setA.has(bEntry.barcode) ? "EXISTING" : "NEW EXPAND";
 
       const cols1 = new Map<number, CellPatch>();
       const ss = (col: number | undefined, v: string) => {
@@ -1217,11 +1218,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
     }
 
-    // ── Phase 4: Process Group A → Sheet 3 (DELETE: in A but not in B) ──────────
+    // ── Phase 4: Process Group A → Sheet 3 (DELETE: barcode in A but not in B) ──
     if (s3Name) {
       for (const aEntry of groupA) {
-        const key = `${aEntry.barcode}||${aEntry.storeVal}`;
-        if (setB.has(key)) continue; // also in B → EXISTING, handled in Sheet 1
+        if (setB.has(aEntry.barcode)) continue; // barcode also in B → EXISTING, handled in Sheet 1
 
         const cols3 = new Map<number, CellPatch>();
         const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
