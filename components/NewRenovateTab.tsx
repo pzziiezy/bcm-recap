@@ -377,14 +377,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
   return (
     <div className="w-full">
-      <div className={isPreview ? "flex gap-4 px-4 pt-4 pb-6 items-start" : ""}>
+      <div className="flex gap-4 px-4 pt-2 pb-6 items-stretch">
 
-      {/* ── Upload panel — sidebar in preview, centred block otherwise ── */}
-      <div className={
-        isPreview
-          ? "w-72 flex-shrink-0 self-start sticky top-4 space-y-3 overflow-y-auto max-h-[calc(100vh-2rem)]"
-          : "max-w-2xl mx-auto px-6 pt-6 space-y-4"
-      }>
+      {/* ── Upload panel — left sidebar ── */}
+      <div className="w-80 flex-shrink-0 space-y-3">
 
         {/* Header */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
@@ -423,19 +419,17 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
         {/* Action buttons */}
         {status !== "processing" && (
-          <div className={isPreview ? "flex flex-col gap-2" : "flex gap-3"}>
+          <div className="flex flex-col gap-2">
             <button onClick={handleProcess} disabled={!canProcess}
-              className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold text-sm
                 bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-sm hover:shadow-md
-                disabled:opacity-40 disabled:cursor-not-allowed transition-all
-                ${isPreview ? "w-full px-4" : "px-8"}`}>
+                disabled:opacity-40 disabled:cursor-not-allowed transition-all">
               ⚡ Build New&amp;Renovate Report
             </button>
             {(status === "done" || status === "error" || status === "preview") && (
               <button onClick={handleReset}
-                className={`py-3 rounded-xl font-semibold text-sm border border-pink-200
-                  text-[#d41679] hover:bg-pink-50 transition-all
-                  ${isPreview ? "w-full px-4" : "px-6"}`}>
+                className="w-full px-4 py-3 rounded-xl font-semibold text-sm border border-pink-200
+                  text-[#d41679] hover:bg-pink-50 transition-all">
                 เริ่มใหม่
               </button>
             )}
@@ -466,9 +460,9 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
       </div>
 
-      {/* ── Preview Panel — flex-1 in sidebar layout ─────────────────────────────── */}
-      {isPreview && (
-        <div className="flex-1 min-w-0">
+      {/* ── Right panel — always visible ── */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {isPreview && (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
 
           {/* Panel header */}
@@ -590,7 +584,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                     {displayedStoreRows.map(({ key, row, sr, idx, total, storeStatus }) => (
                       <tr
                         key={key}
-                        className={`hover:bg-pink-50/20 ${idx === 0 ? "border-t-2 border-slate-200" : "border-t border-slate-100"}`}
+                        className={`hover:bg-slate-100 ${idx === 0 ? "border-t-2 border-slate-200" : "border-t border-slate-100"}`}
                       >
                         {/* BARCODE — rowspan */}
                         {idx === 0 && (
@@ -721,14 +715,11 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             )}
           </div>
         </div>
-        </div>
-      )}
+        )}
 
-      </div>{/* end flex/block container */}
-
-      {/* ── Results + Download (status === "done") ─────────────────────────────── */}
-      {status === "done" && stats && (
-        <div className="max-w-2xl mx-auto px-6 pb-6 space-y-4">
+        {/* Done */}
+        {status === "done" && stats && (
+          <div className="space-y-4">
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
             <p className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">ผลการ Lookup & Report</p>
 
@@ -772,8 +763,19 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             <Download className="w-5 h-5" />
             ดาวน์โหลด New&amp;Renovate Report ที่เติมข้อมูลแล้ว
           </button>
-        </div>
-      )}
+          </div>
+        )}
+
+        {/* Placeholder when idle / processing / error */}
+        {!isPreview && status !== "done" && (
+          <div className="flex-1 min-h-[440px] flex flex-col items-center justify-center rounded-2xl bg-white border border-slate-200 shadow-sm text-slate-300 select-none gap-2">
+            <FileSpreadsheet className="w-10 h-10 opacity-20" />
+            <p className="text-sm font-medium">อัปโหลดไฟล์แล้วกด ⚡ Build เพื่อดู Preview</p>
+          </div>
+        )}
+
+      </div>{/* end right panel */}
+      </div>{/* end flex container */}
     </div>
   );
 }
