@@ -222,6 +222,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
         key:   `${row.barcode}-${idx}`,
         row, sr, idx,
         total: merged.length,
+        // Per-store status: NEW = only in TO BE, DEL = only in AS IS, EXISTING = both
+        storeStatus: (!sr.storeA && sr.storeB) ? "new" as const
+                   : ( sr.storeA && !sr.storeB) ? "del" as const
+                   : "existing" as const,
       }));
     });
   }, [filteredRows, displayLimit]);
@@ -581,7 +585,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                         </td>
                       </tr>
                     )}
-                    {displayedStoreRows.map(({ key, row, sr, idx, total }) => (
+                    {displayedStoreRows.map(({ key, row, sr, idx, total, storeStatus }) => (
                       <tr
                         key={key}
                         className={`hover:bg-pink-50/20 ${idx === 0 ? "border-t-2 border-slate-200" : "border-t border-slate-100"}`}
@@ -606,13 +610,22 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                             </span>
                           </td>
                         )}
-                        {/* AS IS store */}
-                        <td className="px-3 py-1.5 tabular-nums text-xs">
-                          {sr.storeA ? <span className="text-slate-700 font-medium">{sr.storeA}</span> : <span className="text-slate-200">—</span>}
+                        {/* AS IS store — red tint if this store is being deleted */}
+                        <td className={`px-3 py-1.5 tabular-nums text-xs ${storeStatus === "del" ? "bg-red-50" : ""}`}>
+                          {sr.storeA
+                            ? <span className={`font-medium ${storeStatus === "del" ? "text-red-500" : "text-slate-700"}`}>{sr.storeA}</span>
+                            : <span className="text-slate-200">—</span>}
                         </td>
-                        {/* TO BE store */}
-                        <td className="px-3 py-1.5 tabular-nums text-xs">
-                          {sr.storeB ? <span className="text-slate-700 font-medium">{sr.storeB}</span> : <span className="text-slate-200">—</span>}
+                        {/* TO BE store — blue tint if this store is new */}
+                        <td className={`px-3 py-1.5 tabular-nums text-xs ${storeStatus === "new" ? "bg-blue-50" : ""}`}>
+                          {sr.storeB
+                            ? <span className={`font-medium ${storeStatus === "new" ? "text-blue-600" : "text-slate-700"}`}>
+                                {sr.storeB}
+                                {storeStatus === "new" && (
+                                  <span className="ml-1.5 text-[9px] font-bold text-blue-500 bg-blue-100 px-1 py-0.5 rounded">NEW</span>
+                                )}
+                              </span>
+                            : <span className="text-slate-200">—</span>}
                         </td>
                         {/* STATUS — rowspan */}
                         {idx === 0 && (

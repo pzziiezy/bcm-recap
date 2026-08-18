@@ -1131,11 +1131,14 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       }
     }
 
-    // ── Phase 2: Build cross-group lookup sets — key = barcode only ─────────────
-    // Status is determined per barcode (across all stores/planograms).
-    // The store in each group entry is used only when filling the report rows.
-    const setA = new Set(groupA.map(e => e.barcode));
-    const setB = new Set(groupB.map(e => e.barcode));
+    // ── Phase 2: Build cross-group lookup sets ───────────────────────────────────
+    // Per-(barcode,store) sets: used for per-row STATUS in report (correct classification)
+    // A barcode that is EXISTING in store X but NEW in store Y should write:
+    //   store X → Sheet 1 STATUS=EXISTING
+    //   store Y → Sheet 1 STATUS=NEW EXPAND, Sheet 2
+    //   any store only in A (AS IS) → Sheet 3 STATUS=DELETE
+    const setAByStore = new Set(groupA.map(e => `${e.barcode}\0${e.storeVal}`));
+    const setBByStore = new Set(groupB.map(e => `${e.barcode}\0${e.storeVal}`));
 
     // ── Build Preview Data ────────────────────────────────────────────────────
     type PreviewRow = { barcode: string; name: string; planograms: string[]; storesA: string[]; storesB: string[]; status: "EXISTING" | "NEW EXPAND" | "DELETE" };
@@ -1161,7 +1164,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     // ── Phase 3: Process Group B → Sheet 1 (EXISTING + NEW EXPAND) & Sheet 2 (NEW EXPAND) ──
     for (const bEntry of groupB) {
-      const rowStatus = setA.has(bEntry.barcode) ? "EXISTING" : "NEW EXPAND";
+      const rowStatus = setAByStore.has(`${bEntry.barcode}\0${bEntry.storeVal}`) ? "EXISTING" : "NEW EXPAND";
 
       const cols1 = new Map<number, CellPatch>();
       const ss = (col: number | undefined, v: string) => {
@@ -1244,7 +1247,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── Phase 4: Process Group A → Sheet 3 (DELETE: barcode in A but not in B) ──
     if (s3Name) {
       for (const aEntry of groupA) {
-        if (setB.has(aEntry.barcode)) continue; // barcode also in B → EXISTING, handled in Sheet 1
+        if (setBByStore.has(`${aEntry.barcode}\0${aEntry.storeVal}`)) continue;
 
         const cols3 = new Map<number, CellPatch>();
         const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
