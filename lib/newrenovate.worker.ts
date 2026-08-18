@@ -1138,19 +1138,20 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const setB = new Set(groupB.map(e => e.barcode));
 
     // ── Build Preview Data ────────────────────────────────────────────────────
-    type PreviewRow = { barcode: string; planograms: string[]; storesA: string[]; storesB: string[]; status: "EXISTING" | "NEW EXPAND" | "DELETE" };
-    const prevMap = new Map<string, { planograms: Set<string>; storesA: Set<string>; storesB: Set<string> }>();
-    const ensurePrev = (bc: string) => {
-      if (!prevMap.has(bc)) prevMap.set(bc, { planograms: new Set(), storesA: new Set(), storesB: new Set() });
+    type PreviewRow = { barcode: string; name: string; planograms: string[]; storesA: string[]; storesB: string[]; status: "EXISTING" | "NEW EXPAND" | "DELETE" };
+    const prevMap = new Map<string, { name: string; planograms: Set<string>; storesA: Set<string>; storesB: Set<string> }>();
+    const ensurePrev = (bc: string, name: string) => {
+      if (!prevMap.has(bc)) prevMap.set(bc, { name, planograms: new Set(), storesA: new Set(), storesB: new Set() });
       return prevMap.get(bc)!;
     };
-    for (const e of groupA) { const r = ensurePrev(e.barcode); r.planograms.add(e.qry.planogram); r.storesA.add(e.storeVal); }
-    for (const e of groupB) { const r = ensurePrev(e.barcode); r.planograms.add(e.qry.planogram); r.storesB.add(e.storeVal); }
+    for (const e of groupA) { const r = ensurePrev(e.barcode, e.productName); r.planograms.add(e.qry.planogram); r.storesA.add(e.storeVal); }
+    for (const e of groupB) { const r = ensurePrev(e.barcode, e.productName); r.planograms.add(e.qry.planogram); r.storesB.add(e.storeVal); }
     const nsort = (a: string, b: string): number => { const na = +a, nb = +b; return isFinite(na) && isFinite(nb) ? na - nb : a.localeCompare(b); };
     const previewRows: PreviewRow[] = [...prevMap.entries()].map(([barcode, r]) => {
       const inA = r.storesA.size > 0, inB = r.storesB.size > 0;
       return {
         barcode,
+        name:       r.name,
         planograms: [...r.planograms].sort(),
         storesA:    [...r.storesA].sort(nsort),
         storesB:    [...r.storesB].sort(nsort),
@@ -1344,7 +1345,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       {
         type: "done",
         buffer: output,
-        stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture, masterMapSize: masterMap.size, masterSheetName },
+        stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture, masterMapSize: masterMap.size, masterSheetName, s1Rows: s1Patches.size, s2Rows: s2Patches.size, s3Rows: s3Patches.size },
         preview: { rows: previewRows, unmatchedPlanograms: [...unmatchedPlanograms].sort() },
       },
       [output],

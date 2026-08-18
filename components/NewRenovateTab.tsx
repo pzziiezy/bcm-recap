@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
-import { Download, FileSpreadsheet, X } from "lucide-react";
+import { useState, useRef, useEffect, useMemo, useTransition } from "react";
+import { Download, FileSpreadsheet, X, CheckCircle2 } from "lucide-react";
 import type { ExceptionConfig } from "@/lib/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -12,12 +12,16 @@ interface Stats {
   matchedMaster:    number;
   matchedIndex:     number;
   matchedFixture:   number;
+  s1Rows?:          number;
+  s2Rows?:          number;
+  s3Rows?:          number;
   masterMapSize?:   number;
   masterSheetName?: string;
 }
 
 interface PreviewRow {
   barcode:    string;
+  name:       string;
   planograms: string[];
   storesA:    string[];
   storesB:    string[];
@@ -37,6 +41,11 @@ interface Props {
   fixtureRows?:     Record<string, string>[];
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const DISPLAY_LIMIT_INIT = 200;
+const DISPLAY_LIMIT_STEP = 200;
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const STATUS_STYLE: Record<PreviewRow["status"], string> = {
@@ -53,7 +62,7 @@ function StatusPill({ status }: { status: PreviewRow["status"] }) {
   );
 }
 
-/** Outer-join storesA and storesB by store number → one row per unique store. */
+/** Outer-join storesA and storesB — one entry per unique store number. */
 function mergeStores(storesA: string[], storesB: string[]): { storeA: string; storeB: string }[] {
   if (!storesA.length && !storesB.length) return [{ storeA: "", storeB: "" }];
   const setA = new Set(storesA);
@@ -65,7 +74,7 @@ function mergeStores(storesA: string[], storesB: string[]): { storeA: string; st
   }));
 }
 
-// ─── Compact upload slot ──────────────────────────────────────────────────────
+// ─── Upload slot ──────────────────────────────────────────────────────────────
 
 function CompactUploadSlot({
   num, title, hint, file, onFile, accept,
@@ -82,8 +91,7 @@ function CompactUploadSlot({
       drag  ? "bg-pink-50 border-[#E91E8C]"  :
               "bg-white border-slate-200 hover:border-pink-200"
     }`}>
-      <input ref={ref} type="file" accept={accept} className="hidden"
-        onChange={e => pick(e.target.files)} />
+      <input ref={ref} type="file" accept={accept} className="hidden" onChange={e => pick(e.target.files)} />
       <span className={`w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 ${
         file ? "bg-[#72BF44]" : "bg-[#E91E8C]"
       }`}>{num}</span>
@@ -100,13 +108,40 @@ function CompactUploadSlot({
           : <p className="text-xs text-slate-400 truncate">{hint}</p>}
       </div>
       {file ? (
-        <button onClick={() => onFile(null)} className="flex-shrink-0 text-slate-300 hover:text-red-400 transition-colors">
+        <button onClick={() => onFile(null)} className="flex-shrink-0 text-slate-300 hover:text-red-400">
           <X className="w-4 h-4" />
         </button>
       ) : (
         <button onClick={() => ref.current?.click()}
-          className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg border border-pink-200 text-pink-400 hover:border-[#E91E8C] hover:text-[#E91E8C] hover:bg-pink-50 transition-all font-medium whitespace-nowrap">
+          className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg border border-pink-200 text-pink-400
+            hover:border-[#E91E8C] hover:text-[#E91E8C] hover:bg-pink-50 font-medium whitespace-nowrap">
           เลือกไฟล์
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Search input ─────────────────────────────────────────────────────────────
+
+function SearchInput({ value, onChange, placeholder }: {
+  value: string; onChange: (v: string) => void; placeholder: string;
+}) {
+  return (
+    <div className="relative mt-1">
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full text-[10px] px-2 py-1 pr-5 border border-slate-200 rounded bg-white
+          focus:outline-none focus:border-pink-300 focus:ring-1 focus:ring-pink-100
+          placeholder:text-slate-300 font-normal"
+      />
+      {value && (
+        <button onClick={() => onChange("")}
+          className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
+          <X className="w-3 h-3" />
         </button>
       )}
     </div>
@@ -128,15 +163,23 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   const [stats,     setStats]     = useState<Stats | null>(null);
   const [errorMsg,  setErrorMsg]  = useState("");
 
-  const [previewData,   setPreviewData]   = useState<PreviewData | null>(null);
-  const [previewTab,    setPreviewTab]    = useState<"compare" | "unmatched">("compare");
-  const [statusFilter,  setStatusFilter]  = useState<StatusFilter>("ALL");
+  const [previewData,  setPreviewData]  = useState<PreviewData | null>(null);
+  const [previewTab,   setPreviewTab]   = useState<"compare" | "unmatched">("compare");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [downloaded,   setDownloaded]   = useState(false);
 
   // ── Per-column search ──────────────────────────────────────────────────────
   const [srchBarcode,   setSrchBarcode]   = useState("");
+  const [srchName,      setSrchName]      = useState("");
   const [srchPlanogram, setSrchPlanogram] = useState("");
   const [srchStoreA,    setSrchStoreA]    = useState("");
   const [srchStoreB,    setSrchStoreB]    = useState("");
+
+  // ── Display paging ─────────────────────────────────────────────────────────
+  const [displayLimit, setDisplayLimit] = useState(DISPLAY_LIMIT_INIT);
+
+  // ── Transition for non-urgent filter/search updates ────────────────────────
+  const [isPending, startTransition] = useTransition();
 
   const outputRef = useRef<ArrayBuffer | null>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -148,7 +191,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     !!masterFile && !!indexFile &&
     status !== "processing";
 
-  // ── Filtered rows (status filter + per-column search) ─────────────────────
+  // ── Filtered rows ──────────────────────────────────────────────────────────
   const filteredRows = useMemo<PreviewRow[]>(() => {
     if (!previewData) return [];
     let rows = previewData.rows;
@@ -156,6 +199,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
       rows = rows.filter(r => r.status === statusFilter);
     if (srchBarcode.trim())
       rows = rows.filter(r => r.barcode.includes(srchBarcode.trim()));
+    if (srchName.trim()) {
+      const q = srchName.trim().toLowerCase();
+      rows = rows.filter(r => r.name.toLowerCase().includes(q));
+    }
     if (srchPlanogram.trim()) {
       const q = srchPlanogram.trim().toLowerCase();
       rows = rows.filter(r => r.planograms.some(p => p.toLowerCase().includes(q)));
@@ -165,7 +212,19 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     if (srchStoreB.trim())
       rows = rows.filter(r => r.storesB.some(s => s.includes(srchStoreB.trim())));
     return rows;
-  }, [previewData, statusFilter, srchBarcode, srchPlanogram, srchStoreA, srchStoreB]);
+  }, [previewData, statusFilter, srchBarcode, srchName, srchPlanogram, srchStoreA, srchStoreB]);
+
+  // ── Pre-computed store rows for visible slice (avoids flatMap in render) ───
+  const displayedStoreRows = useMemo(() => {
+    return filteredRows.slice(0, displayLimit).flatMap((row) => {
+      const merged = mergeStores(row.storesA, row.storesB);
+      return merged.map((sr, idx) => ({
+        key:   `${row.barcode}-${idx}`,
+        row, sr, idx,
+        total: merged.length,
+      }));
+    });
+  }, [filteredRows, displayLimit]);
 
   const countByStatus = useMemo(() => {
     if (!previewData) return { EXISTING: 0, "NEW EXPAND": 0, DELETE: 0 };
@@ -175,12 +234,22 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     );
   }, [previewData]);
 
-  const clearSearch = () => {
-    setSrchBarcode(""); setSrchPlanogram(""); setSrchStoreA(""); setSrchStoreB("");
+  // ── Filter/search helpers (all transitions) ────────────────────────────────
+  const applyFilter = (f: StatusFilter) => {
+    startTransition(() => { setStatusFilter(f); setDisplayLimit(DISPLAY_LIMIT_INIT); });
   };
+  const applySearch = (setter: (v: string) => void) => (v: string) => {
+    startTransition(() => { setter(v); setDisplayLimit(DISPLAY_LIMIT_INIT); });
+  };
+  const clearSearch = () => {
+    startTransition(() => {
+      setSrchBarcode(""); setSrchName(""); setSrchPlanogram("");
+      setSrchStoreA(""); setSrchStoreB(""); setDisplayLimit(DISPLAY_LIMIT_INIT);
+    });
+  };
+  const hasSearch = !!(srchBarcode || srchName || srchPlanogram || srchStoreA || srchStoreB);
 
-  // ── Reset ─────────────────────────────────────────────────────────────────
-
+  // ── Reset ──────────────────────────────────────────────────────────────────
   const handleReset = () => {
     workerRef.current?.terminate();
     workerRef.current = null;
@@ -189,32 +258,27 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     setStatus("idle"); setStatusMsg(""); setPct(0);
     setStats(null); setErrorMsg(""); setPreviewData(null);
     setPreviewTab("compare"); setStatusFilter("ALL");
-    clearSearch();
+    setDownloaded(false); setDisplayLimit(DISPLAY_LIMIT_INIT);
+    setSrchBarcode(""); setSrchName(""); setSrchPlanogram("");
+    setSrchStoreA(""); setSrchStoreB("");
     outputRef.current = null;
   };
 
-  // ── Process ───────────────────────────────────────────────────────────────
-
+  // ── Process ────────────────────────────────────────────────────────────────
   const handleProcess = async () => {
     if (!targetFile || !qryFile || !spacemanFile || !masterFile || !indexFile) return;
 
-    setStatus("processing");
-    setStatusMsg("กำลังโหลดไฟล์...");
-    setPct(2);
-    setErrorMsg("");
-    setStats(null);
-    setPreviewData(null);
-    setPreviewTab("compare");
-    setStatusFilter("ALL");
-    clearSearch();
+    setStatus("processing"); setStatusMsg("กำลังโหลดไฟล์..."); setPct(2);
+    setErrorMsg(""); setStats(null); setPreviewData(null);
+    setPreviewTab("compare"); setStatusFilter("ALL");
+    setDownloaded(false); setDisplayLimit(DISPLAY_LIMIT_INIT);
+    setSrchBarcode(""); setSrchName(""); setSrchPlanogram("");
+    setSrchStoreA(""); setSrchStoreB("");
     outputRef.current = null;
 
     const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf] = await Promise.all([
-      targetFile.arrayBuffer(),
-      qryFile.arrayBuffer(),
-      spacemanFile.arrayBuffer(),
-      masterFile.arrayBuffer(),
-      indexFile.arrayBuffer(),
+      targetFile.arrayBuffer(), qryFile.arrayBuffer(), spacemanFile.arrayBuffer(),
+      masterFile.arrayBuffer(), indexFile.arrayBuffer(),
     ]);
 
     workerRef.current?.terminate();
@@ -228,22 +292,17 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
         | { type: "error"; message: string };
 
       if (msg.type === "progress") {
-        setPct(msg.pct);
-        setStatusMsg(msg.msg);
+        setPct(msg.pct); setStatusMsg(msg.msg);
       } else if (msg.type === "done") {
         outputRef.current = msg.buffer;
         setStats(msg.stats);
         setPreviewData(msg.preview ?? null);
         setStatus(msg.preview ? "preview" : "done");
-        setStatusMsg("เสร็จสิ้น!");
-        setPct(100);
-        worker.terminate();
-        workerRef.current = null;
+        setStatusMsg("เสร็จสิ้น!"); setPct(100);
+        worker.terminate(); workerRef.current = null;
       } else if (msg.type === "error") {
-        setStatus("error");
-        setErrorMsg(msg.message);
-        worker.terminate();
-        workerRef.current = null;
+        setStatus("error"); setErrorMsg(msg.message);
+        worker.terminate(); workerRef.current = null;
       }
     };
 
@@ -260,8 +319,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     );
   };
 
-  // ── Download ──────────────────────────────────────────────────────────────
-
+  // ── Download ───────────────────────────────────────────────────────────────
   const handleDownload = () => {
     if (!outputRef.current || !targetFile) return;
     const blob = new Blob([outputRef.current], {
@@ -269,25 +327,23 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     });
     const url = URL.createObjectURL(blob);
     const a   = document.createElement("a");
-    a.href     = url;
+    a.href = url;
     a.download = targetFile.name.replace(/\.xlsx?$/i, "") + "_filled.xlsx";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a); URL.revokeObjectURL(url);
   };
 
   const handleConfirm = () => {
-    setStatus("done");
     handleDownload();
+    setDownloaded(true); // stay on preview — no setStatus("done")
   };
 
-  // ── Render helpers ────────────────────────────────────────────────────────
-
-  const badge = (n: number, label: string, color: "pink" | "emerald" | "slate") => {
+  // ── Stats badges ───────────────────────────────────────────────────────────
+  const badge = (n: number, label: string, color: "pink" | "emerald" | "blue" | "slate") => {
     const cls: Record<typeof color, string> = {
       pink:    "bg-pink-50 text-[#E91E8C] border border-pink-100",
       emerald: "bg-emerald-50 text-emerald-700 border border-emerald-100",
+      blue:    "bg-blue-50 text-blue-700 border border-blue-100",
       slate:   "bg-slate-50 text-slate-500 border border-slate-200",
     };
     return (
@@ -306,30 +362,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
       file={file} onFile={(f) => { setter(f); if (status !== "idle") handleReset(); }} />
   );
 
-  // Search input with clear button
-  const SearchInput = ({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) => (
-    <div className="relative mt-1">
-      <input
-        type="text"
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full text-[10px] px-2 py-1 pr-5 border border-slate-200 rounded bg-white
-          focus:outline-none focus:border-pink-300 focus:ring-1 focus:ring-pink-100
-          placeholder:text-slate-300 font-normal"
-      />
-      {value && (
-        <button
-          onClick={() => onChange("")}
-          className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
-        >
-          <X className="w-3 h-3" />
-        </button>
-      )}
-    </div>
-  );
-
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="w-full">
@@ -372,7 +405,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
           </div>
         </div>
 
-        {/* Action */}
+        {/* Action buttons */}
         {status !== "processing" && (
           <div className="flex gap-3">
             <button onClick={handleProcess} disabled={!canProcess}
@@ -383,7 +416,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             </button>
             {(status === "done" || status === "error" || status === "preview") && (
               <button onClick={handleReset}
-                className="px-6 py-3 rounded-xl font-semibold text-sm border border-pink-200 text-[#d41679] hover:bg-pink-50 transition-all">
+                className="px-6 py-3 rounded-xl font-semibold text-sm border border-pink-200
+                  text-[#d41679] hover:bg-pink-50 transition-all">
                 เริ่มใหม่
               </button>
             )}
@@ -398,8 +432,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
               <p className="text-slate-600 font-medium text-sm">{statusMsg}</p>
             </div>
             <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
-              <div className="h-2.5 rounded-full transition-all duration-500 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
-                style={{ width: `${pct}%` }} />
+              <div className="h-2.5 rounded-full bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
+                style={{ width: `${pct}%`, transition: "width 0.5s ease" }} />
             </div>
             <p className="text-xs text-slate-400 text-right">{pct}%</p>
           </div>
@@ -414,7 +448,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
       </div>
 
-      {/* ── Preview Panel — full viewport width ───────────────────────────────── */}
+      {/* ── Preview Panel — full viewport width ─────────────────────────────────── */}
       {status === "preview" && previewData && (
         <div className="px-6 pt-4 pb-6">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
@@ -425,15 +459,13 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             <p className="text-xs text-slate-400 mt-0.5">
               ตรวจสอบ comparison ระหว่าง AS IS และ TO BE แล้วกดยืนยันเพื่อ download Report
             </p>
-
-            {/* Summary chips */}
             <div className="flex flex-wrap gap-2 mt-3">
               {(
                 [
-                  ["EXISTING",       countByStatus.EXISTING,               "emerald"],
-                  ["NEW EXPAND",     countByStatus["NEW EXPAND"],          "blue"],
-                  ["DELETE",         countByStatus.DELETE,                  "red"],
-                  ["ไม่พบใน INDEX",  previewData.unmatchedPlanograms.length, "amber"],
+                  ["EXISTING",      countByStatus.EXISTING,                "emerald"],
+                  ["NEW EXPAND",    countByStatus["NEW EXPAND"],           "blue"],
+                  ["DELETE",        countByStatus.DELETE,                   "red"],
+                  ["ไม่พบใน INDEX", previewData.unmatchedPlanograms.length, "amber"],
                 ] as const
               ).map(([label, count, color]) => {
                 const colorCls = {
@@ -453,16 +485,14 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
           {/* Tabs */}
           <div className="flex border-b border-slate-100 bg-slate-50/50">
-            {(
-              [
-                { key: "compare",   label: `Comparison (${previewData.rows.length.toLocaleString()} barcodes)` },
-                { key: "unmatched", label: `Planogram ไม่พบใน INDEX (${previewData.unmatchedPlanograms.length})` },
-              ] as const
-            ).map(({ key, label }) => (
+            {([
+              { key: "compare",   label: `Comparison (${previewData.rows.length.toLocaleString()} barcodes)` },
+              { key: "unmatched", label: `Planogram ไม่พบใน INDEX (${previewData.unmatchedPlanograms.length})` },
+            ] as const).map(({ key, label }) => (
               <button
                 key={key}
                 onClick={() => { setPreviewTab(key); clearSearch(); }}
-                className={`px-5 py-3 text-xs font-semibold transition-colors border-b-2 -mb-px ${
+                className={`px-5 py-3 text-xs font-semibold border-b-2 -mb-px ${
                   previewTab === key
                     ? "border-[#E91E8C] text-[#E91E8C] bg-white"
                     : "border-transparent text-slate-400 hover:text-slate-600"
@@ -473,10 +503,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             ))}
           </div>
 
-          {/* ── Tab: Comparison ─────────────────────────────────────────────── */}
+          {/* ── Comparison tab ──────────────────────────────────────────────────── */}
           {previewTab === "compare" && (
             <>
-              {/* Status filter */}
+              {/* Status filter bar */}
               <div className="flex items-center gap-1.5 px-5 py-3 border-b border-slate-100 bg-slate-50/30">
                 <span className="text-[10px] text-slate-400 font-medium mr-1 whitespace-nowrap">Filter:</span>
                 {(["ALL", "EXISTING", "NEW EXPAND", "DELETE"] as StatusFilter[]).map(f => {
@@ -490,8 +520,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                   return (
                     <button
                       key={f}
-                      onClick={() => setStatusFilter(f)}
-                      className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold transition-all whitespace-nowrap ${
+                      onClick={() => applyFilter(f)}
+                      className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold whitespace-nowrap ${
                         active ? activeCls[f] : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
                       }`}
                     >
@@ -499,10 +529,11 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                     </button>
                   );
                 })}
-                <span className="ml-auto text-[10px] text-slate-400 tabular-nums whitespace-nowrap">
+                <span className="ml-auto flex items-center gap-2 text-[10px] text-slate-400 tabular-nums whitespace-nowrap">
+                  {isPending && <span className="inline-block w-3 h-3 rounded-full border-2 border-pink-200 border-t-pink-400 animate-spin" />}
                   {filteredRows.length.toLocaleString()} barcodes
-                  {(srchBarcode || srchPlanogram || srchStoreA || srchStoreB) && (
-                    <button onClick={clearSearch} className="ml-2 text-pink-400 hover:text-pink-600 font-semibold">
+                  {hasSearch && (
+                    <button onClick={clearSearch} className="text-pink-400 hover:text-pink-600 font-semibold">
                       ล้าง search
                     </button>
                   )}
@@ -513,113 +544,116 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
               <div className="overflow-auto" style={{ maxHeight: "62vh" }}>
                 <table className="w-full text-xs border-collapse">
                   <thead>
-                    {/* Column labels */}
+                    {/* Column labels — sticky row 1 */}
                     <tr className="bg-slate-50 text-slate-500 font-semibold text-[11px]">
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-40">BARCODE</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20">PLANOGRAM NAME</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-36">AS IS Store</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-36">TO BE Store</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-28">STATUS</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-36">BARCODE</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-48">ชื่อสินค้า (NAME)</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20">PLANOGRAM NAME</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-32">AS IS Store</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-32">TO BE Store</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-28">STATUS</th>
                     </tr>
-                    {/* Search inputs */}
-                    <tr className="bg-white border-b border-slate-100">
-                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
-                        <SearchInput value={srchBarcode} onChange={setSrchBarcode} placeholder="ค้นหา barcode…" />
+                    {/* Search inputs — sticky row 2 */}
+                    <tr className="bg-white border-b border-slate-100" style={{ top: 37 }}>
+                      <th className="px-3 pb-2 pt-1 sticky bg-white z-20" style={{ top: 37 }}>
+                        <SearchInput value={srchBarcode}   onChange={applySearch(setSrchBarcode)}   placeholder="ค้นหา barcode…" />
                       </th>
-                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
-                        <SearchInput value={srchPlanogram} onChange={setSrchPlanogram} placeholder="ค้นหา planogram…" />
+                      <th className="px-3 pb-2 pt-1 sticky bg-white z-20" style={{ top: 37 }}>
+                        <SearchInput value={srchName}      onChange={applySearch(setSrchName)}      placeholder="ค้นหาชื่อสินค้า…" />
                       </th>
-                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
-                        <SearchInput value={srchStoreA} onChange={setSrchStoreA} placeholder="ค้นหา store…" />
+                      <th className="px-3 pb-2 pt-1 sticky bg-white z-20" style={{ top: 37 }}>
+                        <SearchInput value={srchPlanogram} onChange={applySearch(setSrchPlanogram)} placeholder="ค้นหา planogram…" />
                       </th>
-                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
-                        <SearchInput value={srchStoreB} onChange={setSrchStoreB} placeholder="ค้นหา store…" />
+                      <th className="px-3 pb-2 pt-1 sticky bg-white z-20" style={{ top: 37 }}>
+                        <SearchInput value={srchStoreA}    onChange={applySearch(setSrchStoreA)}    placeholder="ค้นหา store…" />
                       </th>
-                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20" />
+                      <th className="px-3 pb-2 pt-1 sticky bg-white z-20" style={{ top: 37 }}>
+                        <SearchInput value={srchStoreB}    onChange={applySearch(setSrchStoreB)}    placeholder="ค้นหา store…" />
+                      </th>
+                      <th className="px-3 pb-2 pt-1 sticky bg-white z-20" style={{ top: 37 }} />
                     </tr>
                   </thead>
-                  <tbody>
-                    {filteredRows.length === 0 && (
+                  <tbody className={isPending ? "opacity-60" : undefined}>
+                    {displayedStoreRows.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-10 text-center text-slate-400 text-xs">
+                        <td colSpan={6} className="px-4 py-10 text-center text-slate-400 text-xs">
                           ไม่พบข้อมูลที่ตรงกับ filter / search
                         </td>
                       </tr>
                     )}
-                    {filteredRows.slice(0, 1000).flatMap((row) => {
-                      const merged = mergeStores(row.storesA, row.storesB);
-                      return merged.map((sr, idx) => (
-                        <tr
-                          key={`${row.barcode}-${idx}`}
-                          className={`hover:bg-pink-50/20 transition-colors ${
-                            idx === 0 ? "border-t-2 border-slate-200" : "border-t border-slate-100"
-                          }`}
-                        >
-                          {/* BARCODE — first store row only, rowspan covers all store rows */}
-                          {idx === 0 && (
-                            <td
-                              rowSpan={merged.length}
-                              className="px-4 py-2 font-mono text-slate-700 text-[11px] whitespace-nowrap align-top"
-                            >
-                              {row.barcode}
-                            </td>
-                          )}
-                          {/* PLANOGRAM NAME — first store row only */}
-                          {idx === 0 && (
-                            <td
-                              rowSpan={merged.length}
-                              className="px-4 py-2 text-slate-600 align-top"
-                            >
-                              <span
-                                className="block text-xs leading-snug"
-                                title={row.planograms.join(", ")}
-                              >
-                                {row.planograms.join(", ")}
-                              </span>
-                            </td>
-                          )}
-                          {/* AS IS store */}
-                          <td className="px-4 py-1.5 tabular-nums text-xs">
-                            {sr.storeA
-                              ? <span className="text-slate-700 font-medium">{sr.storeA}</span>
-                              : <span className="text-slate-200">—</span>}
+                    {displayedStoreRows.map(({ key, row, sr, idx, total }) => (
+                      <tr
+                        key={key}
+                        className={`hover:bg-pink-50/20 ${idx === 0 ? "border-t-2 border-slate-200" : "border-t border-slate-100"}`}
+                      >
+                        {/* BARCODE — rowspan */}
+                        {idx === 0 && (
+                          <td rowSpan={total} className="px-3 py-2 font-mono text-slate-700 text-[11px] whitespace-nowrap align-top">
+                            {row.barcode}
                           </td>
-                          {/* TO BE store */}
-                          <td className="px-4 py-1.5 tabular-nums text-xs">
-                            {sr.storeB
-                              ? <span className="text-slate-700 font-medium">{sr.storeB}</span>
-                              : <span className="text-slate-200">—</span>}
+                        )}
+                        {/* NAME — rowspan */}
+                        {idx === 0 && (
+                          <td rowSpan={total} className="px-3 py-2 text-slate-600 align-top text-[11px] leading-snug">
+                            {row.name || <span className="text-slate-200">—</span>}
                           </td>
-                          {/* STATUS — first store row only */}
-                          {idx === 0 && (
-                            <td
-                              rowSpan={merged.length}
-                              className="px-4 py-2 align-top"
-                            >
-                              <StatusPill status={row.status} />
-                            </td>
-                          )}
-                        </tr>
-                      ));
-                    })}
+                        )}
+                        {/* PLANOGRAM NAME — rowspan */}
+                        {idx === 0 && (
+                          <td rowSpan={total} className="px-3 py-2 text-slate-600 align-top">
+                            <span className="block text-xs leading-snug" title={row.planograms.join(", ")}>
+                              {row.planograms.join(", ")}
+                            </span>
+                          </td>
+                        )}
+                        {/* AS IS store */}
+                        <td className="px-3 py-1.5 tabular-nums text-xs">
+                          {sr.storeA ? <span className="text-slate-700 font-medium">{sr.storeA}</span> : <span className="text-slate-200">—</span>}
+                        </td>
+                        {/* TO BE store */}
+                        <td className="px-3 py-1.5 tabular-nums text-xs">
+                          {sr.storeB ? <span className="text-slate-700 font-medium">{sr.storeB}</span> : <span className="text-slate-200">—</span>}
+                        </td>
+                        {/* STATUS — rowspan */}
+                        {idx === 0 && (
+                          <td rowSpan={total} className="px-3 py-2 align-top">
+                            <StatusPill status={row.status} />
+                          </td>
+                        )}
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
-                {filteredRows.length > 1000 && (
-                  <div className="px-5 py-3 text-center text-[11px] text-slate-400 border-t border-slate-100">
-                    แสดง 1,000 จาก {filteredRows.length.toLocaleString()} barcodes — ใช้ search เพื่อกรองข้อมูล
+
+                {/* Load more / total indicator */}
+                {filteredRows.length > displayLimit && (
+                  <div className="px-5 py-3 flex items-center justify-between border-t border-slate-100 bg-slate-50/50">
+                    <span className="text-[11px] text-slate-400 tabular-nums">
+                      แสดง {displayLimit.toLocaleString()} จาก {filteredRows.length.toLocaleString()} barcodes
+                    </span>
+                    <button
+                      onClick={() => setDisplayLimit(l => l + DISPLAY_LIMIT_STEP)}
+                      className="text-[11px] px-3 py-1.5 rounded-lg border border-pink-200 text-pink-500 hover:bg-pink-50 font-semibold"
+                    >
+                      โหลดเพิ่ม {DISPLAY_LIMIT_STEP} รายการ
+                    </button>
+                  </div>
+                )}
+                {filteredRows.length > 0 && filteredRows.length <= displayLimit && (
+                  <div className="px-5 py-2 text-center text-[11px] text-slate-300 border-t border-slate-100">
+                    แสดงครบทุก {filteredRows.length.toLocaleString()} barcodes
                   </div>
                 )}
               </div>
             </>
           )}
 
-          {/* ── Tab: Unmatched Planograms ────────────────────────────────────── */}
+          {/* ── Unmatched tab ──────────────────────────────────────────────────── */}
           {previewTab === "unmatched" && (
-            <div className="p-5" style={{ maxHeight: "60vh", overflow: "auto" }}>
+            <div className="p-5 overflow-auto" style={{ maxHeight: "60vh" }}>
               {previewData.unmatchedPlanograms.length === 0 ? (
                 <div className="flex items-center gap-2 text-emerald-600 text-sm font-medium">
-                  <span className="text-base">✓</span>
-                  PLANOGRAM ทุกตัวพบในไฟล์ INDEX
+                  <span>✓</span> PLANOGRAM ทุกตัวพบในไฟล์ INDEX
                 </div>
               ) : (
                 <>
@@ -628,11 +662,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                   </p>
                   <div className="grid grid-cols-3 gap-1.5">
                     {previewData.unmatchedPlanograms.map(p => (
-                      <span
-                        key={p}
-                        className="text-xs px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-700 rounded-lg truncate"
-                        title={p}
-                      >
+                      <span key={p} className="text-xs px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-700 rounded-lg truncate" title={p}>
                         {p}
                       </span>
                     ))}
@@ -642,35 +672,68 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             </div>
           )}
 
-          {/* Confirm button */}
+          {/* Confirm / downloaded footer */}
           <div className="px-5 py-4 border-t border-slate-100 bg-slate-50/30">
-            <button
-              onClick={handleConfirm}
-              className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-base
-                bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-md hover:shadow-lg
-                hover:scale-[1.01] transition-all"
-            >
-              <Download className="w-5 h-5" />
-              ยืนยันและดาวน์โหลด New&amp;Renovate Report
-            </button>
+            {downloaded ? (
+              <div className="flex items-center gap-3">
+                <div className="flex-1 flex items-center gap-2 px-5 py-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold text-sm">
+                  <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+                  ดาวน์โหลดเรียบร้อยแล้ว
+                </div>
+                <button
+                  onClick={handleDownload}
+                  className="flex items-center gap-1.5 px-4 py-3.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 text-sm font-medium whitespace-nowrap"
+                >
+                  <Download className="w-4 h-4" />
+                  ดาวน์โหลดอีกครั้ง
+                </button>
+                <button
+                  onClick={handleReset}
+                  className="px-4 py-3.5 rounded-xl border border-pink-200 text-[#d41679] hover:bg-pink-50 text-sm font-semibold whitespace-nowrap"
+                >
+                  เริ่มใหม่
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleConfirm}
+                className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-xl font-bold text-base
+                  bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-md hover:shadow-lg hover:scale-[1.01] transition-all"
+              >
+                <Download className="w-5 h-5" />
+                ยืนยันและดาวน์โหลด New&amp;Renovate Report
+              </button>
+            )}
           </div>
         </div>
         </div>
       )}
 
-      {/* Results + Download */}
+      {/* ── Results + Download (status === "done") ─────────────────────────────── */}
       {status === "done" && stats && (
         <div className="max-w-2xl mx-auto px-6 pb-6 space-y-4">
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-            <p className="text-xs font-bold text-slate-500 mb-4 uppercase tracking-wide">ผลการ Lookup</p>
-            <div className="grid grid-cols-5 gap-3">
+            <p className="text-xs font-bold text-slate-500 mb-3 uppercase tracking-wide">ผลการ Lookup & Report</p>
+
+            {/* Lookup counts */}
+            <div className="grid grid-cols-5 gap-2 mb-3">
               {badge(stats.total,           "QRY rows (ตั้งต้น)",       "pink")}
               {badge(stats.matchedSpaceman, "Matched DATA_SPACEMAN",     "emerald")}
               {badge(stats.matchedMaster,   "Matched Master Assortment", "emerald")}
               {badge(stats.matchedIndex,    "Matched INDEX",             "emerald")}
               {badge(stats.matchedFixture,  "Matched Fixture Index",     "emerald")}
             </div>
-            <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs text-slate-400">
+
+            {/* Sheet row counts */}
+            {(stats.s1Rows !== undefined || stats.s2Rows !== undefined || stats.s3Rows !== undefined) && (
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {stats.s1Rows !== undefined && badge(stats.s1Rows, "Rows → Sheet 1 (New&Existing)", "blue")}
+                {stats.s2Rows !== undefined && badge(stats.s2Rows, "Rows → Sheet 2 (New for Link)", "blue")}
+                {stats.s3Rows !== undefined && badge(stats.s3Rows, "Rows → Sheet 3 (Delete)", "blue")}
+              </div>
+            )}
+
+            <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs text-slate-400">
               <span>ไม่พบใน DATA_SPACEMAN: {(stats.total - stats.matchedSpaceman).toLocaleString()}</span>
               <span>ไม่พบใน Master Assortment: {(stats.total - stats.matchedMaster).toLocaleString()}</span>
               <span>ไม่พบใน INDEX: {(stats.total - stats.matchedIndex).toLocaleString()}</span>
@@ -688,8 +751,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
           <button onClick={handleDownload}
             className="w-full flex items-center justify-center gap-2 px-6 py-4 rounded-2xl font-bold text-base
-              bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-md hover:shadow-lg
-              hover:scale-[1.01] transition-all">
+              bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-md hover:shadow-lg hover:scale-[1.01] transition-all">
             <Download className="w-5 h-5" />
             ดาวน์โหลด New&amp;Renovate Report ที่เติมข้อมูลแล้ว
           </button>
