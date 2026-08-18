@@ -33,8 +33,8 @@ interface PreviewData {
   unmatchedPlanograms: string[];
 }
 
-type ProcStatus   = "idle" | "processing" | "preview" | "done" | "error";
-type StatusFilter = "ALL" | "EXISTING" | "NEW EXPAND" | "DELETE";
+type ProcStatus = "idle" | "processing" | "preview" | "done" | "error";
+type StatusKey  = "EXISTING" | "NEW EXPAND" | "DELETE";
 
 interface Props {
   exceptionConfig?: ExceptionConfig[];
@@ -163,10 +163,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   const [stats,     setStats]     = useState<Stats | null>(null);
   const [errorMsg,  setErrorMsg]  = useState("");
 
-  const [previewData,  setPreviewData]  = useState<PreviewData | null>(null);
-  const [previewTab,   setPreviewTab]   = useState<"compare" | "unmatched">("compare");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
-  const [downloaded,   setDownloaded]   = useState(false);
+  const [previewData,    setPreviewData]    = useState<PreviewData | null>(null);
+  const [previewTab,     setPreviewTab]     = useState<"compare" | "unmatched">("compare");
+  const [activeFilters,  setActiveFilters]  = useState<Set<StatusKey>>(new Set());
+  const [downloaded,     setDownloaded]     = useState(false);
 
   // ── Per-column search ──────────────────────────────────────────────────────
   const [srchBarcode,   setSrchBarcode]   = useState("");
@@ -195,18 +195,16 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   const filteredRows = useMemo<PreviewRow[]>(() => {
     if (!previewData) return [];
     let rows = previewData.rows;
-    if (statusFilter === "NEW EXPAND")
-      // Include pure NEW EXPAND barcodes AND EXISTING barcodes that have ≥1 new store
-      rows = rows.filter(r =>
-        r.status === "NEW EXPAND" || r.storesB.some(s => !r.storesA.includes(s)),
-      );
-    else if (statusFilter === "DELETE")
-      // Include pure DELETE barcodes AND EXISTING barcodes that lose ≥1 store
-      rows = rows.filter(r =>
-        r.status === "DELETE" || r.storesA.some(s => !r.storesB.includes(s)),
-      );
-    else if (statusFilter === "EXISTING")
-      rows = rows.filter(r => r.status === "EXISTING");
+    if (activeFilters.size > 0) {
+      rows = rows.filter(r => {
+        if (activeFilters.has("NEW EXPAND") &&
+            (r.status === "NEW EXPAND" || r.storesB.some(s => !r.storesA.includes(s)))) return true;
+        if (activeFilters.has("DELETE") &&
+            (r.status === "DELETE" || r.storesA.some(s => !r.storesB.includes(s)))) return true;
+        if (activeFilters.has("EXISTING") && r.status === "EXISTING") return true;
+        return false;
+      });
+    }
     if (srchBarcode.trim())
       rows = rows.filter(r => r.barcode.includes(srchBarcode.trim()));
     if (srchName.trim()) {
@@ -222,7 +220,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     if (srchStoreB.trim())
       rows = rows.filter(r => r.storesB.some(s => s.includes(srchStoreB.trim())));
     return rows;
-  }, [previewData, statusFilter, srchBarcode, srchName, srchPlanogram, srchStoreA, srchStoreB]);
+  }, [previewData, activeFilters, srchBarcode, srchName, srchPlanogram, srchStoreA, srchStoreB]);
 
   // ── Pre-computed store rows for visible slice (avoids flatMap in render) ───
   const displayedStoreRows = useMemo(() => {
@@ -241,8 +239,13 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   }, [filteredRows, displayLimit]);
 
   // ── Filter/search helpers (all transitions) ────────────────────────────────
-  const applyFilter = (f: StatusFilter) => {
-    startTransition(() => { setStatusFilter(f); setDisplayLimit(DISPLAY_LIMIT_INIT); });
+  const toggleFilter = (f: StatusKey) => {
+    const next = new Set(activeFilters);
+    if (next.has(f)) next.delete(f); else next.add(f);
+    startTransition(() => { setActiveFilters(next); setDisplayLimit(DISPLAY_LIMIT_INIT); });
+  };
+  const clearFilters = () => {
+    startTransition(() => { setActiveFilters(new Set()); setDisplayLimit(DISPLAY_LIMIT_INIT); });
   };
   const applySearch = (setter: (v: string) => void) => (v: string) => {
     startTransition(() => { setter(v); setDisplayLimit(DISPLAY_LIMIT_INIT); });
@@ -263,7 +266,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     setMasterFile(null); setIndexFile(null);
     setStatus("idle"); setStatusMsg(""); setPct(0);
     setStats(null); setErrorMsg(""); setPreviewData(null);
-    setPreviewTab("compare"); setStatusFilter("ALL");
+    setPreviewTab("compare"); setActiveFilters(new Set());
     setDownloaded(false); setDisplayLimit(DISPLAY_LIMIT_INIT);
     setSrchBarcode(""); setSrchName(""); setSrchPlanogram("");
     setSrchStoreA(""); setSrchStoreB("");
@@ -276,7 +279,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
     setStatus("processing"); setStatusMsg("กำลังโหลดไฟล์..."); setPct(2);
     setErrorMsg(""); setStats(null); setPreviewData(null);
-    setPreviewTab("compare"); setStatusFilter("ALL");
+    setPreviewTab("compare"); setActiveFilters(new Set());
     setDownloaded(false); setDisplayLimit(DISPLAY_LIMIT_INIT);
     setSrchBarcode(""); setSrchName(""); setSrchPlanogram("");
     setSrchStoreA(""); setSrchStoreB("");
@@ -475,7 +478,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             ] as const).map(({ key, label }) => (
               <button
                 key={key}
-                onClick={() => { setPreviewTab(key); clearSearch(); }}
+                onClick={() => { setPreviewTab(key); clearSearch(); clearFilters(); }}
                 className={`px-5 py-3 text-xs font-semibold border-b-2 -mb-px ${
                   previewTab === key
                     ? "border-[#E91E8C] text-[#E91E8C] bg-white"
@@ -490,25 +493,35 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
           {/* ── Comparison tab ──────────────────────────────────────────────────── */}
           {previewTab === "compare" && (
             <>
-              {/* Status filter bar */}
+              {/* Status filter bar — multi-select */}
               <div className="flex items-center gap-1.5 px-5 py-3 border-b border-slate-100 bg-slate-50/30">
                 <span className="text-[10px] text-slate-400 font-medium mr-1 whitespace-nowrap">Filter:</span>
-                {(["ALL", "EXISTING", "NEW EXPAND", "DELETE"] as StatusFilter[]).map(f => {
-                  const active = statusFilter === f;
-                  const activeCls: Record<StatusFilter, string> = {
-                    ALL:          "bg-slate-700 text-white border-slate-700",
-                    EXISTING:     "bg-emerald-600 text-white border-emerald-600",
-                    "NEW EXPAND": "bg-blue-600 text-white border-blue-600",
-                    DELETE:       "bg-red-500 text-white border-red-500",
-                  };
+                {/* ALL — clears all selections */}
+                <button
+                  onClick={clearFilters}
+                  className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold whitespace-nowrap ${
+                    activeFilters.size === 0
+                      ? "bg-slate-700 text-white border-slate-700"
+                      : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
+                  }`}
+                >
+                  ALL
+                </button>
+                {([
+                  { f: "EXISTING"   as StatusKey, activeCls: "bg-emerald-600 text-white border-emerald-600" },
+                  { f: "NEW EXPAND" as StatusKey, activeCls: "bg-blue-600 text-white border-blue-600" },
+                  { f: "DELETE"     as StatusKey, activeCls: "bg-red-500 text-white border-red-500" },
+                ]).map(({ f, activeCls }) => {
+                  const active = activeFilters.has(f);
                   return (
                     <button
                       key={f}
-                      onClick={() => applyFilter(f)}
-                      className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold whitespace-nowrap ${
-                        active ? activeCls[f] : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
+                      onClick={() => toggleFilter(f)}
+                      className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold whitespace-nowrap flex items-center gap-1 ${
+                        active ? activeCls : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
                       }`}
                     >
+                      {active && <span className="text-[9px] leading-none">✓</span>}
                       {f}
                     </button>
                   );
