@@ -561,8 +561,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                     {/* Column labels — sticky row 1 */}
                     <tr className="bg-slate-50 text-slate-500 font-semibold text-[11px]">
                       <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-36">BARCODE</th>
-                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-48">ชื่อสินค้า (NAME)</th>
-                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20">PLANOGRAM NAME</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-64">ชื่อสินค้า (NAME)</th>
+                      <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-56">PLANOGRAM NAME</th>
                       <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-32">AS IS Store</th>
                       <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-32">TO BE Store</th>
                       <th className="px-3 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-28">STATUS</th>
