@@ -7,12 +7,12 @@ import type { ExceptionConfig } from "@/lib/types";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Stats {
-  total:           number;
-  matchedSpaceman: number;
-  matchedMaster:   number;
-  matchedIndex:    number;
-  matchedFixture:  number;
-  masterMapSize?:  number;
+  total:            number;
+  matchedSpaceman:  number;
+  matchedMaster:    number;
+  matchedIndex:     number;
+  matchedFixture:   number;
+  masterMapSize?:   number;
   masterSheetName?: string;
 }
 
@@ -37,7 +37,7 @@ interface Props {
   fixtureRows?:     Record<string, string>[];
 }
 
-// ─── Small helpers ────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const STATUS_STYLE: Record<PreviewRow["status"], string> = {
   EXISTING:     "bg-emerald-100 text-emerald-700 border border-emerald-200",
@@ -53,16 +53,16 @@ function StatusPill({ status }: { status: PreviewRow["status"] }) {
   );
 }
 
-function StoreList({ stores }: { stores: string[] }) {
-  if (stores.length === 0) return <span className="text-slate-300">—</span>;
-  const visible = stores.slice(0, 3);
-  const extra   = stores.length - 3;
-  return (
-    <span className="text-slate-600 tabular-nums">
-      {visible.join(", ")}
-      {extra > 0 && <span className="ml-1 text-slate-400 font-medium">+{extra}</span>}
-    </span>
-  );
+/** Outer-join storesA and storesB by store number → one row per unique store. */
+function mergeStores(storesA: string[], storesB: string[]): { storeA: string; storeB: string }[] {
+  if (!storesA.length && !storesB.length) return [{ storeA: "", storeB: "" }];
+  const setA = new Set(storesA);
+  const setB = new Set(storesB);
+  const ns   = (a: string, b: string) => { const na = +a, nb = +b; return isFinite(na) && isFinite(nb) ? na - nb : a.localeCompare(b); };
+  return [...new Set([...storesA, ...storesB])].sort(ns).map(s => ({
+    storeA: setA.has(s) ? s : "",
+    storeB: setB.has(s) ? s : "",
+  }));
 }
 
 // ─── Compact upload slot ──────────────────────────────────────────────────────
@@ -122,15 +122,21 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   const [masterFile,   setMasterFile]   = useState<File | null>(null);
   const [indexFile,    setIndexFile]    = useState<File | null>(null);
 
-  const [status,     setStatus]     = useState<ProcStatus>("idle");
-  const [statusMsg,  setStatusMsg]  = useState("");
-  const [pct,        setPct]        = useState(0);
-  const [stats,      setStats]      = useState<Stats | null>(null);
-  const [errorMsg,   setErrorMsg]   = useState("");
+  const [status,    setStatus]    = useState<ProcStatus>("idle");
+  const [statusMsg, setStatusMsg] = useState("");
+  const [pct,       setPct]       = useState(0);
+  const [stats,     setStats]     = useState<Stats | null>(null);
+  const [errorMsg,  setErrorMsg]  = useState("");
 
-  const [previewData,  setPreviewData]  = useState<PreviewData | null>(null);
-  const [previewTab,   setPreviewTab]   = useState<"compare" | "unmatched">("compare");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [previewData,   setPreviewData]   = useState<PreviewData | null>(null);
+  const [previewTab,    setPreviewTab]    = useState<"compare" | "unmatched">("compare");
+  const [statusFilter,  setStatusFilter]  = useState<StatusFilter>("ALL");
+
+  // ── Per-column search ──────────────────────────────────────────────────────
+  const [srchBarcode,   setSrchBarcode]   = useState("");
+  const [srchPlanogram, setSrchPlanogram] = useState("");
+  const [srchStoreA,    setSrchStoreA]    = useState("");
+  const [srchStoreB,    setSrchStoreB]    = useState("");
 
   const outputRef = useRef<ArrayBuffer | null>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -142,11 +148,24 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     !!masterFile && !!indexFile &&
     status !== "processing";
 
+  // ── Filtered rows (status filter + per-column search) ─────────────────────
   const filteredRows = useMemo<PreviewRow[]>(() => {
     if (!previewData) return [];
-    if (statusFilter === "ALL") return previewData.rows;
-    return previewData.rows.filter(r => r.status === statusFilter);
-  }, [previewData, statusFilter]);
+    let rows = previewData.rows;
+    if (statusFilter !== "ALL")
+      rows = rows.filter(r => r.status === statusFilter);
+    if (srchBarcode.trim())
+      rows = rows.filter(r => r.barcode.includes(srchBarcode.trim()));
+    if (srchPlanogram.trim()) {
+      const q = srchPlanogram.trim().toLowerCase();
+      rows = rows.filter(r => r.planograms.some(p => p.toLowerCase().includes(q)));
+    }
+    if (srchStoreA.trim())
+      rows = rows.filter(r => r.storesA.some(s => s.includes(srchStoreA.trim())));
+    if (srchStoreB.trim())
+      rows = rows.filter(r => r.storesB.some(s => s.includes(srchStoreB.trim())));
+    return rows;
+  }, [previewData, statusFilter, srchBarcode, srchPlanogram, srchStoreA, srchStoreB]);
 
   const countByStatus = useMemo(() => {
     if (!previewData) return { EXISTING: 0, "NEW EXPAND": 0, DELETE: 0 };
@@ -155,6 +174,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
       { EXISTING: 0, "NEW EXPAND": 0, DELETE: 0 } as Record<PreviewRow["status"], number>,
     );
   }, [previewData]);
+
+  const clearSearch = () => {
+    setSrchBarcode(""); setSrchPlanogram(""); setSrchStoreA(""); setSrchStoreB("");
+  };
 
   // ── Reset ─────────────────────────────────────────────────────────────────
 
@@ -166,6 +189,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     setStatus("idle"); setStatusMsg(""); setPct(0);
     setStats(null); setErrorMsg(""); setPreviewData(null);
     setPreviewTab("compare"); setStatusFilter("ALL");
+    clearSearch();
     outputRef.current = null;
   };
 
@@ -182,6 +206,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     setPreviewData(null);
     setPreviewTab("compare");
     setStatusFilter("ALL");
+    clearSearch();
     outputRef.current = null;
 
     const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf] = await Promise.all([
@@ -193,7 +218,6 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     ]);
 
     workerRef.current?.terminate();
-
     const worker = new Worker(new URL("../lib/newrenovate.worker.ts", import.meta.url));
     workerRef.current = worker;
 
@@ -253,8 +277,6 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     URL.revokeObjectURL(url);
   };
 
-  // ── Confirm (preview → done + trigger download) ───────────────────────────
-
   const handleConfirm = () => {
     setStatus("done");
     handleDownload();
@@ -284,88 +306,111 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
       file={file} onFile={(f) => { setter(f); if (status !== "idle") handleReset(); }} />
   );
 
+  // Search input with clear button
+  const SearchInput = ({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) => (
+    <div className="relative mt-1">
+      <input
+        type="text"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full text-[10px] px-2 py-1 pr-5 border border-slate-200 rounded bg-white
+          focus:outline-none focus:border-pink-300 focus:ring-1 focus:ring-pink-100
+          placeholder:text-slate-300 font-normal"
+      />
+      {value && (
+        <button
+          onClick={() => onChange("")}
+          className="absolute right-1 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+        >
+          <X className="w-3 h-3" />
+        </button>
+      )}
+    </div>
+  );
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="w-full">
 
+      {/* ── Constrained: header, uploads, action, progress, error ── */}
       <div className="max-w-2xl mx-auto px-6 pt-6 space-y-4">
 
-      {/* Header */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
-        <div className="bg-gradient-to-br from-pink-50 to-orange-50 rounded-lg p-2 flex-shrink-0">
-          <FileSpreadsheet className="w-6 h-6 text-[#E91E8C]" />
-        </div>
-        <div>
-          <h2 className="text-base font-bold text-slate-800">TO BE Mini New&amp;Renovate Report Filler</h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            อัปโหลด 5 ไฟล์ · ข้อมูล Fixture Index โหลดอัตโนมัติจาก Tab Fixture Index
-          </p>
-        </div>
-      </div>
-
-      {/* Upload zones */}
-      <div className="space-y-2">
-        {slot(1, "Template New&Renovate Report.xlsx", "ไฟล์ output — มี sheet New&Exsiting For Oder / New for Link_IM", targetFile,  setTargetFile,  ".xlsx")}
-        {slot(2, "QRY_Product by POG by Position",   "ข้อมูลตั้งต้น — BARCODE · SEGMENT · LOCATION_ID · TOTAL_UNITS",            qryFile,      setQryFile,      ".xlsx,.xls")}
-        {slot(3, "DATA_SPACEMAN",                    "lookup DIVISION / PF03 / PF04 / PLANOGRAM — ต้องมี sheet QRY_Product_by_POG", spacemanFile, setSpacemanFile, ".xlsx,.xlsb,.xls")}
-        {slot(4, "Master Assortment Orderable",      "lookup SALE PACK CODE · Pack Size · Extra info",                              masterFile,   setMasterFile,   ".xlsx,.xls")}
-        {slot(5, "FILE INDEX",                       "lookup Status · Store — join by PLANOGRAM",                                   indexFile,    setIndexFile,    ".xlsx,.xls")}
-        <div className={`rounded-xl border flex items-center gap-3 px-4 py-3 ${
-          fixtureRows.length > 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"
-        }`}>
-          <span className={`w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 ${
-            fixtureRows.length > 0 ? "bg-[#72BF44]" : "bg-amber-400"
-          }`}>6</span>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-slate-700">Fixture Index</p>
-            {fixtureRows.length > 0
-              ? <p className="text-xs text-green-600 font-medium">✓ โหลดแล้ว {fixtureRows.length.toLocaleString()} rows — อ่านจาก Tab Fixture Index</p>
-              : <p className="text-xs text-amber-600">⚠ ยังไม่มีข้อมูล — เปิด Tab Fixture Index เพื่อโหลด</p>
-            }
+        {/* Header */}
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
+          <div className="bg-gradient-to-br from-pink-50 to-orange-50 rounded-lg p-2 flex-shrink-0">
+            <FileSpreadsheet className="w-6 h-6 text-[#E91E8C]" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-slate-800">TO BE Mini New&amp;Renovate Report Filler</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              อัปโหลด 5 ไฟล์ · ข้อมูล Fixture Index โหลดอัตโนมัติจาก Tab Fixture Index
+            </p>
           </div>
         </div>
-      </div>
 
-      {/* Action */}
-      {status !== "processing" && (
-        <div className="flex gap-3">
-          <button onClick={handleProcess} disabled={!canProcess}
-            className="flex items-center gap-2 px-8 py-3 rounded-xl font-bold text-sm
-              bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-sm hover:shadow-md
-              disabled:opacity-40 disabled:cursor-not-allowed transition-all">
-            ⚡ Build New&amp;Renovate Report
-          </button>
-          {(status === "done" || status === "error" || status === "preview") && (
-            <button onClick={handleReset}
-              className="px-6 py-3 rounded-xl font-semibold text-sm border border-pink-200 text-[#d41679] hover:bg-pink-50 transition-all">
-              เริ่มใหม่
+        {/* Upload zones */}
+        <div className="space-y-2">
+          {slot(1, "Template New&Renovate Report.xlsx", "ไฟล์ output — มี sheet New&Exsiting For Oder / New for Link_IM", targetFile,  setTargetFile,  ".xlsx")}
+          {slot(2, "QRY_Product by POG by Position",   "ข้อมูลตั้งต้น — BARCODE · SEGMENT · LOCATION_ID · TOTAL_UNITS",            qryFile,      setQryFile,      ".xlsx,.xls")}
+          {slot(3, "DATA_SPACEMAN",                    "lookup DIVISION / PF03 / PF04 / PLANOGRAM — ต้องมี sheet QRY_Product_by_POG", spacemanFile, setSpacemanFile, ".xlsx,.xlsb,.xls")}
+          {slot(4, "Master Assortment Orderable",      "lookup SALE PACK CODE · Pack Size · Extra info",                              masterFile,   setMasterFile,   ".xlsx,.xls")}
+          {slot(5, "FILE INDEX",                       "lookup Status · Store — join by PLANOGRAM",                                   indexFile,    setIndexFile,    ".xlsx,.xls")}
+          <div className={`rounded-xl border flex items-center gap-3 px-4 py-3 ${
+            fixtureRows.length > 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"
+          }`}>
+            <span className={`w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 ${
+              fixtureRows.length > 0 ? "bg-[#72BF44]" : "bg-amber-400"
+            }`}>6</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-slate-700">Fixture Index</p>
+              {fixtureRows.length > 0
+                ? <p className="text-xs text-green-600 font-medium">✓ โหลดแล้ว {fixtureRows.length.toLocaleString()} rows — อ่านจาก Tab Fixture Index</p>
+                : <p className="text-xs text-amber-600">⚠ ยังไม่มีข้อมูล — เปิด Tab Fixture Index เพื่อโหลด</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* Action */}
+        {status !== "processing" && (
+          <div className="flex gap-3">
+            <button onClick={handleProcess} disabled={!canProcess}
+              className="flex items-center gap-2 px-8 py-3 rounded-xl font-bold text-sm
+                bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-sm hover:shadow-md
+                disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+              ⚡ Build New&amp;Renovate Report
             </button>
-          )}
-        </div>
-      )}
-
-      {/* Progress */}
-      {status === "processing" && (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="animate-spin rounded-full h-5 w-5 border-2 border-pink-200 border-t-[#E91E8C] flex-shrink-0" />
-            <p className="text-slate-600 font-medium text-sm">{statusMsg}</p>
+            {(status === "done" || status === "error" || status === "preview") && (
+              <button onClick={handleReset}
+                className="px-6 py-3 rounded-xl font-semibold text-sm border border-pink-200 text-[#d41679] hover:bg-pink-50 transition-all">
+                เริ่มใหม่
+              </button>
+            )}
           </div>
-          <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
-            <div className="h-2.5 rounded-full transition-all duration-500 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
-              style={{ width: `${pct}%` }} />
-          </div>
-          <p className="text-xs text-slate-400 text-right">{pct}%</p>
-        </div>
-      )}
+        )}
 
-      {/* Error */}
-      {status === "error" && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm">
-          ❌ {errorMsg}
-        </div>
-      )}
+        {/* Progress */}
+        {status === "processing" && (
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="animate-spin rounded-full h-5 w-5 border-2 border-pink-200 border-t-[#E91E8C] flex-shrink-0" />
+              <p className="text-slate-600 font-medium text-sm">{statusMsg}</p>
+            </div>
+            <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+              <div className="h-2.5 rounded-full transition-all duration-500 bg-gradient-to-r from-[#E91E8C] via-[#F15A22] to-[#FFD100]"
+                style={{ width: `${pct}%` }} />
+            </div>
+            <p className="text-xs text-slate-400 text-right">{pct}%</p>
+          </div>
+        )}
+
+        {/* Error */}
+        {status === "error" && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-red-700 text-sm">
+            ❌ {errorMsg}
+          </div>
+        )}
 
       </div>
 
@@ -374,7 +419,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
         <div className="px-6 pt-4 pb-6">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
 
-          {/* Header */}
+          {/* Panel header */}
           <div className="px-5 pt-5 pb-4 border-b border-slate-100">
             <h3 className="text-sm font-bold text-slate-700">ตรวจสอบข้อมูลก่อนดาวน์โหลด</h3>
             <p className="text-xs text-slate-400 mt-0.5">
@@ -385,10 +430,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             <div className="flex flex-wrap gap-2 mt-3">
               {(
                 [
-                  ["EXISTING",  countByStatus.EXISTING,               "emerald"] ,
-                  ["NEW EXPAND",countByStatus["NEW EXPAND"],          "blue"]    ,
-                  ["DELETE",    countByStatus.DELETE,                  "red"]     ,
-                  ["ไม่พบใน INDEX", previewData.unmatchedPlanograms.length, "amber"],
+                  ["EXISTING",       countByStatus.EXISTING,               "emerald"],
+                  ["NEW EXPAND",     countByStatus["NEW EXPAND"],          "blue"],
+                  ["DELETE",         countByStatus.DELETE,                  "red"],
+                  ["ไม่พบใน INDEX",  previewData.unmatchedPlanograms.length, "amber"],
                 ] as const
               ).map(([label, count, color]) => {
                 const colorCls = {
@@ -416,7 +461,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             ).map(({ key, label }) => (
               <button
                 key={key}
-                onClick={() => setPreviewTab(key)}
+                onClick={() => { setPreviewTab(key); clearSearch(); }}
                 className={`px-5 py-3 text-xs font-semibold transition-colors border-b-2 -mb-px ${
                   previewTab === key
                     ? "border-[#E91E8C] text-[#E91E8C] bg-white"
@@ -432,8 +477,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
           {previewTab === "compare" && (
             <>
               {/* Status filter */}
-              <div className="flex gap-1.5 px-5 py-3 border-b border-slate-100 bg-slate-50/30">
-                <span className="text-[10px] text-slate-400 font-medium self-center mr-1">Filter:</span>
+              <div className="flex items-center gap-1.5 px-5 py-3 border-b border-slate-100 bg-slate-50/30">
+                <span className="text-[10px] text-slate-400 font-medium mr-1 whitespace-nowrap">Filter:</span>
                 {(["ALL", "EXISTING", "NEW EXPAND", "DELETE"] as StatusFilter[]).map(f => {
                   const active = statusFilter === f;
                   const activeCls: Record<StatusFilter, string> = {
@@ -446,7 +491,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                     <button
                       key={f}
                       onClick={() => setStatusFilter(f)}
-                      className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold transition-all ${
+                      className={`text-[10px] px-2.5 py-1 rounded-full border font-semibold transition-all whitespace-nowrap ${
                         active ? activeCls[f] : "bg-white text-slate-400 border-slate-200 hover:border-slate-300 hover:text-slate-600"
                       }`}
                     >
@@ -454,56 +499,114 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                     </button>
                   );
                 })}
-                {filteredRows.length !== previewData.rows.length && (
-                  <span className="ml-auto text-[10px] text-slate-400 self-center tabular-nums">
-                    {filteredRows.length.toLocaleString()} rows
-                  </span>
-                )}
+                <span className="ml-auto text-[10px] text-slate-400 tabular-nums whitespace-nowrap">
+                  {filteredRows.length.toLocaleString()} barcodes
+                  {(srchBarcode || srchPlanogram || srchStoreA || srchStoreB) && (
+                    <button onClick={clearSearch} className="ml-2 text-pink-400 hover:text-pink-600 font-semibold">
+                      ล้าง search
+                    </button>
+                  )}
+                </span>
               </div>
 
               {/* Table */}
-              <div className="overflow-auto" style={{ maxHeight: "60vh" }}>
+              <div className="overflow-auto" style={{ maxHeight: "62vh" }}>
                 <table className="w-full text-xs border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 font-semibold text-[11px] sticky top-0 z-10">
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 w-36">BARCODE</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200">PLANOGRAM NAME</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 w-36">AS IS Stores</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 w-36">TO BE Stores</th>
-                      <th className="px-4 py-2.5 text-left border-b border-slate-200 w-28">STATUS</th>
+                    {/* Column labels */}
+                    <tr className="bg-slate-50 text-slate-500 font-semibold text-[11px]">
+                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-40">BARCODE</th>
+                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20">PLANOGRAM NAME</th>
+                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-36">AS IS Store</th>
+                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-36">TO BE Store</th>
+                      <th className="px-4 py-2.5 text-left border-b border-slate-200 sticky top-0 bg-slate-50 z-20 w-28">STATUS</th>
+                    </tr>
+                    {/* Search inputs */}
+                    <tr className="bg-white border-b border-slate-100">
+                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
+                        <SearchInput value={srchBarcode} onChange={setSrchBarcode} placeholder="ค้นหา barcode…" />
+                      </th>
+                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
+                        <SearchInput value={srchPlanogram} onChange={setSrchPlanogram} placeholder="ค้นหา planogram…" />
+                      </th>
+                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
+                        <SearchInput value={srchStoreA} onChange={setSrchStoreA} placeholder="ค้นหา store…" />
+                      </th>
+                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20">
+                        <SearchInput value={srchStoreB} onChange={setSrchStoreB} placeholder="ค้นหา store…" />
+                      </th>
+                      <th className="px-3 pb-2 pt-1 sticky top-[37px] bg-white z-20" />
                     </tr>
                   </thead>
                   <tbody>
                     {filteredRows.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="px-4 py-8 text-center text-slate-400 text-xs">
-                          ไม่มีข้อมูล
+                        <td colSpan={5} className="px-4 py-10 text-center text-slate-400 text-xs">
+                          ไม่พบข้อมูลที่ตรงกับ filter / search
                         </td>
                       </tr>
                     )}
-                    {filteredRows.slice(0, 1000).map((row, idx) => (
-                      <tr
-                        key={row.barcode}
-                        className={`border-t border-slate-100 hover:bg-slate-50/80 transition-colors ${
-                          idx % 2 === 0 ? "" : "bg-slate-50/40"
-                        }`}
-                      >
-                        <td className="px-4 py-2 font-mono text-slate-700 text-[11px] whitespace-nowrap">{row.barcode}</td>
-                        <td className="px-4 py-2 text-slate-600 max-w-[180px]">
-                          <span className="block truncate" title={row.planograms.join(", ")}>
-                            {row.planograms.join(", ")}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2"><StoreList stores={row.storesA} /></td>
-                        <td className="px-4 py-2"><StoreList stores={row.storesB} /></td>
-                        <td className="px-4 py-2"><StatusPill status={row.status} /></td>
-                      </tr>
-                    ))}
+                    {filteredRows.slice(0, 1000).flatMap((row) => {
+                      const merged = mergeStores(row.storesA, row.storesB);
+                      return merged.map((sr, idx) => (
+                        <tr
+                          key={`${row.barcode}-${idx}`}
+                          className={`hover:bg-pink-50/20 transition-colors ${
+                            idx === 0 ? "border-t-2 border-slate-200" : "border-t border-slate-100"
+                          }`}
+                        >
+                          {/* BARCODE — first store row only, rowspan covers all store rows */}
+                          {idx === 0 && (
+                            <td
+                              rowSpan={merged.length}
+                              className="px-4 py-2 font-mono text-slate-700 text-[11px] whitespace-nowrap align-top"
+                            >
+                              {row.barcode}
+                            </td>
+                          )}
+                          {/* PLANOGRAM NAME — first store row only */}
+                          {idx === 0 && (
+                            <td
+                              rowSpan={merged.length}
+                              className="px-4 py-2 text-slate-600 align-top"
+                            >
+                              <span
+                                className="block text-xs leading-snug"
+                                title={row.planograms.join(", ")}
+                              >
+                                {row.planograms.join(", ")}
+                              </span>
+                            </td>
+                          )}
+                          {/* AS IS store */}
+                          <td className="px-4 py-1.5 tabular-nums text-xs">
+                            {sr.storeA
+                              ? <span className="text-slate-700 font-medium">{sr.storeA}</span>
+                              : <span className="text-slate-200">—</span>}
+                          </td>
+                          {/* TO BE store */}
+                          <td className="px-4 py-1.5 tabular-nums text-xs">
+                            {sr.storeB
+                              ? <span className="text-slate-700 font-medium">{sr.storeB}</span>
+                              : <span className="text-slate-200">—</span>}
+                          </td>
+                          {/* STATUS — first store row only */}
+                          {idx === 0 && (
+                            <td
+                              rowSpan={merged.length}
+                              className="px-4 py-2 align-top"
+                            >
+                              <StatusPill status={row.status} />
+                            </td>
+                          )}
+                        </tr>
+                      ));
+                    })}
                   </tbody>
                 </table>
                 {filteredRows.length > 1000 && (
                   <div className="px-5 py-3 text-center text-[11px] text-slate-400 border-t border-slate-100">
-                    แสดง 1,000 จาก {filteredRows.length.toLocaleString()} rows
+                    แสดง 1,000 จาก {filteredRows.length.toLocaleString()} barcodes — ใช้ search เพื่อกรองข้อมูล
                   </div>
                 )}
               </div>
@@ -512,7 +615,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
           {/* ── Tab: Unmatched Planograms ────────────────────────────────────── */}
           {previewTab === "unmatched" && (
-            <div className="p-5" style={{ maxHeight: 460, overflow: "auto" }}>
+            <div className="p-5" style={{ maxHeight: "60vh", overflow: "auto" }}>
               {previewData.unmatchedPlanograms.length === 0 ? (
                 <div className="flex items-center gap-2 text-emerald-600 text-sm font-medium">
                   <span className="text-base">✓</span>
