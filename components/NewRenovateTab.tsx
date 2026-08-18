@@ -373,11 +373,18 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
+  const isPreview = status === "preview" && !!previewData;
+
   return (
     <div className="w-full">
+      <div className={isPreview ? "flex gap-4 px-4 pt-4 pb-6 items-start" : ""}>
 
-      {/* ── Constrained: header, uploads, action, progress, error ── */}
-      <div className="max-w-2xl mx-auto px-6 pt-6 space-y-4">
+      {/* ── Upload panel — sidebar in preview, centred block otherwise ── */}
+      <div className={
+        isPreview
+          ? "w-72 flex-shrink-0 self-start sticky top-4 space-y-3 overflow-y-auto max-h-[calc(100vh-2rem)]"
+          : "max-w-2xl mx-auto px-6 pt-6 space-y-4"
+      }>
 
         {/* Header */}
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
@@ -416,17 +423,19 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
         {/* Action buttons */}
         {status !== "processing" && (
-          <div className="flex gap-3">
+          <div className={isPreview ? "flex flex-col gap-2" : "flex gap-3"}>
             <button onClick={handleProcess} disabled={!canProcess}
-              className="flex items-center gap-2 px-8 py-3 rounded-xl font-bold text-sm
+              className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm
                 bg-gradient-to-r from-[#E91E8C] to-[#F15A22] text-white shadow-sm hover:shadow-md
-                disabled:opacity-40 disabled:cursor-not-allowed transition-all">
+                disabled:opacity-40 disabled:cursor-not-allowed transition-all
+                ${isPreview ? "w-full px-4" : "px-8"}`}>
               ⚡ Build New&amp;Renovate Report
             </button>
             {(status === "done" || status === "error" || status === "preview") && (
               <button onClick={handleReset}
-                className="px-6 py-3 rounded-xl font-semibold text-sm border border-pink-200
-                  text-[#d41679] hover:bg-pink-50 transition-all">
+                className={`py-3 rounded-xl font-semibold text-sm border border-pink-200
+                  text-[#d41679] hover:bg-pink-50 transition-all
+                  ${isPreview ? "w-full px-4" : "px-6"}`}>
                 เริ่มใหม่
               </button>
             )}
@@ -457,9 +466,9 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
       </div>
 
-      {/* ── Preview Panel — full viewport width ─────────────────────────────────── */}
-      {status === "preview" && previewData && (
-        <div className="px-6 pt-4 pb-6">
+      {/* ── Preview Panel — flex-1 in sidebar layout ─────────────────────────────── */}
+      {isPreview && (
+        <div className="flex-1 min-w-0">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
 
           {/* Panel header */}
@@ -714,6 +723,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
         </div>
         </div>
       )}
+
+      </div>{/* end flex/block container */}
 
       {/* ── Results + Download (status === "done") ─────────────────────────────── */}
       {status === "done" && stats && (
