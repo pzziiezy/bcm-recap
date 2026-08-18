@@ -1098,6 +1098,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // Group B = stores with TO BE value for this planogram (existingStores + newStores).
     const groupA: GroupEntry[] = [];
     const groupB: GroupEntry[] = [];
+    const unmatchedPlanograms = new Set<string>(); // QRY planograms not found in INDEX
 
     for (let i = 0; i < qryRows.length; i++) {
       const qry = qryRows[i];
@@ -1110,7 +1111,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
         : undefined;
 
-      if (!idxEntry) continue;
+      if (!idxEntry) { if (qry.planogram) unmatchedPlanograms.add(qry.planogram); continue; }
 
       const fixtureKey  = qry.segment && planogram ? `${qry.segment}|${planogram}` : "";
       const fixtureCode = fixtureKey ? (fixtureMap.get(fixtureKey) ?? "") : "";
@@ -1135,6 +1136,27 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // The store in each group entry is used only when filling the report rows.
     const setA = new Set(groupA.map(e => e.barcode));
     const setB = new Set(groupB.map(e => e.barcode));
+
+    // ── Build Preview Data ────────────────────────────────────────────────────
+    type PreviewRow = { barcode: string; planograms: string[]; storesA: string[]; storesB: string[]; status: "EXISTING" | "NEW EXPAND" | "DELETE" };
+    const prevMap = new Map<string, { planograms: Set<string>; storesA: Set<string>; storesB: Set<string> }>();
+    const ensurePrev = (bc: string) => {
+      if (!prevMap.has(bc)) prevMap.set(bc, { planograms: new Set(), storesA: new Set(), storesB: new Set() });
+      return prevMap.get(bc)!;
+    };
+    for (const e of groupA) { const r = ensurePrev(e.barcode); r.planograms.add(e.qry.planogram); r.storesA.add(e.storeVal); }
+    for (const e of groupB) { const r = ensurePrev(e.barcode); r.planograms.add(e.qry.planogram); r.storesB.add(e.storeVal); }
+    const nsort = (a: string, b: string): number => { const na = +a, nb = +b; return isFinite(na) && isFinite(nb) ? na - nb : a.localeCompare(b); };
+    const previewRows: PreviewRow[] = [...prevMap.entries()].map(([barcode, r]) => {
+      const inA = r.storesA.size > 0, inB = r.storesB.size > 0;
+      return {
+        barcode,
+        planograms: [...r.planograms].sort(),
+        storesA:    [...r.storesA].sort(nsort),
+        storesB:    [...r.storesB].sort(nsort),
+        status:     (inA && inB) ? "EXISTING" : inA ? "DELETE" : "NEW EXPAND",
+      };
+    });
 
     // ── Phase 3: Process Group B → Sheet 1 (EXISTING + NEW EXPAND) & Sheet 2 (NEW EXPAND) ──
     for (const bEntry of groupB) {
@@ -1323,6 +1345,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         type: "done",
         buffer: output,
         stats: { total: qryRows.length, matchedSpaceman, matchedMaster, matchedIndex, matchedFixture, masterMapSize: masterMap.size, masterSheetName },
+        preview: { rows: previewRows, unmatchedPlanograms: [...unmatchedPlanograms].sort() },
       },
       [output],
     );
