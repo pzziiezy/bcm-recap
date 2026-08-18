@@ -240,14 +240,6 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     });
   }, [filteredRows, displayLimit]);
 
-  const countByStatus = useMemo(() => {
-    if (!previewData) return { EXISTING: 0, "NEW EXPAND": 0, DELETE: 0 };
-    return previewData.rows.reduce(
-      (acc, r) => { acc[r.status]++; return acc; },
-      { EXISTING: 0, "NEW EXPAND": 0, DELETE: 0 } as Record<PreviewRow["status"], number>,
-    );
-  }, [previewData]);
-
   // ── Filter/search helpers (all transitions) ────────────────────────────────
   const applyFilter = (f: StatusFilter) => {
     startTransition(() => { setStatusFilter(f); setDisplayLimit(DISPLAY_LIMIT_INIT); });
@@ -473,28 +465,6 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             <p className="text-xs text-slate-400 mt-0.5">
               ตรวจสอบ comparison ระหว่าง AS IS และ TO BE แล้วกดยืนยันเพื่อ download Report
             </p>
-            <div className="flex flex-wrap gap-2 mt-3">
-              {(
-                [
-                  ["EXISTING",      countByStatus.EXISTING,                "emerald"],
-                  ["NEW EXPAND",    countByStatus["NEW EXPAND"],           "blue"],
-                  ["DELETE",        countByStatus.DELETE,                   "red"],
-                  ["ไม่พบใน INDEX", previewData.unmatchedPlanograms.length, "amber"],
-                ] as const
-              ).map(([label, count, color]) => {
-                const colorCls = {
-                  emerald: "bg-emerald-50 text-emerald-700 border border-emerald-200",
-                  blue:    "bg-blue-50 text-blue-700 border border-blue-200",
-                  red:     "bg-red-50 text-red-600 border border-red-200",
-                  amber:   "bg-amber-50 text-amber-700 border border-amber-200",
-                }[color];
-                return (
-                  <span key={label} className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${colorCls}`}>
-                    {label}: <span className="tabular-nums">{count.toLocaleString()}</span>
-                  </span>
-                );
-              })}
-            </div>
           </div>
 
           {/* Tabs */}
