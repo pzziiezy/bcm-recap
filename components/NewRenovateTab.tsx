@@ -197,11 +197,9 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     let rows = previewData.rows;
     if (activeFilters.size > 0) {
       rows = rows.filter(r => {
-        if (activeFilters.has("NEW EXPAND") &&
-            (r.status === "NEW EXPAND" || r.storesB.some(s => !r.storesA.includes(s)))) return true;
-        if (activeFilters.has("DELETE") &&
-            (r.status === "DELETE" || r.storesA.some(s => !r.storesB.includes(s)))) return true;
-        if (activeFilters.has("EXISTING") && r.status === "EXISTING") return true;
+        if (activeFilters.has("EXISTING")   && r.status === "EXISTING")   return true;
+        if (activeFilters.has("NEW EXPAND") && r.status === "NEW EXPAND") return true;
+        if (activeFilters.has("DELETE")     && r.status === "DELETE")     return true;
         return false;
       });
     }
@@ -380,10 +378,10 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
       <div className="flex gap-4 px-4 pt-2 pb-6 items-stretch">
 
       {/* ── Upload panel — left sidebar ── */}
-      <div className="w-80 flex-shrink-0 space-y-3">
+      <div className="w-96 flex-shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 flex flex-col gap-3">
 
         {/* Header */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
+        <div className="flex items-center gap-3 pb-3 border-b border-slate-100">
           <div className="bg-gradient-to-br from-pink-50 to-orange-50 rounded-lg p-2 flex-shrink-0">
             <FileSpreadsheet className="w-6 h-6 text-[#E91E8C]" />
           </div>
@@ -588,13 +586,13 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                       >
                         {/* BARCODE — rowspan */}
                         {idx === 0 && (
-                          <td rowSpan={total} className="px-3 py-2 font-mono text-slate-700 text-[11px] whitespace-nowrap align-top">
+                          <td rowSpan={total} className="px-3 py-2 font-mono text-slate-700 text-xs whitespace-nowrap align-top">
                             {row.barcode}
                           </td>
                         )}
                         {/* NAME — rowspan */}
                         {idx === 0 && (
-                          <td rowSpan={total} className="px-3 py-2 text-slate-600 align-top text-[11px] leading-snug">
+                          <td rowSpan={total} className="px-3 py-2 text-slate-600 align-top text-xs leading-snug">
                             {row.name || <span className="text-slate-200">—</span>}
                           </td>
                         )}
