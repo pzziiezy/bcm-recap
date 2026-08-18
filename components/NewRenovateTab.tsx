@@ -287,7 +287,9 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-2xl mx-auto p-6 space-y-4">
+    <div className="w-full">
+
+      <div className="max-w-2xl mx-auto px-6 pt-6 space-y-4">
 
       {/* Header */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 flex items-center gap-3">
@@ -365,8 +367,11 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
         </div>
       )}
 
-      {/* ── Preview Panel ─────────────────────────────────────────────────────── */}
+      </div>
+
+      {/* ── Preview Panel — full viewport width ───────────────────────────────── */}
       {status === "preview" && previewData && (
+        <div className="px-6 pt-4 pb-6">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
 
           {/* Header */}
@@ -457,8 +462,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
               </div>
 
               {/* Table */}
-              <div className="overflow-auto" style={{ maxHeight: 420 }}>
-                <table className="w-full text-xs border-collapse min-w-[560px]">
+              <div className="overflow-auto" style={{ maxHeight: "60vh" }}>
+                <table className="w-full text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-50 text-slate-500 font-semibold text-[11px] sticky top-0 z-10">
                       <th className="px-4 py-2.5 text-left border-b border-slate-200 w-36">BARCODE</th>
@@ -518,7 +523,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                   <p className="text-xs text-slate-500 mb-3">
                     PLANOGRAM NAME เหล่านี้ไม่พบในไฟล์ INDEX — ข้อมูลจาก QRY row เหล่านั้นจะไม่ถูก fill ใน report
                   </p>
-                  <div className="grid grid-cols-2 gap-1.5">
+                  <div className="grid grid-cols-3 gap-1.5">
                     {previewData.unmatchedPlanograms.map(p => (
                       <span
                         key={p}
@@ -547,11 +552,12 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             </button>
           </div>
         </div>
+        </div>
       )}
 
       {/* Results + Download */}
       {status === "done" && stats && (
-        <div className="space-y-4">
+        <div className="max-w-2xl mx-auto px-6 pb-6 space-y-4">
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
             <p className="text-xs font-bold text-slate-500 mb-4 uppercase tracking-wide">ผลการ Lookup</p>
             <div className="grid grid-cols-5 gap-3">
