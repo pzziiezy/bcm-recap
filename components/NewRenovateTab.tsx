@@ -195,8 +195,18 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   const filteredRows = useMemo<PreviewRow[]>(() => {
     if (!previewData) return [];
     let rows = previewData.rows;
-    if (statusFilter !== "ALL")
-      rows = rows.filter(r => r.status === statusFilter);
+    if (statusFilter === "NEW EXPAND")
+      // Include pure NEW EXPAND barcodes AND EXISTING barcodes that have ≥1 new store
+      rows = rows.filter(r =>
+        r.status === "NEW EXPAND" || r.storesB.some(s => !r.storesA.includes(s)),
+      );
+    else if (statusFilter === "DELETE")
+      // Include pure DELETE barcodes AND EXISTING barcodes that lose ≥1 store
+      rows = rows.filter(r =>
+        r.status === "DELETE" || r.storesA.some(s => !r.storesB.includes(s)),
+      );
+    else if (statusFilter === "EXISTING")
+      rows = rows.filter(r => r.status === "EXISTING");
     if (srchBarcode.trim())
       rows = rows.filter(r => r.barcode.includes(srchBarcode.trim()));
     if (srchName.trim()) {
