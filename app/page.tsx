@@ -959,8 +959,12 @@ export default function Home() {
               />
             </div>
 
-            {/* New and Renovate tab */}
-            {view === "newrenovate" && <NewRenovateTab exceptionConfig={exceptionConfig} fixtureRows={fixtureRows} />}
+            {/* New and Renovate tab — negative margins cancel outer py-8 (32px) + space-y-8 (32px) */}
+            {view === "newrenovate" && (
+              <div className="-mx-6 -mt-16">
+                <NewRenovateTab exceptionConfig={exceptionConfig} fixtureRows={fixtureRows} />
+              </div>
+            )}
 
             {/* Fixture Index tab — always mounted so Drive data loads in background on page load */}
             <div className={view === "master" ? "" : "hidden"}>
