@@ -682,9 +682,13 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                     </p>
                     <button
                       onClick={handleExportUnmatched}
-                      className="flex-shrink-0 ml-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 text-xs font-medium whitespace-nowrap"
+                      className="flex-shrink-0 ml-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#217346] text-[#217346] hover:bg-green-50 text-xs font-medium whitespace-nowrap"
                     >
-                      <Download className="w-3.5 h-3.5" />
+                      <svg viewBox="0 0 20 20" className="w-3.5 h-3.5 flex-shrink-0" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="20" height="20" rx="3" fill="#217346"/>
+                        <path d="M4 5.5L7.5 10L4 14.5H6.5L9 10.75L11.5 14.5H14L10.5 10L14 5.5H11.5L9 9.25L6.5 5.5H4Z" fill="white"/>
+                        <rect x="14.5" y="5.5" width="1.5" height="9" fill="white"/>
+                      </svg>
                       Export Excel
                     </button>
                   </div>
