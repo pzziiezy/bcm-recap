@@ -1135,14 +1135,18 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
 
     // ── Compute unmatched planograms ─────────────────────────────────────────────
-    // QRY planograms that produced no entries in Group A or B (not found in INDEX,
-    // or found in INDEX but INDEX entry had no stores on either side)
-    const matchedPlanogramsInGroups = new Set<string>();
-    for (const e of groupA) matchedPlanogramsInGroups.add(e.qry.planogram);
-    for (const e of groupB) matchedPlanogramsInGroups.add(e.qry.planogram);
+    // INDEX planograms that have TO BE stores but are not found in QRY at all
+    const allQryPlanogramsNormalized = new Set<string>();
+    for (const p of allQryPlanograms) allQryPlanogramsNormalized.add(normalizeKey(p));
+
+    const seenIndexEntries = new Set<IndexEntry>();
     const unmatchedPlanograms = new Set<string>();
-    for (const p of allQryPlanograms) {
-      if (!matchedPlanogramsInGroups.has(p)) unmatchedPlanograms.add(p);
+    for (const entry of indexMap.values()) {
+      if (seenIndexEntries.has(entry)) continue; // skip duplicate normalized/uppercase keys
+      seenIndexEntries.add(entry);
+      if (entry.toBeStores.length > 0 && !allQryPlanogramsNormalized.has(normalizeKey(entry.planogramName))) {
+        unmatchedPlanograms.add(entry.planogramName);
+      }
     }
 
     // ── Phase 2: Build cross-group lookup sets ───────────────────────────────────

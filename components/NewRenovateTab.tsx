@@ -487,7 +487,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
           <div className="flex border-b border-slate-100 bg-slate-50/50">
             {([
               { key: "compare",   label: `Comparison (${previewData.rows.length.toLocaleString()} barcodes)` },
-              { key: "unmatched", label: `Planogram ไม่พบใน INDEX (${previewData.unmatchedPlanograms.length})` },
+              { key: "unmatched", label: `Planogram ใน INDEX TO BE ไม่พบใน QRY (${previewData.unmatchedPlanograms.length})` },
             ] as const).map(({ key, label }) => (
               <button
                 key={key}
@@ -672,13 +672,13 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
             <div className="p-5 overflow-auto" style={{ maxHeight: "60vh" }}>
               {previewData.unmatchedPlanograms.length === 0 ? (
                 <div className="flex items-center gap-2 text-emerald-600 text-sm font-medium">
-                  <span>✓</span> PLANOGRAM ทุกตัวพบในไฟล์ INDEX
+                  <span>✓</span> PLANOGRAM ทุกตัวใน INDEX TO BE พบในไฟล์ QRY ครบถ้วน
                 </div>
               ) : (
                 <>
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-xs text-slate-500">
-                      PLANOGRAM NAME เหล่านี้ไม่พบในไฟล์ INDEX — ข้อมูลจาก QRY row เหล่านั้นจะไม่ถูก fill ใน report
+                      PLANOGRAM NAME เหล่านี้มี TO BE Store ใน INDEX แต่ไม่พบข้อมูลใน QRY — สินค้าจะไม่ถูก fill ใน report สำหรับ planogram เหล่านี้
                     </p>
                     <button
                       onClick={handleExportUnmatched}
