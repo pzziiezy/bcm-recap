@@ -305,7 +305,6 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
         setStats(msg.stats);
         setPreviewData(msg.preview ?? null);
         setStatus(msg.preview ? "preview" : "done");
-        setStatusMsg("เสร็จสิ้น!"); setPct(100);
         worker.terminate(); workerRef.current = null;
       } else if (msg.type === "error") {
         setStatus("error"); setErrorMsg(msg.message);

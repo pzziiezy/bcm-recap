@@ -1098,7 +1098,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // Group B = stores with TO BE value for this planogram (existingStores + newStores).
     const groupA: GroupEntry[] = [];
     const groupB: GroupEntry[] = [];
-    const unmatchedPlanograms = new Set<string>(); // QRY planograms not found in INDEX
+
+    // Collect all unique QRY planogram names upfront (for unmatched computation after group build)
+    const allQryPlanograms = new Set<string>();
+    for (const qry of qryRows) { if (qry.planogram) allQryPlanograms.add(qry.planogram); }
 
     for (let i = 0; i < qryRows.length; i++) {
       const qry = qryRows[i];
@@ -1111,7 +1114,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         ? (indexMap.get(planogram) ?? indexMap.get(planogram.toUpperCase()))
         : undefined;
 
-      if (!idxEntry) { if (qry.planogram) unmatchedPlanograms.add(qry.planogram); continue; }
+      if (!idxEntry) { continue; }
 
       const fixtureKey  = qry.segment && planogram ? `${qry.segment}|${planogram}` : "";
       const fixtureCode = fixtureKey ? (fixtureMap.get(fixtureKey) ?? "") : "";
@@ -1129,6 +1132,17 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       for (const storeVal of idxEntry.toBeStores) {
         groupB.push({ barcode: qry.barcode, storeVal, qry, sm, master, productName, divisionVal, fixtureCode });
       }
+    }
+
+    // ── Compute unmatched planograms ─────────────────────────────────────────────
+    // QRY planograms that produced no entries in Group A or B (not found in INDEX,
+    // or found in INDEX but INDEX entry had no stores on either side)
+    const matchedPlanogramsInGroups = new Set<string>();
+    for (const e of groupA) matchedPlanogramsInGroups.add(e.qry.planogram);
+    for (const e of groupB) matchedPlanogramsInGroups.add(e.qry.planogram);
+    const unmatchedPlanograms = new Set<string>();
+    for (const p of allQryPlanograms) {
+      if (!matchedPlanogramsInGroups.has(p)) unmatchedPlanograms.add(p);
     }
 
     // ── Phase 2: Build cross-group lookup sets ───────────────────────────────────
