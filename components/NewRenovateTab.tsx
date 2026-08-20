@@ -256,6 +256,19 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
   };
   const hasSearch = !!(srchBarcode || srchName || srchPlanogram || srchStoreA || srchStoreB);
 
+  // ── Export unmatched planograms to Excel ───────────────────────────────────
+  const handleExportUnmatched = async () => {
+    if (!previewData || previewData.unmatchedPlanograms.length === 0) return;
+    const XLSX = await import("xlsx");
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["PLANOGRAM NAME"],
+      ...previewData.unmatchedPlanograms.map(p => [p]),
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Unmatched Planograms");
+    XLSX.writeFile(wb, "unmatched_planograms.xlsx");
+  };
+
   // ── Reset ──────────────────────────────────────────────────────────────────
   const handleReset = () => {
     workerRef.current?.terminate();
@@ -663,9 +676,18 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
                 </div>
               ) : (
                 <>
-                  <p className="text-xs text-slate-500 mb-3">
-                    PLANOGRAM NAME เหล่านี้ไม่พบในไฟล์ INDEX — ข้อมูลจาก QRY row เหล่านั้นจะไม่ถูก fill ใน report
-                  </p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs text-slate-500">
+                      PLANOGRAM NAME เหล่านี้ไม่พบในไฟล์ INDEX — ข้อมูลจาก QRY row เหล่านั้นจะไม่ถูก fill ใน report
+                    </p>
+                    <button
+                      onClick={handleExportUnmatched}
+                      className="flex-shrink-0 ml-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 text-xs font-medium whitespace-nowrap"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      Export Excel
+                    </button>
+                  </div>
                   <div className="grid grid-cols-3 gap-1.5">
                     {previewData.unmatchedPlanograms.map(p => (
                       <span key={p} className="text-xs px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-700 rounded-lg truncate" title={p}>
