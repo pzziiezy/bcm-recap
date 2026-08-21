@@ -29,7 +29,6 @@ import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
 import ResultsTable from "@/components/ResultsTable";
 import NewRenovateTab from "@/components/NewRenovateTab";
-import MasterTab from "@/components/MasterTab";
 import SpacemanMaster, {
   DriveFileInfo,
   formatDateTime,
@@ -73,7 +72,7 @@ const STEPS = [
 const MAX_CONCURRENT = 2;
 
 type Status = "idle" | "processing" | "done" | "error";
-type AppView = "main" | "spaceman" | "newrenovate" | "master";
+type AppView = "main" | "spaceman" | "newrenovate";
 type JobStatus = "queued" | "processing" | "done" | "failed" | "terminated" | "downloaded";
 
 interface BuildJob {
@@ -893,10 +892,6 @@ export default function Home() {
               <FileSpreadsheet className="w-4 h-4" />
               New and Renovate
             </TabBtn>
-            <TabBtn active={view === "master"} onClick={() => setView("master")}>
-              <Database className="w-4 h-4" />
-              Fixture Index
-            </TabBtn>
           </div>
           <div className="flex items-center gap-1">
             {/* Help button */}
@@ -962,11 +957,6 @@ export default function Home() {
                 <NewRenovateTab exceptionConfig={exceptionConfig} />
               </div>
             )}
-
-            {/* Fixture Index tab — always mounted so Drive data loads in background on page load */}
-            <div className={view === "master" ? "" : "hidden"}>
-              <MasterTab />
-            </div>
 
             {/* Main upload flow */}
             {view === "main" && (
