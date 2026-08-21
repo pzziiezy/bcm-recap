@@ -46,12 +46,13 @@ interface SpacemanEntry {
 }
 
 interface MasterEntry {
-  name:      string;
-  barSingle: string;
-  skuPack:   string;
-  extraInfo: string;
-  status:    string;
-  store:     string;
+  name:          string;
+  barSingle:     string;
+  barIngredient: string;
+  skuPack:       string;
+  extraInfo:     string;
+  status:        string;
+  store:         string;
 }
 
 interface IndexEntry {
@@ -668,8 +669,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     // ── single-pass: detect header then accumulate masterMap ──────────────────
     let mHdrRowNum  = -1;
-    let mBcCol      = -1;
-    let mBarSingleCol = -1;
+    let mBcCol            = -1;
+    let mBarSingleCol     = -1;
+    let mBarIngredientCol = -1;
     let mSkuPackCol   = -1;
     let mExtraCol     = -1;
     const mHdrCols: Record<number, string> = {};
@@ -690,7 +692,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         return -1;
       };
       mBcCol        = fmc("BARCODE","EAN","UPC");
-      mBarSingleCol = fmc("BAR_SINGLE","BAR_INGREDIENT","BARSINGLE","BARINGREDIENT","SALEPACKCODE","SALE_PACK_CODE");
+      mBarSingleCol     = fmc("BAR_SINGLE","BARSINGLE","SALEPACKCODE","SALE_PACK_CODE");
+      mBarIngredientCol = fmc("BAR_INGREDIENT","BARINGREDIENT");
       mSkuPackCol   = fmc("SKU_PACK","SKUPACK","PACK_SIZE","PACKSIZE","PACK SIZE","PACK");
       mExtraCol     = fmc("EXTRA_INFO","EXTRAINFO","EXTRA INFO","EXTRA","REMARK");
     };
@@ -734,12 +737,13 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (!key) continue;
       if (!masterMap.has(key)) {
         masterMap.set(key, {
-          name:      "",
-          barSingle: mBarSingleCol >= 0 ? (cells[mBarSingleCol] ?? "") : "",
-          skuPack:   mSkuPackCol   >= 0 ? (cells[mSkuPackCol]   ?? "") : "",
-          extraInfo: mExtraCol     >= 0 ? (cells[mExtraCol]     ?? "") : "",
-          status:    "",
-          store:     "",
+          name:          "",
+          barSingle:     mBarSingleCol     >= 0 ? (cells[mBarSingleCol]     ?? "") : "",
+          barIngredient: mBarIngredientCol >= 0 ? (cells[mBarIngredientCol] ?? "") : "",
+          skuPack:       mSkuPackCol       >= 0 ? (cells[mSkuPackCol]       ?? "") : "",
+          extraInfo:     mExtraCol         >= 0 ? (cells[mExtraCol]         ?? "") : "",
+          status:        "",
+          store:         "",
         });
       }
     }
@@ -1224,7 +1228,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       ss(PLOGNAME_COL,  bEntry.qry.planogram);
 
       if (bEntry.master) {
-        ss(SALEPACK_COL, bEntry.master.barSingle);
+        ss(SALEPACK_COL, bEntry.master.barSingle || bEntry.master.barIngredient);
         sn(PACKSIZE_COL, bEntry.master.skuPack);
         ss(EXTRA_COL,    bEntry.master.extraInfo);
       }
