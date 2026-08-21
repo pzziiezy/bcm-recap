@@ -942,12 +942,23 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           toBeStores:     [...toBeStores], // stores with TO BE value (existing + new)
         };
 
-        // Index by ALL POG NAME column values so any variant of planogram name matches
+        // Index by ALL POG NAME column values so any variant of planogram name matches.
+        // If planogram already exists, merge stores (handles multiple INDEX rows per planogram).
+        const mergeInto = (existing: IndexEntry, src: IndexEntry) => {
+          const u = (arr: string[], vals: string[]) => { for (const s of vals) if (!arr.includes(s)) arr.push(s); };
+          u(existing.asIsStores, src.asIsStores);
+          u(existing.toBeStores, src.toBeStores);
+          u(existing.existingStores, src.existingStores);
+          u(existing.newStores, src.newStores);
+          u(existing.deleteStores, src.deleteStores);
+        };
         for (const pog of pogNames) {
           if (!indexMap.has(pog)) {
             indexMap.set(pog, entry);
             const upper = pog.toUpperCase();
             if (!indexMap.has(upper)) indexMap.set(upper, entry);
+          } else {
+            mergeInto(indexMap.get(pog)!, entry);
           }
         }
       }
