@@ -214,9 +214,6 @@ export default function Home() {
   });
   const [spacemanLoaded, setSpacemanLoaded] = useState(false);
 
-  // Fixture Index data shared from MasterTab → NewRenovateTab
-  const [fixtureRows, setFixtureRows] = useState<Record<string, string>[]>([]);
-
   // Queue state (display only — heavy data lives in refs)
   const [jobs, setJobs] = useState<BuildJob[]>([]);
   const [queuePanelOpen, setQueuePanelOpen] = useState(false);
@@ -962,13 +959,13 @@ export default function Home() {
             {/* New and Renovate tab — negative margins cancel outer py-8 (32px) + space-y-8 (32px) */}
             {view === "newrenovate" && (
               <div className="-mx-6 -mt-16">
-                <NewRenovateTab exceptionConfig={exceptionConfig} fixtureRows={fixtureRows} />
+                <NewRenovateTab exceptionConfig={exceptionConfig} />
               </div>
             )}
 
             {/* Fixture Index tab — always mounted so Drive data loads in background on page load */}
             <div className={view === "master" ? "" : "hidden"}>
-              <MasterTab onFixtureDataLoad={(rows) => setFixtureRows(rows)} />
+              <MasterTab />
             </div>
 
             {/* Main upload flow */}

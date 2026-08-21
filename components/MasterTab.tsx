@@ -22,11 +22,7 @@ function formatDateTime(isoString: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-interface Props {
-  onFixtureDataLoad?: (rows: DataRow[], headers: string[]) => void;
-}
-
-export default function MasterTab({ onFixtureDataLoad }: Props) {
+export default function MasterTab() {
   // File meta
   const [latestFile, setLatestFile] = useState<DriveFileInfo | null>(null);
   const [loadingMeta, setLoadingMeta] = useState(true);
@@ -167,7 +163,7 @@ export default function MasterTab({ onFixtureDataLoad }: Props) {
       setSheetUsed(targetSheet);
       setHeaders(hdrs);
       setTableData(raw);
-      onFixtureDataLoad?.(raw, hdrs);
+      // fixture data is now uploaded directly in NewRenovateTab
       setParseProgress(100);
     } catch (err) {
       setDataError(String(err));

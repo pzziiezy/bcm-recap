@@ -29,7 +29,7 @@ type InMsg = {
   spacemanBuf: ArrayBuffer;
   masterBuf:   ArrayBuffer;
   indexBuf:    ArrayBuffer;
-  fixtureRows: Record<string, string>[];  // pre-parsed rows from Fixture Index tab
+  fixtureBuf:  ArrayBuffer | undefined;   // Fixture Index file buffer (optional)
   exceptionConfig: ExceptionConfig[];
 };
 
@@ -353,7 +353,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
   if (e.data.type !== "run") return;
 
   try {
-    const { targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureRows, exceptionConfig } = e.data;
+    const { targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf, exceptionConfig } = e.data;
     // ── 1. QRY → ordered row list ─────────────────────────────────────────────
     progress(3, "อ่านไฟล์ QRY_Product_by_POG_by_Position...");
 
@@ -965,15 +965,25 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     }
     progress(55, `INDEX: ${Math.ceil(indexMap.size / 2)} planograms (asisRow=${asisToBeRow} AS IS cols=${asIsColumns.size} TO BE cols=${toBeColumns.size})`);
 
-    // ── 5. Fixture Index → map by "SEG|POG" (pre-parsed rows from Fixture Index tab) ──
+    // ── 5. Fixture Index → parse uploaded file and map by "SEG|POG" ──────────
     progress(57, "สร้าง Fixture Index map...");
 
     const fixtureMap = new Map<string, string>();
-    for (const row of fixtureRows) {
-      const seg  = normalizeKey(String(row["SEG"]          ?? ""));
-      const pog  = normalizeKey(String(row["POG"]          ?? ""));
-      const code = String(row["Code Fixture"] ?? "").trim();
-      if (seg && pog && code) fixtureMap.set(`${seg}|${pog}`, code);
+    if (fixtureBuf) {
+      const fixtureWb = XLSX.read(new Uint8Array(fixtureBuf), { type: "array", cellText: false, cellHTML: false, cellNF: false, cellDates: false });
+      const fixtureSheet =
+        fixtureWb.SheetNames.find(n => n === "Fixture_2026") ??
+        fixtureWb.SheetNames.find(n => n.startsWith("Fixture")) ??
+        fixtureWb.SheetNames[0];
+      if (fixtureSheet) {
+        const fixtureRows = XLSX.utils.sheet_to_json<Record<string, string>>(fixtureWb.Sheets[fixtureSheet], { defval: "", range: 1 });
+        for (const row of fixtureRows) {
+          const seg  = normalizeKey(String(row["SEG"]          ?? ""));
+          const pog  = normalizeKey(String(row["POG"]          ?? ""));
+          const code = String(row["Code Fixture"] ?? "").trim();
+          if (seg && pog && code) fixtureMap.set(`${seg}|${pog}`, code);
+        }
+      }
     }
     progress(63, `Fixture Index: ${fixtureMap.size.toLocaleString()} SEG|POG entries`);
 

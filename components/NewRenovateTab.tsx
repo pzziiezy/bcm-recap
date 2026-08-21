@@ -38,7 +38,6 @@ type StatusKey  = "EXISTING" | "NEW EXPAND" | "DELETE";
 
 interface Props {
   exceptionConfig?: ExceptionConfig[];
-  fixtureRows?:     Record<string, string>[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -150,12 +149,13 @@ function SearchInput({ value, onChange, placeholder }: {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] }: Props) {
+export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
   const [targetFile,   setTargetFile]   = useState<File | null>(null);
   const [qryFile,      setQryFile]      = useState<File | null>(null);
   const [spacemanFile, setSpacemanFile] = useState<File | null>(null);
   const [masterFile,   setMasterFile]   = useState<File | null>(null);
   const [indexFile,    setIndexFile]    = useState<File | null>(null);
+  const [fixtureFile,  setFixtureFile]  = useState<File | null>(null);
 
   const [status,    setStatus]    = useState<ProcStatus>("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -188,7 +188,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
   const canProcess =
     !!targetFile && !!qryFile && !!spacemanFile &&
-    !!masterFile && !!indexFile &&
+    !!masterFile && !!indexFile && !!fixtureFile &&
     status !== "processing";
 
   // ── Filtered rows ──────────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     workerRef.current?.terminate();
     workerRef.current = null;
     setTargetFile(null); setQryFile(null); setSpacemanFile(null);
-    setMasterFile(null); setIndexFile(null);
+    setMasterFile(null); setIndexFile(null); setFixtureFile(null);
     setStatus("idle"); setStatusMsg(""); setPct(0);
     setStats(null); setErrorMsg(""); setPreviewData(null);
     setPreviewTab("compare"); setActiveFilters(new Set());
@@ -286,7 +286,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
 
   // ── Process ────────────────────────────────────────────────────────────────
   const handleProcess = async () => {
-    if (!targetFile || !qryFile || !spacemanFile || !masterFile || !indexFile) return;
+    if (!targetFile || !qryFile || !spacemanFile || !masterFile || !indexFile || !fixtureFile) return;
 
     setStatus("processing"); setStatusMsg("กำลังโหลดไฟล์..."); setPct(2);
     setErrorMsg(""); setStats(null); setPreviewData(null);
@@ -296,9 +296,9 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     setSrchStoreA(""); setSrchStoreB("");
     outputRef.current = null;
 
-    const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf] = await Promise.all([
+    const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf] = await Promise.all([
       targetFile.arrayBuffer(), qryFile.arrayBuffer(), spacemanFile.arrayBuffer(),
-      masterFile.arrayBuffer(), indexFile.arrayBuffer(),
+      masterFile.arrayBuffer(), indexFile.arrayBuffer(), fixtureFile.arrayBuffer(),
     ]);
 
     workerRef.current?.terminate();
@@ -333,8 +333,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
     };
 
     worker.postMessage(
-      { type: "run", targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureRows, exceptionConfig },
-      [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf],
+      { type: "run", targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf, exceptionConfig },
+      [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf],
     );
   };
 
@@ -400,7 +400,7 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
           <div>
             <h2 className="text-base font-bold text-slate-800">TO BE Mini New&amp;Renovate Report Filler</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              อัปโหลด 5 ไฟล์ · ข้อมูล Fixture Index โหลดอัตโนมัติจาก Tab Fixture Index
+              อัปโหลด 6 ไฟล์เพื่อสร้าง New&amp;Renovate Report
             </p>
           </div>
         </div>
@@ -411,20 +411,8 @@ export default function NewRenovateTab({ exceptionConfig = [], fixtureRows = [] 
           {slot(2, "QRY_Product by POG by Position",   "ข้อมูลตั้งต้น — BARCODE · SEGMENT · LOCATION_ID · TOTAL_UNITS",            qryFile,      setQryFile,      ".xlsx,.xls")}
           {slot(3, "DATA_SPACEMAN",                    "lookup DIVISION / PF03 / PF04 / PLANOGRAM — ต้องมี sheet QRY_Product_by_POG", spacemanFile, setSpacemanFile, ".xlsx,.xlsb,.xls")}
           {slot(4, "Master Assortment Orderable",      "lookup SALE PACK CODE · Pack Size · Extra info",                              masterFile,   setMasterFile,   ".xlsx,.xls")}
-          {slot(5, "FILE INDEX",                       "lookup Status · Store — join by PLANOGRAM",                                   indexFile,    setIndexFile,    ".xlsx,.xls")}
-          <div className={`rounded-xl border flex items-center gap-3 px-4 py-3 ${
-            fixtureRows.length > 0 ? "bg-green-50 border-green-200" : "bg-amber-50 border-amber-200"
-          }`}>
-            <span className={`w-5 h-5 rounded-full text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 ${
-              fixtureRows.length > 0 ? "bg-[#72BF44]" : "bg-amber-400"
-            }`}>6</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-slate-700">Fixture Index</p>
-              {fixtureRows.length > 0
-                ? <p className="text-xs text-green-600 font-medium">✓ โหลดแล้ว {fixtureRows.length.toLocaleString()} rows — อ่านจาก Tab Fixture Index</p>
-                : <p className="text-xs text-amber-600">⚠ ยังไม่มีข้อมูล — เปิด Tab Fixture Index เพื่อโหลด</p>}
-            </div>
-          </div>
+          {slot(5, "FILE INDEX",    "lookup Status · Store — join by PLANOGRAM",                    indexFile,   setIndexFile,   ".xlsx,.xls")}
+          {slot(6, "Fixture Index", "lookup Code Fixture — มี sheet Fixture_2026 หรือ Fixture*",    fixtureFile, setFixtureFile, ".xlsx,.xls")}
         </div>
 
         {/* Action buttons */}
