@@ -321,6 +321,42 @@ export function insertFillRows(
   return { sheetXml: result, newStrings: allStrings.slice(sstStrings.length) };
 }
 
+// ── Header-row auto-detection ─────────────────────────────────────────────────
+
+/**
+ * Find the Excel row number (1-based) whose cell at `markerCol` resolves to `markerText`
+ * (case-insensitive, trimmed) — used to auto-detect a template's header row instead of
+ * hardcoding an assumed row count. Counting legend/filler rows from a screenshot has
+ * proven unreliable (real templates can have extra blank/filter-only rows that don't
+ * show up clearly), so this lets the actual uploaded file tell us the truth every time,
+ * regardless of how many rows precede the header in a given template revision.
+ */
+export function findHeaderRowNum(
+  sheetXml: string,
+  sstStrings: string[],
+  markerCol: number,
+  markerText: string,
+  maxScanRows = 30
+): number | null {
+  const markerColLetter = colLetter(markerCol);
+  const target = markerText.trim().toLowerCase();
+  const rowRe = /<row r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
+  let m: RegExpExecArray | null;
+  while ((m = rowRe.exec(sheetXml)) !== null) {
+    const rowNum = +m[1];
+    if (rowNum > maxScanRows) break;
+    const cellRe = new RegExp(`<c r="${markerColLetter}${rowNum}"([^>]*)>([\\s\\S]*?)</c>`);
+    const cm = cellRe.exec(m[2]);
+    if (!cm) continue;
+    const vMatch = /<v>([^<]*)<\/v>/.exec(cm[2]);
+    if (!vMatch) continue;
+    const raw = decodeXml(vMatch[1]);
+    const value = /\bt="s"/.test(cm[1]) ? (sstStrings[+raw] ?? "") : raw;
+    if (value.trim().toLowerCase() === target) return rowNum;
+  }
+  return null;
+}
+
 // ── Replace a data-row region wholesale ───────────────────────────────────────
 
 /**

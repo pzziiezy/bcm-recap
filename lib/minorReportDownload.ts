@@ -13,18 +13,19 @@ export const MINOR_REPORT_SHEET_NAMES = {
 } as const;
 
 /**
- * Header-row count per sheet — verified against real screenshots of the actual
- * `TO BE_Minor Report.xlsx` template. NOT uniform across sheets, despite the original
- * context doc describing "4 header rows the same in all 3 sheets":
- *   - Recap_New_item:     5 rows — blank / "Pure" legend / "Mini" legend / col-number / header
- *   - Recap_New_not_link: 3 rows — ONE legend row (no separate Pure/Mini, no leading blank) / col-number / header
- *   - Recap_Delete_item:  4 rows — "Pure" legend / "Mini" legend / col-number / header (no leading blank)
- * Data starts immediately after, so dataStartRowIndex (0-based Excel row) == headerRowCount.
+ * Marker cell used to auto-detect each sheet's header row at build time (see
+ * xlsxPatch.ts's findHeaderRowNum()). Counting legend/filler rows from a screenshot
+ * has proven unreliable — real templates can have extra blank/filter-only rows that
+ * aren't obvious from a picture — so the header row is located by content, not by a
+ * hardcoded row count, and works regardless of how many rows precede it.
+ *
+ * Recap_New_item: column A is NOT a data column (holds "Pure"/"Mini" row labels for
+ * the legend rows only), so its marker is DIVISION in column B, not column A.
  */
-export const MINOR_REPORT_HEADER_ROW_COUNT: Record<string, number> = {
-  [MINOR_REPORT_SHEET_NAMES.newItem]: 5,
-  [MINOR_REPORT_SHEET_NAMES.newNotLink]: 3,
-  [MINOR_REPORT_SHEET_NAMES.deleteItem]: 4,
+export const MINOR_REPORT_HEADER_MARKER: Record<string, { col: number; text: string }> = {
+  [MINOR_REPORT_SHEET_NAMES.newItem]: { col: 1, text: "DIVISION" },
+  [MINOR_REPORT_SHEET_NAMES.newNotLink]: { col: 0, text: "UPC" },
+  [MINOR_REPORT_SHEET_NAMES.deleteItem]: { col: 0, text: "UPC" },
 };
 
 /**
@@ -33,8 +34,8 @@ export const MINOR_REPORT_HEADER_ROW_COUNT: Record<string, number> = {
  * text itself already lives in the uploaded template and is never touched.
  *
  * Recap_New_item: column A is NOT a data column — it only holds the "Pure"/"Mini" row
- * labels for rows 2/3, so real data starts at column B. Column J ("Pure Non POG") is a
- * hidden column in the template and intentionally always left blank (doc §4.1/§6).
+ * labels for the legend rows, so real data starts at column B. Column J ("Pure Non POG")
+ * is a hidden column in the template and intentionally always left blank (doc §4.1/§6).
  */
 const NEW_ITEM_COL_GETTERS: Array<(r: MinorReportNewItemRow) => string> = [
   () => "",                             // A — unused (holds the "Pure"/"Mini" row labels only)
@@ -80,13 +81,23 @@ const DELETE_ITEM_COL_GETTERS: Array<(r: MinorReportDeleteItemRow) => string> = 
   r => r.remark,       // I REMARK
 ];
 
-function toFillRows<T>(rows: T[], getters: Array<(r: T) => string>, dataStartRowIndex: number): FillRow[] {
+/** rowIndex here is RELATIVE (0, 1, 2, ...) — the real header row is only known once the
+ *  template is unzipped in the worker, so absolute row numbers are assigned there via
+ *  shiftFillRows(), not here. */
+function toFillRows<T>(rows: T[], getters: Array<(r: T) => string>): FillRow[] {
   return rows.map((row, i) => ({
-    rowIndex: dataStartRowIndex + i,
+    rowIndex: i,
     cells: getters
       .map((get, col) => ({ col, value: get(row) }))
       .filter(c => c.value !== ""),
   }));
+}
+
+/** Shifts relative FillRow.rowIndex values so they land right after the (now known)
+ *  detected header row. headerRowNum is 1-based (Excel row number); FillRow.rowIndex is
+ *  0-based (Excel row − 1), so the first data row's rowIndex == headerRowNum. */
+export function shiftFillRows(rows: FillRow[], headerRowNum: number): FillRow[] {
+  return rows.map(r => ({ ...r, rowIndex: r.rowIndex + headerRowNum }));
 }
 
 export interface MinorReportFillPlan {
@@ -97,17 +108,13 @@ export interface MinorReportFillPlan {
 
 /** Converts the reshaped Minor Report data into the FillRow[] shape the byte-patch
  *  worker (minorReportDownload.worker.ts) understands — one array per sheet, keyed
- *  by the exact sheet name expected in the uploaded template. */
+ *  by the exact sheet name expected in the uploaded template. Row numbers are still
+ *  relative at this point; the worker shifts them after detecting each sheet's real
+ *  header row (see shiftFillRows()). */
 export function buildMinorReportFillPlan(sheets: MinorReportSheets): MinorReportFillPlan {
   return {
-    [MINOR_REPORT_SHEET_NAMES.newItem]: toFillRows(
-      sheets.newItem, NEW_ITEM_COL_GETTERS, MINOR_REPORT_HEADER_ROW_COUNT[MINOR_REPORT_SHEET_NAMES.newItem]
-    ),
-    [MINOR_REPORT_SHEET_NAMES.newNotLink]: toFillRows(
-      sheets.newNotLink, NEW_NOT_LINK_COL_GETTERS, MINOR_REPORT_HEADER_ROW_COUNT[MINOR_REPORT_SHEET_NAMES.newNotLink]
-    ),
-    [MINOR_REPORT_SHEET_NAMES.deleteItem]: toFillRows(
-      sheets.deleteItem, DELETE_ITEM_COL_GETTERS, MINOR_REPORT_HEADER_ROW_COUNT[MINOR_REPORT_SHEET_NAMES.deleteItem]
-    ),
+    [MINOR_REPORT_SHEET_NAMES.newItem]: toFillRows(sheets.newItem, NEW_ITEM_COL_GETTERS),
+    [MINOR_REPORT_SHEET_NAMES.newNotLink]: toFillRows(sheets.newNotLink, NEW_NOT_LINK_COL_GETTERS),
+    [MINOR_REPORT_SHEET_NAMES.deleteItem]: toFillRows(sheets.deleteItem, DELETE_ITEM_COL_GETTERS),
   };
 }

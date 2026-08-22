@@ -8,6 +8,10 @@
  * this WIPES and rebuilds the data region of each sheet on every build — Minor Report is
  * fully regenerated from the current snapshot each time, so no row count assumption about
  * the template holds run to run. See xlsxPatch.ts's replaceDataRows() for why.
+ *
+ * The header row for each sheet is located by CONTENT (findHeaderRowNum), not by a
+ * hardcoded row count — counting legend/filler rows from a screenshot has already proven
+ * unreliable once, so the actual uploaded file is the only source of truth here.
  */
 
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
@@ -16,10 +20,11 @@ import {
   appendSST,
   buildSST,
   findSheetPath,
+  findHeaderRowNum,
   replaceDataRows,
 } from "./xlsxPatch";
 import type { MinorReportFillPlan } from "./minorReportDownload";
-import { MINOR_REPORT_SHEET_NAMES, MINOR_REPORT_HEADER_ROW_COUNT } from "./minorReportDownload";
+import { MINOR_REPORT_SHEET_NAMES, MINOR_REPORT_HEADER_MARKER, shiftFillRows } from "./minorReportDownload";
 
 const ctx = self as unknown as {
   postMessage(msg: unknown, transfer?: Transferable[]): void;
@@ -69,13 +74,20 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         if (!sheetPath || !files[sheetPath]) {
           throw new Error(`ไม่พบชีต "${sheetName}" ในไฟล์ template — ตรวจสอบว่าอัปโหลดไฟล์ TO BE_Minor Report.xlsx ที่ถูกต้อง`);
         }
-        const rows = msg.plan[sheetName as keyof MinorReportFillPlan];
-        const { sheetXml, newStrings } = replaceDataRows(
-          strFromU8(files[sheetPath]),
-          MINOR_REPORT_HEADER_ROW_COUNT[sheetName],
-          rows,
-          workingStrings
-        );
+        const sheetXmlRaw = strFromU8(files[sheetPath]);
+
+        const marker = MINOR_REPORT_HEADER_MARKER[sheetName];
+        const headerRowNum = findHeaderRowNum(sheetXmlRaw, workingStrings, marker.col, marker.text);
+        if (headerRowNum === null) {
+          throw new Error(
+            `หาแถวหัวตารางของชีต "${sheetName}" ไม่เจอ (มองหาคอลัมน์ ${marker.col + 1} = "${marker.text}") ` +
+            `— ตรวจสอบว่าอัปโหลดไฟล์ TO BE_Minor Report.xlsx ที่มีโครงสร้างถูกต้อง`
+          );
+        }
+
+        const relativeRows = msg.plan[sheetName as keyof MinorReportFillPlan];
+        const rows = shiftFillRows(relativeRows, headerRowNum);
+        const { sheetXml, newStrings } = replaceDataRows(sheetXmlRaw, headerRowNum, rows, workingStrings);
         files[sheetPath] = strToU8(sheetXml);
         workingStrings.push(...newStrings);
 
