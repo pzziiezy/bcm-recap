@@ -54,8 +54,13 @@ import {
   fillNewDeleteIM,
   fillNewSCM,
   fillDelSCM,
+  extractStoreFlags,
+  extractNewScmRowInfo,
+  extractDelScmRowInfo,
+  extractAttributeMap,
 } from "@/lib/processor";
-import type { ProcessedRow, ExceptionConfig, FilledData } from "@/lib/types";
+import type { ProcessedRow, ExceptionConfig, FilledData, IndexLookup, PipelineSnapshot } from "@/lib/types";
+import MinorReportTab from "@/components/MinorReportTab";
 import { makeEntry, sendLog } from "@/lib/logger";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -72,7 +77,7 @@ const STEPS = [
 const MAX_CONCURRENT = 2;
 
 type Status = "idle" | "processing" | "done" | "error";
-type AppView = "main" | "spaceman" | "newrenovate";
+type AppView = "main" | "spaceman" | "newrenovate" | "minorReport";
 type JobStatus = "queued" | "processing" | "done" | "failed" | "terminated" | "downloaded";
 
 interface BuildJob {
@@ -220,6 +225,9 @@ export default function Home() {
   // Refs — not in React state to avoid re-render overhead and serialization issues
   const recapBufRef = useRef<ArrayBuffer | null>(null);
   const checkSpacePlanRef = useRef<CheckSpaceFillPlan | null>(null);
+  // Minor Report reads this snapshot only — never recomputes, never touches handleProcess's
+  // own state. Populated once per run, right before setResults() below.
+  const pipelineSnapshotRef = useRef<PipelineSnapshot | null>(null);
   const sessionIdRef = useRef<string>("");
   const pageSessionRef = useRef(`page-${Date.now().toString(36)}`);
   const workersRef = useRef<Map<string, Worker>>(new Map());
@@ -499,6 +507,8 @@ export default function Home() {
       let csNdimRows: FillRow[] = [];
       let csNewScmRows: FillRow[] = [];
       let csDscmRows: FillRow[] = [];
+      // Captured for the Minor Report pipeline snapshot (assembled after processRows below)
+      let capturedIndexLookup: IndexLookup | null = null;
 
       checkSpacePlanRef.current = null;
       try {
@@ -507,6 +517,7 @@ export default function Home() {
           parseFileIndex(fileIndexFile),
           buildXlsbExtraInfoMap(xlsbFiles),
         ]);
+        capturedIndexLookup = indexLookup;
 
         sendLog([makeEntry(sessionId, "INDEX_PARSED", "INFO",
           `FILE_INDEX: ${indexLookup.storeList.length} stores, ${indexLookup.pogToByCode.size} POG→BY_CODE`,
@@ -632,6 +643,32 @@ export default function Home() {
         `เสร็จใน ${durSec}s — ยืนยัน ${cCount} | ไม่มี Planogram ${iCount} | จาก Spaceman ${sCount} | ไม่พบ ${nCount}`,
         { confirmed: cCount, inferred: iCount, fromSpaceman: sCount, notFound: nCount, durationSec: durSec }
       )]);
+
+      // ── Minor Report pipeline snapshot ──────────────────────────────────
+      // Read-only bundle for the Minor Report sub-tab. Assembled here (not inside
+      // Minor Report itself) because everything it needs — the enriched in-memory `wb`,
+      // barcodeMap/structureMap/planogramResult, indexLookup — only exists in this
+      // function's scope. Minor Report never re-parses a file or duplicates this logic.
+      if (capturedIndexLookup) {
+        const newScmWs = wb.Sheets[newScmActual] ?? ({} as XLSX.WorkSheet);
+        const dscmWs   = wb.Sheets[dscmActual]   ?? ({} as XLSX.WorkSheet);
+        const ndimWs   = wb.Sheets[ndimActual]   ?? ({} as XLSX.WorkSheet);
+        pipelineSnapshotRef.current = {
+          results: processed,
+          checkSpacePlan: checkSpacePlanRef.current,
+          indexLookup: capturedIndexLookup,
+          barcodeMap,
+          structureMap,
+          byUpc: planogramResult.byUpc,
+          newScmStoreFlags: extractStoreFlags(newScmWs, 3, 4, 3, 17),
+          delScmStoreFlags: extractStoreFlags(dscmWs, 4, 5, 3, 14),
+          newScmRowInfo: extractNewScmRowInfo(newScmWs, 4),
+          delScmRowInfo: extractDelScmRowInfo(dscmWs, 5),
+          attributeMap: extractAttributeMap(ndimWs, 4),
+        };
+      } else {
+        pipelineSnapshotRef.current = null;
+      }
 
       setResults(processed);
 
@@ -777,6 +814,7 @@ export default function Home() {
     // Jobs persist across resets — do NOT clear them
     recapBufRef.current = null;
     checkSpacePlanRef.current = null;
+    pipelineSnapshotRef.current = null;
     setStep(1);
     setStatus("idle");
     setStatusMsg("");
@@ -892,6 +930,10 @@ export default function Home() {
               <FileSpreadsheet className="w-4 h-4" />
               New and Renovate
             </TabBtn>
+            <TabBtn active={view === "minorReport"} onClick={() => setView("minorReport")}>
+              <FileSpreadsheet className="w-4 h-4" />
+              Minor Report
+            </TabBtn>
           </div>
           <div className="flex items-center gap-1">
             {/* Help button */}
@@ -956,6 +998,12 @@ export default function Home() {
               <div className="-mx-6 -mt-16">
                 <NewRenovateTab exceptionConfig={exceptionConfig} />
               </div>
+            )}
+
+            {/* Minor Report sub-tab — read-only consumer of the wizard's finished output.
+                Never re-parses a file or duplicates wizard logic; see lib/minorReport.ts. */}
+            {view === "minorReport" && (
+              <MinorReportTab snapshot={pipelineSnapshotRef.current} />
             )}
 
             {/* Main upload flow */}
