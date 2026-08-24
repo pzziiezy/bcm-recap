@@ -872,8 +872,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const sortedToBe = [...toBeColumns].sort((a, b) => a - b);
       const pairCount  = Math.min(sortedAsIs.length, sortedToBe.length);
 
-      // Find Store Code row — label column is immediately left of first AS IS column
-      const labelCol = sortedAsIs.length > 0 ? sortedAsIs[0] - 1 : -1;
+      // Find Store Code row — label column is immediately left of first AS IS (or TO BE if no AS IS)
+      const labelCol = sortedAsIs.length > 0 ? sortedAsIs[0] - 1
+                     : sortedToBe.length > 0  ? sortedToBe[0] - 1
+                     : -1;
       let storeCodeRow = -1;
       if (labelCol >= 0) {
         const scanFrom = asisToBeRow >= 0 ? asisToBeRow + 1 : 0;
@@ -889,6 +891,13 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         const cell = indexWs[XLSX.utils.encode_cell({ r: storeCodeRow, c: sortedAsIs[i] })];
         return cell?.v != null ? String(cell.v).trim() : "";
       });
+      // Pre-read store code for TO BE-only columns (stores that have no corresponding AS IS column)
+      const unpairedToBeStoreCodes: string[] = [];
+      for (let i = pairCount; i < sortedToBe.length; i++) {
+        if (storeCodeRow < 0) { unpairedToBeStoreCodes.push(""); continue; }
+        const cell = indexWs[XLSX.utils.encode_cell({ r: storeCodeRow, c: sortedToBe[i] })];
+        unpairedToBeStoreCodes.push(cell?.v != null ? String(cell.v).trim() : "");
+      }
 
       for (let r = iDataStart; r <= iRange.e.r; r++) {
         // Collect all POG NAME values in this row (skip header text / numeric totals)
@@ -916,6 +925,15 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           else if (bHas) hasToBe = true;
           if (aHas && pairStoreCodes[i]) asIsStores.add(pairStoreCodes[i]);
           if (bHas && pairStoreCodes[i]) toBeStores.add(pairStoreCodes[i]);
+        }
+        // TO BE-only stores (no corresponding AS IS column) → treated as NEW EXPAND
+        for (let i = 0; i < unpairedToBeStoreCodes.length; i++) {
+          const bCell = indexWs[XLSX.utils.encode_cell({ r, c: sortedToBe[pairCount + i] })];
+          const bHas = bCell?.v != null && bCell.v !== "" && bCell.v !== 0;
+          if (bHas) {
+            hasToBe = true;
+            if (unpairedToBeStoreCodes[i]) toBeStores.add(unpairedToBeStoreCodes[i]);
+          }
         }
 
         // Per-store status: each store classified independently
