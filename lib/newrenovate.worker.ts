@@ -1134,6 +1134,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const s3Staging: StoreRow[] = [];
     const seenSheet2 = new Set<string>(); // dedup key: barcode\0storeVal
     const seenSheet3 = new Set<string>(); // dedup key: barcode\0storeVal
+    // Sheet 1 merge: same barcode+planogram+store+status → one row, SHELF STOCK summed
+    const s1MergeMap = new Map<string, { stagingIdx: number; shelfStock: number; pctVal: number }>();
 
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
 
@@ -1282,13 +1284,24 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (STORE_COL !== undefined && bEntry.storeVal)
         cols1.set(STORE_COL, { t: "s", v: bEntry.storeVal });
 
-      s1Staging.push({
-        storeVal:      bEntry.storeVal,
-        planogramName: bEntry.qry.planogram,
-        noBay:         bEntry.qry.segment,
-        seq:           bEntry.qry.locationId,
-        cols:          cols1,
-      });
+      const s1Key = `${bEntry.barcode}\0${bEntry.qry.planogram}\0${bEntry.storeVal}\0${rowStatus}`;
+      const s1Existing = s1MergeMap.get(s1Key);
+      if (s1Existing) {
+        s1Existing.shelfStock += Number(bEntry.qry.totalUnits) || 0;
+      } else {
+        s1MergeMap.set(s1Key, {
+          stagingIdx: s1Staging.length,
+          shelfStock: Number(bEntry.qry.totalUnits) || 0,
+          pctVal,
+        });
+        s1Staging.push({
+          storeVal:      bEntry.storeVal,
+          planogramName: bEntry.qry.planogram,
+          noBay:         bEntry.qry.segment,
+          seq:           bEntry.qry.locationId,
+          cols:          cols1,
+        });
+      }
 
       // Sheet 2: NEW EXPAND only — deduplicated per barcode+store
       if (rowStatus === "NEW EXPAND") {
@@ -1308,6 +1321,20 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
             cols2.set(STORECOUNT2_COL, { t: "s", v: bEntry.storeVal });
           s2Staging.push({ storeVal: bEntry.storeVal, cols: cols2 });
         }
+      }
+    }
+
+    // Finalise Sheet 1 merged rows: write summed SHELF STOCK and recalculated Net Capacity
+    for (const { stagingIdx, shelfStock, pctVal: p } of s1MergeMap.values()) {
+      const cols = s1Staging[stagingIdx].cols;
+      if (SHELFSTOCK_COL !== undefined) {
+        if (shelfStock > 0) cols.set(SHELFSTOCK_COL, { t: "n", v: shelfStock });
+        else cols.delete(SHELFSTOCK_COL);
+      }
+      if (NETCAP_COL !== undefined) {
+        const netCapVal = Math.round(shelfStock * p);
+        if (netCapVal > 0) cols.set(NETCAP_COL, { t: "n", v: netCapVal });
+        else cols.delete(NETCAP_COL);
       }
     }
 
