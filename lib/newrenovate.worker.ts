@@ -1132,6 +1132,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const s1Staging: S1Row[]    = [];
     const s2Staging: StoreRow[] = [];
     const s3Staging: StoreRow[] = [];
+    const seenSheet2 = new Set<string>(); // dedup key: barcode\0storeVal
+    const seenSheet3 = new Set<string>(); // dedup key: barcode\0storeVal
 
     let matchedSpaceman = 0, matchedMaster = 0, matchedIndex = 0, matchedFixture = 0;
 
@@ -1288,20 +1290,24 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         cols:          cols1,
       });
 
-      // Sheet 2: NEW EXPAND only
+      // Sheet 2: NEW EXPAND only — deduplicated per barcode+store
       if (rowStatus === "NEW EXPAND") {
-        const cols2 = new Map<number, CellPatch>();
-        const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
-        ss2(BARCODE2_COL, bEntry.barcode);
-        ss2(DIV2_COL,     bEntry.divisionVal);
-        ss2(NAME2_COL,    bEntry.productName);
-        ss2(POG04_2_COL,  bEntry.sm?.planofolder05 ?? "");
-        ss2(POG03_2_COL,  bEntry.sm?.planofolder05 ?? "");
-        ss2(DEPT2_COL,    bEntry.sm?.planofolder04 ?? "");
-        ss2(STATUS2_COL,  rowStatus);
-        if (STORECOUNT2_COL !== undefined && bEntry.storeVal)
-          cols2.set(STORECOUNT2_COL, { t: "s", v: bEntry.storeVal });
-        s2Staging.push({ storeVal: bEntry.storeVal, cols: cols2 });
+        const s2Key = `${bEntry.barcode}\0${bEntry.storeVal}`;
+        if (!seenSheet2.has(s2Key)) {
+          seenSheet2.add(s2Key);
+          const cols2 = new Map<number, CellPatch>();
+          const ss2 = (col: number | undefined, v: string) => { if (col !== undefined && v) cols2.set(col, { t: "s", v }); };
+          ss2(BARCODE2_COL, bEntry.barcode);
+          ss2(DIV2_COL,     bEntry.divisionVal);
+          ss2(NAME2_COL,    bEntry.productName);
+          ss2(POG04_2_COL,  bEntry.sm?.planofolder05 ?? "");
+          ss2(POG03_2_COL,  bEntry.sm?.planofolder05 ?? "");
+          ss2(DEPT2_COL,    bEntry.sm?.planofolder04 ?? "");
+          ss2(STATUS2_COL,  rowStatus);
+          if (STORECOUNT2_COL !== undefined && bEntry.storeVal)
+            cols2.set(STORECOUNT2_COL, { t: "s", v: bEntry.storeVal });
+          s2Staging.push({ storeVal: bEntry.storeVal, cols: cols2 });
+        }
       }
     }
 
@@ -1309,6 +1315,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     if (s3Name) {
       for (const aEntry of groupA) {
         if (setBByStore.has(`${aEntry.barcode}\0${aEntry.storeVal}`)) continue;
+        const s3Key = `${aEntry.barcode}\0${aEntry.storeVal}`;
+        if (seenSheet3.has(s3Key)) continue;
+        seenSheet3.add(s3Key);
 
         const cols3 = new Map<number, CellPatch>();
         const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
