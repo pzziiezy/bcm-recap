@@ -1200,18 +1200,19 @@ export function fillDelSCM(
  *   NEW SCM: headerRow=3, dataStartRow=4, barcodeCol=3 (Barcode ขาย/UPC), storeStartCol=17 (col R)
  *   DEL SCM: headerRow=4, dataStartRow=5, barcodeCol=3 (Barcode ขาย/UPC), storeStartCol=14 (col O)
  */
-export function extractStoreFlags(
+/**
+ * colIdx → storeCode from a sheet's store-header row (sparse scan, only cols >= storeStartCol).
+ * Shared by extractStoreFlags() below and by Minor Report's "this round only" store
+ * resolution (see lib/minorReport.ts), which needs to translate the raw {col,value}
+ * cells in checkSpacePlan.newScmRows back into actual store codes.
+ */
+export function mapStoreColumns(
   ws: XLSX.WorkSheet,
   headerRow: number,
-  dataStartRow: number,
-  barcodeCol: number,
   storeStartCol: number,
-): StoreFlagMap {
-  const flags: StoreFlagMap = new Map();
-  if (!ws["!ref"]) return flags;
-
-  // 1. colIdx → storeCode from the header row (sparse scan, only cols >= storeStartCol)
+): Map<number, string> {
   const storeColMap = new Map<number, string>();
+  if (!ws["!ref"]) return storeColMap;
   const headerRowRe = new RegExp(`^([A-Z]+)${headerRow + 1}$`);
   for (const key of Object.keys(ws)) {
     const m = headerRowRe.exec(key);
@@ -1226,6 +1227,20 @@ export function extractStoreFlags(
       if (sc && /^\d+$/.test(sc)) storeColMap.set(ci, sc);
     }
   }
+  return storeColMap;
+}
+
+export function extractStoreFlags(
+  ws: XLSX.WorkSheet,
+  headerRow: number,
+  dataStartRow: number,
+  barcodeCol: number,
+  storeStartCol: number,
+): StoreFlagMap {
+  const flags: StoreFlagMap = new Map();
+  if (!ws["!ref"]) return flags;
+
+  const storeColMap = mapStoreColumns(ws, headerRow, storeStartCol);
   if (storeColMap.size === 0) return flags;
 
   // 2. Sparse scan: group non-empty store-column cells by row

@@ -58,6 +58,7 @@ import {
   extractNewScmRowInfo,
   extractDelScmRowInfo,
   extractAttributeMap,
+  mapStoreColumns,
 } from "@/lib/processor";
 import type { ProcessedRow, ExceptionConfig, FilledData, IndexLookup, PipelineSnapshot } from "@/lib/types";
 import MinorReportTab from "@/components/MinorReportTab";
@@ -649,25 +650,37 @@ export default function Home() {
       // Minor Report itself) because everything it needs — the enriched in-memory `wb`,
       // barcodeMap/structureMap/planogramResult, indexLookup — only exists in this
       // function's scope. Minor Report never re-parses a file or duplicates this logic.
-      if (capturedIndexLookup) {
-        const newScmWs = wb.Sheets[newScmActual] ?? ({} as XLSX.WorkSheet);
-        const dscmWs   = wb.Sheets[dscmActual]   ?? ({} as XLSX.WorkSheet);
-        const ndimWs   = wb.Sheets[ndimActual]   ?? ({} as XLSX.WorkSheet);
-        pipelineSnapshotRef.current = {
-          results: processed,
-          checkSpacePlan: checkSpacePlanRef.current,
-          indexLookup: capturedIndexLookup,
-          barcodeMap,
-          structureMap,
-          byUpc: planogramResult.byUpc,
-          newScmStoreFlags: extractStoreFlags(newScmWs, 3, 4, 3, 17),
-          delScmStoreFlags: extractStoreFlags(dscmWs, 4, 5, 3, 14),
-          newScmRowInfo: extractNewScmRowInfo(newScmWs, 4),
-          delScmRowInfo: extractDelScmRowInfo(dscmWs, 5),
-          attributeMap: extractAttributeMap(ndimWs, 4),
-        };
-      } else {
+      //
+      // Isolated in its own try/catch (mirrors the Check Space block above) so that a
+      // bug in Minor Report's extraction can NEVER surface as a wizard error — the
+      // wizard's own results/Step 5 flow must succeed regardless of what happens here.
+      pipelineSnapshotRef.current = null;
+      try {
+        if (capturedIndexLookup) {
+          const newScmWs = wb.Sheets[newScmActual] ?? ({} as XLSX.WorkSheet);
+          const dscmWs   = wb.Sheets[dscmActual]   ?? ({} as XLSX.WorkSheet);
+          const ndimWs   = wb.Sheets[ndimActual]   ?? ({} as XLSX.WorkSheet);
+          pipelineSnapshotRef.current = {
+            results: processed,
+            checkSpacePlan: checkSpacePlanRef.current,
+            indexLookup: capturedIndexLookup,
+            barcodeMap,
+            structureMap,
+            byUpc: planogramResult.byUpc,
+            newScmStoreFlags: extractStoreFlags(newScmWs, 3, 4, 3, 17),
+            delScmStoreFlags: extractStoreFlags(dscmWs, 4, 5, 3, 14),
+            newScmRowInfo: extractNewScmRowInfo(newScmWs, 4),
+            delScmRowInfo: extractDelScmRowInfo(dscmWs, 5),
+            attributeMap: extractAttributeMap(ndimWs, 4),
+            newScmStoreColMap: mapStoreColumns(newScmWs, 3, 17),
+          };
+        }
+      } catch (minorReportErr) {
         pipelineSnapshotRef.current = null;
+        sendLog([makeEntry(sessionId, "ERROR", "WARN",
+          `Minor Report snapshot ล้มเหลว (ไม่กระทบผลลัพธ์หลัก): ${String(minorReportErr)}`,
+          { error: String(minorReportErr) }
+        )]);
       }
 
       setResults(processed);

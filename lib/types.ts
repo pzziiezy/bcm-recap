@@ -134,6 +134,12 @@ export interface PipelineSnapshot {
   newScmRowInfo: Map<string, NewScmRowInfo>;  // extractNewScmRowInfo() — NEW SCM, all barcodes
   delScmRowInfo: Map<string, DelScmRowInfo>;  // extractDelScmRowInfo() — DEL SCM, all barcodes
   attributeMap: Map<string, AttributeInfo>;   // extractAttributeMap() — NEW_DELETE_IM, both blocks
+  // NEW SCM column index → store code (mapStoreColumns()). Lets Minor Report translate
+  // checkSpacePlan.newScmRows' raw {col,value} cells back into store codes, to isolate
+  // "stores added THIS session" from newScmStoreFlags' cumulative (this + prior sessions)
+  // total — confirmed with the user that expanding an existing item's store coverage
+  // always inserts a brand-new NEW SCM row via Check Space, never edits the old row.
+  newScmStoreColMap: Map<number, string>;
 }
 
 // ─── Minor Report output rows — one shape per output sheet ─────────────────

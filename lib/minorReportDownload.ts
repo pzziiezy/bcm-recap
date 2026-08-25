@@ -19,43 +19,42 @@ export const MINOR_REPORT_SHEET_NAMES = {
  * aren't obvious from a picture — so the header row is located by content, not by a
  * hardcoded row count, and works regardless of how many rows precede it.
  *
- * Recap_New_item: column A is NOT a data column (holds "Pure"/"Mini" row labels for
- * the legend rows only), so its marker is DIVISION in column B, not column A.
+ * All 3 sheets now use "UPC" in column A as the marker — the template revision moved
+ * Recap_New_item's UPC to column A too (it used to be a blank/label-only column there).
  */
 export const MINOR_REPORT_HEADER_MARKER: Record<string, { col: number; text: string }> = {
-  [MINOR_REPORT_SHEET_NAMES.newItem]: { col: 1, text: "DIVISION" },
+  [MINOR_REPORT_SHEET_NAMES.newItem]: { col: 0, text: "UPC" },
   [MINOR_REPORT_SHEET_NAMES.newNotLink]: { col: 0, text: "UPC" },
   [MINOR_REPORT_SHEET_NAMES.deleteItem]: { col: 0, text: "UPC" },
 };
 
 /**
  * Column order for each Minor Report sheet — verified against real screenshots of the
- * template. These are used only to know WHERE to write each field; the header/legend
- * text itself already lives in the uploaded template and is never touched.
+ * template (revision confirmed 2026 — UPC/NAME now lead, DIVISION/DEPARTMENT follow).
+ * These are used only to know WHERE to write each field; the header/legend text itself
+ * already lives in the uploaded template and is never touched.
  *
- * Recap_New_item: column A is NOT a data column — it only holds the "Pure"/"Mini" row
- * labels for the legend rows, so real data starts at column B. Column J ("Pure Non POG")
- * is a hidden column in the template and intentionally always left blank (doc §4.1/§6).
+ * Column I ("Pure Non POG") is a hidden column in the template and intentionally always
+ * left blank (doc §4.1/§6).
  */
 const NEW_ITEM_COL_GETTERS: Array<(r: MinorReportNewItemRow) => string> = [
-  () => "",                             // A — unused (holds the "Pure"/"Mini" row labels only)
-  r => r.division,                      // B DIVISION
-  r => r.department,                    // C DEPARTMENT
-  r => r.upc,                           // D UPC
-  r => r.name,                          // E NAME
-  r => r.salepack,                      // F SALEPACK
-  r => r.recipe,                        // G RECIPE
-  r => r.packSize,                      // H PACK SIZE
-  r => r.totalUnits,                    // I TOTAL_UNITS
-  () => "",                             // J Pure Non POG — hidden column, always blank
-  r => r.purShelfStockPiece,            // K PUR Shelf stock ON POG (Piece) First Order (NEWNEW)
-  r => r.pctOrdering,                   // L % Ordering
-  r => r.netCapacity,                   // M Net Capacity for odering
-  r => r.attClass,                      // N ATT_CLASS
-  r => r.attCode,                       // O ATT_CODE
-  r => r.storeNumber,                   // P STORE NUMBER
-  r => r.link,                          // Q LINK
-  r => r.forecastSalesPerMonthStore,    // R Forecast Sales/Month/Store
+  r => r.upc,                           // A UPC
+  r => r.name,                          // B NAME
+  r => r.division,                      // C DIVISION
+  r => r.department,                    // D DEPARTMENT
+  r => r.salepack,                      // E SALEPACK
+  r => r.recipe,                        // F RECIPE
+  r => r.packSize,                      // G PACK SIZE
+  r => r.totalUnits,                    // H TOTAL_UNITS
+  () => "",                             // I Pure Non POG — hidden column, always blank
+  r => r.purShelfStockPiece,            // J PUR Shelf stock ON POG (Piece) First Order (NEWNEW)
+  r => r.pctOrdering,                   // K % Ordering
+  r => r.netCapacity,                   // L Net Capacity for odering
+  r => r.attClass,                      // M ATT_CLASS
+  r => r.attCode,                       // N ATT_CODE
+  r => r.storeNumber,                   // O STORE NUMBER
+  r => r.link,                          // P LINK
+  r => r.forecastSalesPerMonthStore,    // Q Forecast Sales/Month/Store
 ];
 
 const NEW_NOT_LINK_COL_GETTERS: Array<(r: MinorReportNewNotLinkRow) => string> = [
