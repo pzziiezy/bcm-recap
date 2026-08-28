@@ -1088,6 +1088,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const DEPT2_COL        = colMap2.get("DEPARTMENT") ?? fc2("DEPARTMENT") ?? fc2("DEPT");
     const STATUS2_COL      = colMap2.get("STATUS")     ?? fc2("status");
     const STORECOUNT2_COL  = fc2("number store")       ?? fc2("store");
+    const SALEPACK2_COL    = fc2("SALE PACK CODE")     ?? fc2("SALEPACKCODE") ?? fc2("SALE PACK");
+    const ATTCLASS2_COL    = fc2("ATT_CLASS")          ?? fc2("ATTCLASS");
+    const ATTCODE2_COL     = fc2("ATT_CODE")           ?? fc2("ATTCODE");
 
     // ── Delete for Exception_ IM sheet ───────────────────────────────────────
     const s3Name = targetWb.SheetNames.find(n => /delete.*exception/i.test(n.trim()));
@@ -1317,6 +1320,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           ss2(POG03_2_COL,  bEntry.sm?.planofolder05 ?? "");
           ss2(DEPT2_COL,    bEntry.sm?.planofolder04 ?? "");
           ss2(STATUS2_COL,  rowStatus);
+          ss2(SALEPACK2_COL, bEntry.master?.barSingle || bEntry.master?.barIngredient || "");
+          ss2(ATTCLASS2_COL, "MBC1");
+          ss2(ATTCODE2_COL,  "MINI");
           if (STORECOUNT2_COL !== undefined && bEntry.storeVal)
             cols2.set(STORECOUNT2_COL, { t: "s", v: bEntry.storeVal });
           s2Staging.push({ storeVal: bEntry.storeVal, cols: cols2 });
