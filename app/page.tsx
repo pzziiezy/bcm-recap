@@ -43,7 +43,6 @@ import {
   parseFileIndex,
 } from "@/lib/processor";
 import { buildMinorReportSheets } from "@/lib/minorReport";
-import { buildMinorReportFillPlan, type MinorReportFillPlan } from "@/lib/minorReportDownload";
 import type {
   ExceptionConfig,
   IndexLookup,
@@ -138,6 +137,7 @@ const NEW_ITEM_COLDEFS: TabColDef[] = [
   { field: "storeNumber",                col: 13, label: "STORE NUMBER", editable: false },
   { field: "link",                       col: 14, label: "LINK",       editable: false },
   { field: "forecastSalesPerMonthStore", col: 15, label: "Forecast Sales/Month/Store", editable: true },
+  { field: "remark",                     col: 16, label: "REMARK",     editable: true },
 ];
 
 const NEW_NOT_LINK_COLDEFS: TabColDef[] = [
@@ -149,6 +149,7 @@ const NEW_NOT_LINK_COLDEFS: TabColDef[] = [
   { field: "attCode",     col: 5, label: "ATT_CODE",    editable: true },
   { field: "storeNumber", col: 6, label: "STORENUMBER", editable: false },
   { field: "link",        col: 7, label: "LINK",        editable: false },
+  { field: "remark",      col: 8, label: "REMARK",      editable: true },
 ];
 
 const DELETE_ITEM_COLDEFS: TabColDef[] = [
@@ -232,7 +233,7 @@ export default function Home() {
   const sessionIdRef = useRef<string>("");
   const pageSessionRef = useRef(`page-${Date.now().toString(36)}`);
   const workersRef = useRef<Map<string, Worker>>(new Map());
-  const jobDataRef = useRef<Map<string, { templateBuf: ArrayBuffer; plan: MinorReportFillPlan; label: string }>>(new Map());
+  const jobDataRef = useRef<Map<string, { templateBuf: ArrayBuffer; sheets: MinorReportSheets; label: string }>>(new Map());
   const jobCounterRef = useRef(0);
   const autoDownloadedRef = useRef<Set<string>>(new Set());
 
@@ -279,7 +280,7 @@ export default function Home() {
 
   // ── Core job starter (stable — only touches refs + functional setJobs) ──
 
-  const startJobFn = useCallback((id: string, templateBuf: ArrayBuffer, plan: MinorReportFillPlan) => {
+  const startJobFn = useCallback((id: string, templateBuf: ArrayBuffer, sheets: MinorReportSheets) => {
     const buildSid = `build-${id.slice(0, 8)}`;
     const buildStart = Date.now();
 
@@ -293,10 +294,10 @@ export default function Home() {
     workersRef.current.set(id, worker);
 
     worker.onmessage = (e: MessageEvent) => {
-      const msg = e.data as { type: string; pct?: number; buffer?: ArrayBuffer; message?: string };
+      const msg = e.data as { type: string; pct?: number; buffer?: ArrayBuffer; message?: string; missingHeaders?: string[] };
       switch (msg.type) {
         case "init_ok":
-          worker.postMessage({ type: "build", plan });
+          worker.postMessage({ type: "build", sheets });
           break;
         case "progress":
           startTransition(() => {
@@ -314,6 +315,14 @@ export default function Home() {
             `Build ${label} เสร็จในเวลา ${durSec} วินาที`,
             { jobId: id, label, durationSec: durSec }
           )]);
+          // A field's expected header text wasn't found in the uploaded template — the
+          // column was skipped (never guessed into the wrong place), so warn loudly.
+          if (msg.missingHeaders && msg.missingHeaders.length > 0) {
+            sendLog([makeEntry(buildSid, "ERROR", "WARN",
+              `Build ${label}: หา header ไม่เจอ ${msg.missingHeaders.length} คอลัมน์ (ข้ามไป ไม่เติมข้อมูล): ${msg.missingHeaders.join(", ")}`,
+              { jobId: id, label, missingHeaders: msg.missingHeaders }
+            )]);
+          }
           startTransition(() => {
             setJobs((prev) =>
               prev.map((j) =>
@@ -378,7 +387,7 @@ export default function Home() {
     if (!next) return;
     const data = jobDataRef.current.get(next.id);
     if (!data) return;
-    startJobFn(next.id, data.templateBuf, data.plan);
+    startJobFn(next.id, data.templateBuf, data.sheets);
   }, [jobs, startJobFn]);
 
   // ── Queue actions ───────────────────────────────────────────────────────
@@ -404,7 +413,7 @@ export default function Home() {
 
     jobDataRef.current.set(id, {
       templateBuf: templateBufRef.current.slice(0),
-      plan: buildMinorReportFillPlan(sheets),
+      sheets,
       label,
     });
 

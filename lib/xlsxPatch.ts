@@ -323,38 +323,74 @@ export function insertFillRows(
 
 // ── Header-row auto-detection ─────────────────────────────────────────────────
 
+/** Reads one <c>...</c> cell's plain-text value, resolving shared-string refs. */
+function readCellText(attrs: string, inner: string, sstStrings: string[]): string | null {
+  const vMatch = /<v>([^<]*)<\/v>/.exec(inner);
+  if (!vMatch) return null;
+  const raw = decodeXml(vMatch[1]);
+  return /\bt="s"/.test(attrs) ? (sstStrings[+raw] ?? "") : raw;
+}
+
 /**
- * Find the Excel row number (1-based) whose cell at `markerCol` resolves to `markerText`
+ * Find the Excel row number (1-based) that contains a cell matching `markerText`
  * (case-insensitive, trimmed) — used to auto-detect a template's header row instead of
  * hardcoding an assumed row count. Counting legend/filler rows from a screenshot has
  * proven unreliable (real templates can have extra blank/filter-only rows that don't
  * show up clearly), so this lets the actual uploaded file tell us the truth every time,
  * regardless of how many rows precede the header in a given template revision.
+ *
+ * Deliberately searches every cell in the row rather than one fixed column — the
+ * template's columns have been reordered before, so the marker's own position can't be
+ * assumed either. Cheap enough: header rows are short and this only scans the first
+ * `maxScanRows` rows.
  */
 export function findHeaderRowNum(
   sheetXml: string,
   sstStrings: string[],
-  markerCol: number,
   markerText: string,
   maxScanRows = 30
 ): number | null {
-  const markerColLetter = colLetter(markerCol);
   const target = markerText.trim().toLowerCase();
   const rowRe = /<row r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
   let m: RegExpExecArray | null;
   while ((m = rowRe.exec(sheetXml)) !== null) {
     const rowNum = +m[1];
     if (rowNum > maxScanRows) break;
-    const cellRe = new RegExp(`<c r="${markerColLetter}${rowNum}"([^>]*)>([\\s\\S]*?)</c>`);
-    const cm = cellRe.exec(m[2]);
-    if (!cm) continue;
-    const vMatch = /<v>([^<]*)<\/v>/.exec(cm[2]);
-    if (!vMatch) continue;
-    const raw = decodeXml(vMatch[1]);
-    const value = /\bt="s"/.test(cm[1]) ? (sstStrings[+raw] ?? "") : raw;
-    if (value.trim().toLowerCase() === target) return rowNum;
+    const cellRe = /<c r="[A-Z]+\d+"([^>]*)>([\s\S]*?)<\/c>/g;
+    let cm: RegExpExecArray | null;
+    while ((cm = cellRe.exec(m[2])) !== null) {
+      const value = readCellText(cm[1], cm[2], sstStrings);
+      if (value !== null && value.trim().toLowerCase() === target) return rowNum;
+    }
   }
   return null;
+}
+
+/**
+ * Header text (trimmed, case-insensitive) → 0-based column index, read from one
+ * already-located header row. Paired with findHeaderRowNum(): once the header row is
+ * known, this tells every field WHERE it actually lives in the uploaded template —
+ * so reordering the template's columns needs no code change, only the header text
+ * itself has to stay the same.
+ */
+export function mapHeaderColumns(
+  sheetXml: string,
+  sstStrings: string[],
+  headerRowNum: number
+): Map<string, number> {
+  const map = new Map<string, number>();
+  const rowRe = new RegExp(`<row r="${headerRowNum}"[^>]*>([\\s\\S]*?)</row>`);
+  const rowMatch = rowRe.exec(sheetXml);
+  if (!rowMatch) return map;
+  const cellRe = /<c r="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = cellRe.exec(rowMatch[1])) !== null) {
+    const value = readCellText(cm[2], cm[3], sstStrings);
+    if (value === null) continue;
+    const norm = value.trim().toLowerCase();
+    if (norm && !map.has(norm)) map.set(norm, colLetterIdx(cm[1]));
+  }
+  return map;
 }
 
 // ── Replace a data-row region wholesale ───────────────────────────────────────

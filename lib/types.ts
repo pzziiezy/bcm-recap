@@ -140,6 +140,7 @@ export interface MinorReportNewItemRow {
   storeNumber: string;
   link: "LINK";
   forecastSalesPerMonthStore: string;  // = filled.colN
+  remark: string;                      // Check Space status, pass-through verbatim
 }
 
 export interface MinorReportNewNotLinkRow {
@@ -151,6 +152,7 @@ export interface MinorReportNewNotLinkRow {
   attCode: string;
   storeNumber: string;
   link: "New not link";
+  remark: string; // Check Space status, pass-through verbatim
 }
 
 export interface MinorReportDeleteItemRow {

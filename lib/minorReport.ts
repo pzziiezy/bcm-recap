@@ -157,6 +157,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
           storeNumber: store,
           link: "LINK",
           forecastSalesPerMonthStore: enrichment.colN,
+          remark: item.status,
         });
       }
 
@@ -181,6 +182,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
             attCode: firstPogByCode,
             storeNumber: store,
             link: "New not link",
+            remark: item.status,
           });
         }
       }

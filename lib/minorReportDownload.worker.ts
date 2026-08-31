@@ -1,17 +1,18 @@
 /**
  * Minor Report build worker — fills the user-uploaded `TO BE_Minor Report.xlsx` template
- * with freshly computed data via the same byte-patch technique as download.worker.ts
- * (unzip → patch only the 3 sheet XMLs + sharedStrings.xml → rezip), so every bit of the
- * template's formatting (colors, borders, column widths, header rows) survives untouched.
+ * with freshly computed data via the same byte-patch technique as RECAP used to (unzip →
+ * patch only the 3 sheet XMLs + sharedStrings.xml → rezip), so every bit of the template's
+ * formatting (colors, borders, column widths, header rows) survives untouched.
  *
- * Unlike RECAP's worker (which upserts additively onto a fixed set of pre-existing rows),
- * this WIPES and rebuilds the data region of each sheet on every build — Minor Report is
- * fully regenerated from the current snapshot each time, so no row count assumption about
- * the template holds run to run. See xlsxPatch.ts's replaceDataRows() for why.
+ * Unlike RECAP's old worker (which upserted additively onto a fixed set of pre-existing
+ * rows), this WIPES and rebuilds the data region of each sheet on every build — Minor
+ * Report is fully regenerated from the current snapshot each time. See xlsxPatch.ts's
+ * replaceDataRows() for why.
  *
- * The header row for each sheet is located by CONTENT (findHeaderRowNum), not by a
- * hardcoded row count — counting legend/filler rows from a screenshot has already proven
- * unreliable once, so the actual uploaded file is the only source of truth here.
+ * Both the header ROW and every field's COLUMN are located by their actual text in the
+ * uploaded template (findHeaderRowNum / mapHeaderColumns), never a hardcoded position —
+ * the template's columns have been reordered between revisions before, so this must
+ * survive that without a code change.
  */
 
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
@@ -21,10 +22,17 @@ import {
   buildSST,
   findSheetPath,
   findHeaderRowNum,
+  mapHeaderColumns,
   replaceDataRows,
 } from "./xlsxPatch";
-import type { MinorReportFillPlan } from "./minorReportDownload";
-import { MINOR_REPORT_SHEET_NAMES, MINOR_REPORT_HEADER_MARKER, shiftFillRows } from "./minorReportDownload";
+import {
+  MINOR_REPORT_SHEET_NAMES,
+  MINOR_REPORT_HEADER_MARKER_TEXT,
+  MINOR_REPORT_HEADER_TEXT_MAP,
+  buildFillRowsForSheet,
+  shiftFillRows,
+} from "./minorReportDownload";
+import type { MinorReportSheets } from "./types";
 
 const ctx = self as unknown as {
   postMessage(msg: unknown, transfer?: Transferable[]): void;
@@ -32,11 +40,16 @@ const ctx = self as unknown as {
 
 type InMsg =
   | { type: "init"; buffer: ArrayBuffer }
-  | { type: "build"; plan: MinorReportFillPlan };
+  | { type: "build"; sheets: MinorReportSheets };
 
 let template: ArrayBuffer | null = null;
 
 const SHEET_NAMES = Object.values(MINOR_REPORT_SHEET_NAMES);
+const ROWS_BY_SHEET: Record<string, keyof MinorReportSheets> = {
+  [MINOR_REPORT_SHEET_NAMES.newItem]: "newItem",
+  [MINOR_REPORT_SHEET_NAMES.newNotLink]: "newNotLink",
+  [MINOR_REPORT_SHEET_NAMES.deleteItem]: "deleteItem",
+};
 
 addEventListener("message", (e: MessageEvent<InMsg>) => {
   const msg = e.data;
@@ -69,6 +82,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       // 2. Patch each of the 3 sheets in turn
       const pctPerSheet = 60 / SHEET_NAMES.length;
       let pct = 15;
+      const allMissingHeaders: string[] = [];
+
       for (const sheetName of SHEET_NAMES) {
         const sheetPath = findSheetPath(wbXml, relsXml, sheetName);
         if (!sheetPath || !files[sheetPath]) {
@@ -76,18 +91,26 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         }
         const sheetXmlRaw = strFromU8(files[sheetPath]);
 
-        const marker = MINOR_REPORT_HEADER_MARKER[sheetName];
-        const headerRowNum = findHeaderRowNum(sheetXmlRaw, workingStrings, marker.col, marker.text);
+        const markerText = MINOR_REPORT_HEADER_MARKER_TEXT[sheetName];
+        const headerRowNum = findHeaderRowNum(sheetXmlRaw, workingStrings, markerText);
         if (headerRowNum === null) {
           throw new Error(
-            `หาแถวหัวตารางของชีต "${sheetName}" ไม่เจอ (มองหาคอลัมน์ ${marker.col + 1} = "${marker.text}") ` +
+            `หาแถวหัวตารางของชีต "${sheetName}" ไม่เจอ (มองหาคำว่า "${markerText}") ` +
             `— ตรวจสอบว่าอัปโหลดไฟล์ TO BE_Minor Report.xlsx ที่มีโครงสร้างถูกต้อง`
           );
         }
 
-        const relativeRows = msg.plan[sheetName as keyof MinorReportFillPlan];
-        const rows = shiftFillRows(relativeRows, headerRowNum);
-        const { sheetXml, newStrings } = replaceDataRows(sheetXmlRaw, headerRowNum, rows, workingStrings);
+        const discoveredColumns = mapHeaderColumns(sheetXmlRaw, workingStrings, headerRowNum);
+        const headerTextMap = MINOR_REPORT_HEADER_TEXT_MAP[sheetName];
+        const rows = msg.sheets[ROWS_BY_SHEET[sheetName]] as unknown as Record<string, string>[];
+
+        const { fillRows: relativeRows, missingHeaders } = buildFillRowsForSheet(rows, headerTextMap, discoveredColumns);
+        if (missingHeaders.length > 0) {
+          allMissingHeaders.push(...missingHeaders.map(h => `${sheetName}: "${h}"`));
+        }
+
+        const rowsToWrite = shiftFillRows(relativeRows, headerRowNum);
+        const { sheetXml, newStrings } = replaceDataRows(sheetXmlRaw, headerRowNum, rowsToWrite, workingStrings);
         files[sheetPath] = strToU8(sheetXml);
         workingStrings.push(...newStrings);
 
@@ -110,7 +133,10 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const out = zipSync(files);
       const outBuf = out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
       ctx.postMessage({ type: "progress", pct: 100 });
-      ctx.postMessage({ type: "done", buffer: outBuf }, [outBuf]);
+      ctx.postMessage(
+        { type: "done", buffer: outBuf, missingHeaders: allMissingHeaders },
+        [outBuf]
+      );
 
     } catch (err) {
       ctx.postMessage({ type: "error", message: String(err) });
