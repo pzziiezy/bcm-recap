@@ -1,184 +1,218 @@
 import type {
-  PipelineSnapshot,
-  ProcessedRow,
-  FilledData,
-  StoreFlagMap,
+  MinorReportInput,
+  SubclassInfo,
+  HierarchyNames,
+  SpacemanRowMeta,
+  ExceptionConfig,
   MinorReportSheets,
   MinorReportNewItemRow,
   MinorReportNewNotLinkRow,
   MinorReportDeleteItemRow,
 } from "./types";
-import type { CheckSpaceFillPlan } from "./download";
 import { computeNetCapacity } from "./netCapacity";
-import { buildRecapCodes } from "./processor";
+import { buildRecapCodes, findMatchingConfig } from "./processor";
 
-/** Step 5 preview edits win over the originally-computed values, same merge pattern
- *  used by download.worker.ts's applyRows() and page.tsx's fillTabs sync. */
-function mergedFilled(row: ProcessedRow): Partial<FilledData> | undefined {
-  if (!row.filled && !row.override) return undefined;
-  return { ...(row.filled ?? {}), ...(row.override ?? {}) };
+const ATT_CLASS_CONST = "MBC1"; // always a fixed constant — verified against real RECAP data
+
+interface Enrichment {
+  division: string;
+  dept: string;
+  colN: string;      // Forecast Sales/Month/Store — 100 ช่อง's colDF
+  colPiece: string;  // TOTAL_UNITS / PUR Shelf stock ON POG (Piece) — DATA_SPACEMAN's totalUnits
+  colO: string;       // % Ordering — exception-config match, default "100%"
 }
 
-const NEW_SCM_BARCODE_COL = 3; // matches fillNewSCM()'s BARCODE_COL
-
 /**
- * Barcode → set of store codes flagged in the NEW SCM rows Check Space inserted THIS
- * session only (checkSpacePlan.newScmRows) — as opposed to newScmStoreFlags, which is
- * cumulative across every row for that barcode (this session + any prior session).
- *
- * This distinction only matters for a "NEW EXPAND" item: an item that already sells in
- * some stores and is expanding to more. Confirmed with the user: expanding an existing
- * item's coverage always inserts a brand-new NEW SCM row via Check Space — the old row
- * (with its already-active stores) is never edited directly — so the new row's own
- * store-flag cells are exactly "what's being added this round", cleanly separate from
- * the historical row. For a brand-new item (no prior row at all), this set is identical
- * to newScmStoreFlags's, so NEW ADD ALL/SOME STORE scenarios are unaffected.
+ * DIVISION/DEPARTMENT/forecast/%-ordering resolution for one barcode — mirrors the
+ * previously-verified processRows() formula exactly (100 ช่อง → structureMap primary,
+ * DATA_SPACEMAN descA/descB fallback, exception-config % match with the same derived-meta
+ * fallback), just restructured as a per-barcode lookup instead of a per-RECAP-row scan.
  */
-function extractThisRoundStoreFlags(
-  checkSpacePlan: CheckSpaceFillPlan | null,
-  storeColMap: Map<number, string>
-): StoreFlagMap {
-  const flags: StoreFlagMap = new Map();
-  if (!checkSpacePlan) return flags;
+function resolveEnrichment(
+  barcode: string,
+  barcodeMap: Map<string, SubclassInfo>,
+  structureMap: Map<string, HierarchyNames>,
+  byUpc: Map<string, SpacemanRowMeta>,
+  exceptionConfig: ExceptionConfig[]
+): Enrichment {
+  const info = barcodeMap.get(barcode);
+  const spacemanMeta = byUpc.get(barcode);
 
-  for (const row of checkSpacePlan.newScmRows) {
-    const barcodeCell = row.cells.find(c => c.col === NEW_SCM_BARCODE_COL);
-    if (!barcodeCell || !barcodeCell.value) continue;
-    const barcode = barcodeCell.value;
-
-    for (const cell of row.cells) {
-      const storeCode = storeColMap.get(cell.col);
-      if (!storeCode || !cell.value) continue;
-      if (!flags.has(barcode)) flags.set(barcode, new Set());
-      flags.get(barcode)!.add(storeCode);
+  if (!info) {
+    if (spacemanMeta) {
+      const matched = exceptionConfig.length > 0 ? findMatchingConfig(exceptionConfig, spacemanMeta) : null;
+      return {
+        division: spacemanMeta.descA,
+        dept: spacemanMeta.descB,
+        colN: "",
+        colPiece: spacemanMeta.totalUnits,
+        colO: matched ? `${matched.percentage}%` : "100%",
+      };
     }
+    return { division: "", dept: "", colN: "", colPiece: "", colO: "100%" };
   }
 
-  return flags;
+  const hierarchy = structureMap.get(info.subclassCode);
+  if (!hierarchy) {
+    return {
+      division: "",
+      dept: "",
+      colN: info.colDF || "",
+      colPiece: spacemanMeta?.totalUnits || "",
+      colO: "100%",
+    };
+  }
+
+  const filled = buildRecapCodes(hierarchy);
+  const colN = info.colDF || "";
+  const colPiece = spacemanMeta?.totalUnits || "";
+
+  const derivedMeta: SpacemanRowMeta = {
+    category: filled.cls,
+    subcategory: info.subclassCode
+      ? (info.subclassName.trim() ? `${info.subclassCode}: ${info.subclassName.trim()}` : info.subclassCode)
+      : "",
+    descA: filled.division,
+    descB: filled.dept,
+    descC: filled.subDept,
+    totalUnits: "",
+  };
+  const meta = spacemanMeta ?? derivedMeta;
+  const matched = exceptionConfig.length > 0 ? findMatchingConfig(exceptionConfig, meta) : null;
+
+  return {
+    division: filled.division,
+    dept: filled.dept,
+    colN,
+    colPiece,
+    colO: matched ? `${matched.percentage}%` : "100%",
+  };
 }
 
 /**
- * Reshape RECAP Auto-Filler's finished pipeline output into the 3 Minor Report sheets.
- * Pure function — no React, no refs, no file parsing. Everything it needs already lives
- * in the snapshot assembled at the end of handleProcess() (see app/page.tsx).
+ * Reshapes Check Space + FILE_INDEX + 100 ช่อง + DATA_SPACEMAN directly into the 3 Minor
+ * Report sheets. Pure function — no RECAP file, no React, no file parsing.
  *
- * Row-explosion logic — see doc §5/§6.2:
- *   Recap_New_item     = one row per (barcode × store) where NEW SCM has a store-flag
- *   Recap_New_not_link = one row per (barcode × store) where FILE_INDEX says the store
- *                        should carry this barcode's planogram, but NEW SCM has no flag
- *                        for that store — NOT mutually exclusive with Recap_New_item,
- *                        a barcode can appear in both if some stores link and some don't
- *   Recap_Delete_item  = one row per (barcode × store) where DEL SCM has a store-flag
+ * Per Check Space item (barcode × ticked POGs):
+ *   Recap_New_item     = one row per (barcode × store) for every store the TICKED POGs
+ *                         cover in FILE_INDEX — "what's newly targeted this round".
+ *   Recap_New_not_link = one row per (barcode × store) in FILE_INDEX's full store master
+ *                         that ISN'T already covered by either the ticked POGs (new) or
+ *                         the item's DATA_SPACEMAN-recorded current planogram (existing) —
+ *                         this single formula naturally handles NEW ADD ALL/SOME STORE
+ *                         (no existing planogram yet, so it's just new vs total) and
+ *                         NEW EXPAND (existing + new both subtracted) without special-casing
+ *                         the status text at all.
+ *   Recap_Delete_item  = one row per (barcode × store): "DELETE ALL STORE" explodes over
+ *                         the full store master (matches fillDelSCM's old behavior of
+ *                         leaving store-flags blank to mean "everywhere"); "DELETE SOME
+ *                         STORE" explodes over the ticked POGs' store union, same as NEW.
  */
-export function buildMinorReportSheets(snapshot: PipelineSnapshot): MinorReportSheets {
-  const {
-    results, checkSpacePlan, indexLookup, barcodeMap, structureMap, byUpc,
-    newScmStoreFlags, delScmStoreFlags, newScmRowInfo, delScmRowInfo, attributeMap,
-    newScmStoreColMap,
-  } = snapshot;
-
-  const resultsByBarcode = new Map<string, ProcessedRow>();
-  for (const row of results) {
-    if (!resultsByBarcode.has(row.barcode)) resultsByBarcode.set(row.barcode, row);
-  }
-
-  // Only barcodes Check Space actually touched this session drive Recap_New_item /
-  // Recap_New_not_link — Minor Report reports "what's new this round", not the full
-  // historical contents of NEW SCM (see extractThisRoundStoreFlags() above).
-  const thisRoundStoreFlags = extractThisRoundStoreFlags(checkSpacePlan, newScmStoreColMap);
+export function buildMinorReportSheets(input: MinorReportInput): MinorReportSheets {
+  const { checkSpaceItems, indexLookup, barcodeMap, structureMap, byUpc, exceptionConfig } = input;
 
   const newItem: MinorReportNewItemRow[] = [];
   const newNotLink: MinorReportNewNotLinkRow[] = [];
   const deleteItem: MinorReportDeleteItemRow[] = [];
 
-  // ── Recap_New_item + Recap_New_not_link ──────────────────────────────────
-  for (const [barcode, storesAddedThisRound] of thisRoundStoreFlags) {
-    const pr = resultsByBarcode.get(barcode);
-    const filled = pr ? mergedFilled(pr) : undefined;
-    // Fallback to a direct sheet read for rows processRows() never touched — pre-existing
-    // NEW SCM rows whose col F was already filled before this run (parseMissingRows skips them).
-    const rowInfo = newScmRowInfo.get(barcode);
+  for (const item of checkSpaceItems) {
+    const isDelete = item.status.toUpperCase().startsWith("DELETE");
+    const enrichment = resolveEnrichment(item.barcode, barcodeMap, structureMap, byUpc, exceptionConfig);
+    const spaceman = byUpc.get(item.barcode);
+    const packInfo = barcodeMap.get(item.barcode);
+    const netCapacity = computeNetCapacity(enrichment.colO, enrichment.colPiece);
+    // Reference ATT_CODE for rows that can't be tied to one specific POG (e.g. a
+    // not-linked store, or a "DELETE ALL STORE" store outside any ticked POG) —
+    // first ticked POG's code, same "first occurrence wins" simplification used
+    // throughout this codebase for one-barcode-many-attributes cases.
+    const firstPogByCode = item.pogs.length > 0 ? (indexLookup.pogToByCode.get(item.pogs[0]) ?? "") : "";
 
-    const name      = pr?.name          ?? rowInfo?.name      ?? "";
-    const division  = filled?.division  ?? rowInfo?.division  ?? "";
-    const dept      = filled?.dept      ?? rowInfo?.dept      ?? "";
-    const planogram = filled?.planogram ?? rowInfo?.planogram ?? "";
-    const colN      = filled?.colN      ?? rowInfo?.colN      ?? "";
-    const colPiece  = filled?.colPiece  ?? rowInfo?.colPiece  ?? "";
-    const colO      = filled?.colO      ?? rowInfo?.colO      ?? "";
+    if (!isDelete) {
+      // ── Stores newly targeted this round: union of the ticked POGs, remembering
+      //    which POG each store came from so ATT_CODE is correct per store. ──
+      const newStoreToPog = new Map<string, string>();
+      for (const pog of item.pogs) {
+        const stores = indexLookup.pogToStores.get(pog);
+        if (!stores) continue;
+        for (const store of stores) {
+          if (!newStoreToPog.has(store)) newStoreToPog.set(store, pog);
+        }
+      }
 
-    const spaceman = byUpc.get(barcode);
-    const packInfo = barcodeMap.get(barcode);
-    const attr = attributeMap.get(barcode);
-    const netCapacity = computeNetCapacity(colO, colPiece);
-
-    for (const store of storesAddedThisRound) {
-      newItem.push({
-        division,
-        department: dept,
-        upc: barcode,
-        name,
-        salepack: spaceman?.salepack ?? "",
-        recipe: spaceman?.purchaseItemForSalepack ?? "",
-        packSize: packInfo?.packSize ?? "",
-        totalUnits: spaceman?.totalUnits ?? "",
-        purShelfStockPiece: colPiece,
-        pctOrdering: colO,
-        netCapacity: netCapacity !== null ? String(netCapacity) : "",
-        attClass: attr?.attClass ?? "",
-        attCode: attr?.attCode ?? "",
-        storeNumber: store,
-        link: "LINK",
-        forecastSalesPerMonthStore: colN,
-      });
-    }
-
-    // "Not linked" excludes every CUMULATIVE currently-active store for this barcode
-    // (historical + this round combined — newScmStoreFlags, not storesAddedThisRound),
-    // measured against the FULL store master in FILE_INDEX (indexLookup.storeList —
-    // every Store Code column, regardless of POG). Both confirmed with the user against
-    // a real INDEX BIG C mini file screenshot and the NEW EXPAND scenario table.
-    const allActiveStores = newScmStoreFlags.get(barcode) ?? storesAddedThisRound;
-    if (planogram && indexLookup.storeList.length > 0) {
-      for (const store of indexLookup.storeList) {
-        if (allActiveStores.has(store)) continue; // already selling there — LINK or pre-existing
-        newNotLink.push({
-          upc: barcode,
-          name,
-          division,
-          department: dept,
-          attClass: attr?.attClass ?? "",
-          attCode: attr?.attCode ?? "",
+      for (const [store, pog] of newStoreToPog) {
+        newItem.push({
+          division: enrichment.division,
+          department: enrichment.dept,
+          upc: item.barcode,
+          name: item.name,
+          salepack: spaceman?.salepack ?? "",
+          recipe: spaceman?.purchaseItemForSalepack ?? "",
+          packSize: packInfo?.packSize ?? "",
+          totalUnits: spaceman?.totalUnits ?? "",
+          purShelfStockPiece: enrichment.colPiece,
+          pctOrdering: enrichment.colO,
+          netCapacity: netCapacity !== null ? String(netCapacity) : "",
+          attClass: ATT_CLASS_CONST,
+          attCode: indexLookup.pogToByCode.get(pog) ?? "",
           storeNumber: store,
-          link: "New not link",
+          link: "LINK",
+          forecastSalesPerMonthStore: enrichment.colN,
         });
       }
-    }
-  }
 
-  // ── Recap_Delete_item ─────────────────────────────────────────────────────
-  for (const [barcode, stores] of delScmStoreFlags) {
-    const rowInfo = delScmRowInfo.get(barcode);
-    const attr = attributeMap.get(barcode);
+      // ── Stores already selling this item, per DATA_SPACEMAN's recorded planogram ──
+      const existingPlanogram = spaceman?.planogram ?? "";
+      const existingStores = existingPlanogram
+        ? indexLookup.pogToStores.get(existingPlanogram) ?? new Set<string>()
+        : new Set<string>();
 
-    // DEL SCM has no DEPARTMENT column — derive it via the same 100-ช่อง → structureMap
-    // join processRows() uses for NEW SCM, when the barcode happens to be in that lookup.
-    const subclassCode = barcodeMap.get(barcode)?.subclassCode;
-    const hierarchy = subclassCode ? structureMap.get(subclassCode) : undefined;
-    const department = hierarchy ? buildRecapCodes(hierarchy).dept : "";
+      const cumulativeActive = new Set<string>(existingStores);
+      for (const store of newStoreToPog.keys()) cumulativeActive.add(store);
 
-    for (const store of stores) {
-      deleteItem.push({
-        upc: barcode,
-        name: rowInfo?.name ?? "",
-        division: rowInfo?.division ?? "",
-        department,
-        attClass: attr?.attClass ?? "",
-        attCode: attr?.attCode ?? "",
-        storeNumber: store,
-        link: "NOT LINK",
-        remark: rowInfo?.remark ?? "", // pass-through verbatim — no normalization (doc §6.7)
-      });
+      if (cumulativeActive.size > 0) {
+        for (const store of indexLookup.storeList) {
+          if (cumulativeActive.has(store)) continue;
+          newNotLink.push({
+            upc: item.barcode,
+            name: item.name,
+            division: enrichment.division,
+            department: enrichment.dept,
+            attClass: ATT_CLASS_CONST,
+            attCode: firstPogByCode,
+            storeNumber: store,
+            link: "New not link",
+          });
+        }
+      }
+    } else {
+      // ── DELETE ──
+      const isDeleteAll = /DELETE\s+ALL/i.test(item.status);
+      const deleteStores = new Set<string>();
+      if (isDeleteAll) {
+        for (const store of indexLookup.storeList) deleteStores.add(store);
+      } else {
+        for (const pog of item.pogs) {
+          const stores = indexLookup.pogToStores.get(pog);
+          if (stores) for (const s of stores) deleteStores.add(s);
+        }
+      }
+
+      for (const store of deleteStores) {
+        deleteItem.push({
+          upc: item.barcode,
+          name: item.name,
+          division: enrichment.division,
+          department: enrichment.dept,
+          attClass: ATT_CLASS_CONST,
+          attCode: firstPogByCode,
+          storeNumber: store,
+          link: "NOT LINK",
+          // Verified against fillDelSCM(): DEL SCM's REMARK column was always written
+          // as item.status verbatim (not Check Space's own remark field) — pass-through,
+          // no normalization (doc §6.7).
+          remark: item.status,
+        });
+      }
     }
   }
 

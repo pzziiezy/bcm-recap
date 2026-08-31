@@ -11,7 +11,6 @@ import type {
   PlanogramLookupResult,
   CheckSpaceItem,
   IndexLookup,
-  StoreFlagMap,
 } from "./types";
 import type { FillCell, FillRow } from "./download";
 
@@ -317,7 +316,10 @@ export async function parsePlanogramLookup(
         const totalUnits = totalUnitsCol >= 0 ? cellVal(ws, r, totalUnitsCol) : "";
         const salepack   = salepackCol     >= 0 ? cellVal(ws, r, salepackCol)     : "";
         const purchaseItemForSalepack = purchaseItemCol >= 0 ? cellVal(ws, r, purchaseItemCol) : "";
-        byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits, salepack, purchaseItemForSalepack });
+        // Per-UPC PLANOGRAM (col D) — the item's CURRENT/already-assigned planogram, used
+        // by the no-RECAP Minor Report flow to find "stores this item already sells at"
+        // (look this planogram up in FILE_INDEX.pogToStores) — see lib/minorReportV2.ts.
+        byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits, salepack, purchaseItemForSalepack, planogram: plog });
         if (category) catSet.add(category);
         if (subcat)   subSet.add(subcat);
         if (descC)    descSet.add(descC);
@@ -428,7 +430,7 @@ function matchesConfig(entry: ExceptionConfig, meta: SpacemanRowMeta): boolean {
   return catOk && subOk && descOk;
 }
 
-function findMatchingConfig(config: ExceptionConfig[], meta: SpacemanRowMeta): ExceptionConfig | null {
+export function findMatchingConfig(config: ExceptionConfig[], meta: SpacemanRowMeta): ExceptionConfig | null {
   for (const entry of config) {
     if (entry.status === "inactive") continue;
     if (matchesConfig(entry, meta)) return entry;
@@ -1183,198 +1185,4 @@ export function fillDelSCM(
 
   extendRef(ws, appendRow + delItems.length - 1, maxCol);
   return fillRows;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MINOR REPORT — store-flag extraction
-// Additive only — reads the same in-memory NEW SCM / DEL SCM worksheet used above,
-// does not touch anything else in this file.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Barcode → set of store codes with a non-empty value in that sheet's store columns.
- * Uses the same sparse-cell-key scan as parseFileIndex() to avoid a dense scan over
- * ~1,900 store columns per row.
- *
- * Column positions (verified against fillNewSCM()/fillDelSCM() above):
- *   NEW SCM: headerRow=3, dataStartRow=4, barcodeCol=3 (Barcode ขาย/UPC), storeStartCol=17 (col R)
- *   DEL SCM: headerRow=4, dataStartRow=5, barcodeCol=3 (Barcode ขาย/UPC), storeStartCol=14 (col O)
- */
-/**
- * colIdx → storeCode from a sheet's store-header row (sparse scan, only cols >= storeStartCol).
- * Shared by extractStoreFlags() below and by Minor Report's "this round only" store
- * resolution (see lib/minorReport.ts), which needs to translate the raw {col,value}
- * cells in checkSpacePlan.newScmRows back into actual store codes.
- */
-export function mapStoreColumns(
-  ws: XLSX.WorkSheet,
-  headerRow: number,
-  storeStartCol: number,
-): Map<number, string> {
-  const storeColMap = new Map<number, string>();
-  if (!ws["!ref"]) return storeColMap;
-  const headerRowRe = new RegExp(`^([A-Z]+)${headerRow + 1}$`);
-  for (const key of Object.keys(ws)) {
-    const m = headerRowRe.exec(key);
-    if (!m) continue;
-    const ci = colLetterToIdx(m[1]);
-    if (ci < storeStartCol) continue;
-    const v = ws[key]?.v;
-    if (v != null) {
-      const sc = String(v).split(".")[0]; // strip .0 from numbers
-      // Real sheets append a non-numeric "Grand Total" summary column after the last
-      // store — skip anything that isn't a plain numeric store code.
-      if (sc && /^\d+$/.test(sc)) storeColMap.set(ci, sc);
-    }
-  }
-  return storeColMap;
-}
-
-export function extractStoreFlags(
-  ws: XLSX.WorkSheet,
-  headerRow: number,
-  dataStartRow: number,
-  barcodeCol: number,
-  storeStartCol: number,
-): StoreFlagMap {
-  const flags: StoreFlagMap = new Map();
-  if (!ws["!ref"]) return flags;
-
-  const storeColMap = mapStoreColumns(ws, headerRow, storeStartCol);
-  if (storeColMap.size === 0) return flags;
-
-  // 2. Sparse scan: group non-empty store-column cells by row
-  const rowStores = new Map<number, string[]>();
-  const dataRe = /^([A-Z]+)(\d+)$/;
-  for (const key of Object.keys(ws)) {
-    const m = dataRe.exec(key);
-    if (!m) continue;
-    const ci = colLetterToIdx(m[1]);
-    const storeCode = storeColMap.get(ci);
-    if (!storeCode) continue;
-    const ri = parseInt(m[2]) - 1; // 0-indexed
-    if (ri < dataStartRow) continue;
-    const cell = ws[key];
-    if (cell?.v == null || cell.v === "") continue;
-    if (!rowStores.has(ri)) rowStores.set(ri, []);
-    rowStores.get(ri)!.push(storeCode);
-  }
-
-  // 3. Read barcode per flagged row (dense column) and merge
-  const range = XLSX.utils.decode_range(ws["!ref"]);
-  for (let r = dataStartRow; r <= range.e.r; r++) {
-    const stores = rowStores.get(r);
-    if (!stores || stores.length === 0) continue;
-    const bc = normalizeBarcode(cellVal(ws, r, barcodeCol));
-    if (!bc) continue;
-    if (!flags.has(bc)) flags.set(bc, new Set());
-    const set = flags.get(bc)!;
-    for (const s of stores) set.add(s);
-  }
-
-  return flags;
-}
-
-/** Dense per-barcode field snapshot read directly from NEW SCM (covers pre-existing rows
- *  that processRows() never touches because their col F was already filled). */
-export interface NewScmRowInfo {
-  name: string;
-  division: string;
-  dept: string;
-  planogram: string;
-  colN: string;      // MBC Forecast sale/Month/Store
-  colPiece: string;  // Shelf stock ON POG (Piece)
-  colO: string;      // Shelf stock ON POG (%)
-}
-
-/** Verified against fillNewSCM(): NAME=col E(4), DIVISION=F(5), DEPT=G(6), PLANOGRAM=J(9),
- *  colN=N(13), colPiece=O(14), colO=P(15). barcodeCol=3 (Barcode ขาย/UPC), dataStartRow=4. */
-export function extractNewScmRowInfo(ws: XLSX.WorkSheet, dataStartRow: number): Map<string, NewScmRowInfo> {
-  const map = new Map<string, NewScmRowInfo>();
-  if (!ws["!ref"]) return map;
-  const range = XLSX.utils.decode_range(ws["!ref"]);
-  const BARCODE_COL = 3, NAME_COL = 4, DIVISION_COL = 5, DEPT_COL = 6, PLANOGRAM_COL = 9,
-        COLN_COL = 13, COLPIECE_COL = 14, COLO_COL = 15;
-  for (let r = dataStartRow; r <= range.e.r; r++) {
-    const bc = normalizeBarcode(cellVal(ws, r, BARCODE_COL));
-    if (!bc || map.has(bc)) continue;
-    map.set(bc, {
-      name: cellVal(ws, r, NAME_COL),
-      division: cellVal(ws, r, DIVISION_COL),
-      dept: cellVal(ws, r, DEPT_COL),
-      planogram: cellVal(ws, r, PLANOGRAM_COL),
-      colN: cellVal(ws, r, COLN_COL),
-      colPiece: cellVal(ws, r, COLPIECE_COL),
-      colO: cellVal(ws, r, COLO_COL),
-    });
-  }
-  return map;
-}
-
-/** Dense per-barcode field snapshot read directly from DEL SCM — results[]/checkSpacePlan
- *  never cover DEL SCM rows at all (parseMissingRows only scans NEW SCM), so this is the
- *  only source of NAME/DIVISION/REMARK for Recap_Delete_item. */
-export interface DelScmRowInfo {
-  name: string;
-  division: string;
-  remark: string;
-}
-
-/** Verified against fillDelSCM(): NAME=col E(4), DIVISION=F(5), REMARK=I(8).
- *  barcodeCol=3 (Barcode ขาย/UPC), dataStartRow=5. */
-export function extractDelScmRowInfo(ws: XLSX.WorkSheet, dataStartRow: number): Map<string, DelScmRowInfo> {
-  const map = new Map<string, DelScmRowInfo>();
-  if (!ws["!ref"]) return map;
-  const range = XLSX.utils.decode_range(ws["!ref"]);
-  const BARCODE_COL = 3, NAME_COL = 4, DIVISION_COL = 5, REMARK_COL = 8;
-  for (let r = dataStartRow; r <= range.e.r; r++) {
-    const bc = normalizeBarcode(cellVal(ws, r, BARCODE_COL));
-    if (!bc || map.has(bc)) continue;
-    map.set(bc, {
-      name: cellVal(ws, r, NAME_COL),
-      division: cellVal(ws, r, DIVISION_COL),
-      remark: cellVal(ws, r, REMARK_COL),
-    });
-  }
-  return map;
-}
-
-/** Attribute Class / Attribute Code for one barcode, read from NEW_DELETE_IM. */
-export interface AttributeInfo {
-  attClass: string;
-  attCode: string;
-}
-
-/**
- * Barcode → {attClass, attCode} from NEW_DELETE_IM, covering both the New (left) and
- * Delete (right) blocks. A barcode may legitimately have several Attribute Code rows
- * (one product tied to multiple attributes) — this keeps only the FIRST one seen per
- * barcode as a deliberate simplification; if Minor Report ever needs every code, this
- * is the place to widen the return type to attClass/attCode arrays.
- *
- * Verified against fillNewDeleteIM(): New block — barcode=col B(1), class=D(3), code=E(4).
- * Delete block — barcode=col J(9), class=L(11), code=M(12). Header row index 3, data from 4.
- */
-export function extractAttributeMap(ws: XLSX.WorkSheet, dataStartRow: number): Map<string, AttributeInfo> {
-  const map = new Map<string, AttributeInfo>();
-  if (!ws["!ref"]) return map;
-  const range = XLSX.utils.decode_range(ws["!ref"]);
-
-  const scanBlock = (barcodeCol: number, classCol: number, codeCol: number) => {
-    let currentBarcode = "";
-    for (let r = dataStartRow; r <= range.e.r; r++) {
-      const bcRaw = cellVal(ws, r, barcodeCol);
-      if (bcRaw) currentBarcode = normalizeBarcode(bcRaw);
-      if (!currentBarcode) continue;
-      if (map.has(currentBarcode)) continue; // first occurrence wins
-      const attClass = cellVal(ws, r, classCol);
-      const attCode = cellVal(ws, r, codeCol);
-      if (attClass || attCode) map.set(currentBarcode, { attClass, attCode });
-    }
-  };
-
-  scanBlock(1, 3, 4);    // New block
-  scanBlock(9, 11, 12);  // Delete block
-
-  return map;
 }

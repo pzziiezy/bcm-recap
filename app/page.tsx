@@ -27,7 +27,6 @@ import {
 
 import StepIndicator from "@/components/StepIndicator";
 import DropZone from "@/components/DropZone";
-import ResultsTable from "@/components/ResultsTable";
 import NewRenovateTab from "@/components/NewRenovateTab";
 import SpacemanMaster, {
   DriveFileInfo,
@@ -35,33 +34,24 @@ import SpacemanMaster, {
   type SpacemanValues,
 } from "@/components/SpacemanMaster";
 import ConfigMenu, { EXCEPTION_CONFIG_KEY, type SyncStatus } from "@/components/ConfigMenu";
-import { toDownloadRows, type DownloadRow, type CheckSpaceFillPlan, type FillRow } from "@/lib/download";
-import FillEditTable, {
-  type TabColDef,
-  type EditableFillRow,
-  convertToEditableRows,
-  convertFromEditableRows,
-} from "@/components/FillEditTable";
+import FillEditTable, { type TabColDef, type EditableFillRow } from "@/components/FillEditTable";
 import {
-  parseMissingRows,
   parseXlsbFiles,
   buildStructureLookup,
   parsePlanogramLookup,
-  processRows,
   parseCheckSpace,
   parseFileIndex,
-  buildXlsbExtraInfoMap,
-  fillNewDeleteIM,
-  fillNewSCM,
-  fillDelSCM,
-  extractStoreFlags,
-  extractNewScmRowInfo,
-  extractDelScmRowInfo,
-  extractAttributeMap,
-  mapStoreColumns,
 } from "@/lib/processor";
-import type { ProcessedRow, ExceptionConfig, FilledData, IndexLookup, PipelineSnapshot } from "@/lib/types";
-import MinorReportTab from "@/components/MinorReportTab";
+import { buildMinorReportSheets } from "@/lib/minorReport";
+import { buildMinorReportFillPlan, type MinorReportFillPlan } from "@/lib/minorReportDownload";
+import type {
+  ExceptionConfig,
+  IndexLookup,
+  MinorReportSheets,
+  MinorReportNewItemRow,
+  MinorReportNewNotLinkRow,
+  MinorReportDeleteItemRow,
+} from "@/lib/types";
 import { makeEntry, sendLog } from "@/lib/logger";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -69,7 +59,7 @@ import { makeEntry, sendLog } from "@/lib/logger";
 const STEPS = [
   { id: 1, label: "Check Space" },
   { id: 2, label: "FILE_INDEX" },
-  { id: 3, label: "RECAP" },
+  { id: 3, label: "Minor Report Template" },
   { id: 4, label: "100 ช่อง" },
   { id: 5, label: "ตรวจสอบ" },
   { id: 6, label: "ดาวน์โหลด" },
@@ -78,7 +68,7 @@ const STEPS = [
 const MAX_CONCURRENT = 2;
 
 type Status = "idle" | "processing" | "done" | "error";
-type AppView = "main" | "spaceman" | "newrenovate" | "minorReport";
+type AppView = "main" | "spaceman" | "newrenovate";
 type JobStatus = "queued" | "processing" | "done" | "failed" | "terminated" | "downloaded";
 
 interface BuildJob {
@@ -109,7 +99,7 @@ function triggerBrowserDownload(label: string, buffer: ArrayBuffer) {
   URL.revokeObjectURL(url);
 }
 
-// ─── Check Space fill table definitions ────────────────────────────────────
+// ─── Check Space status dropdown options ───────────────────────────────────
 
 const NEW_STATUS_OPTIONS = [
   "NEW ADD SOME STORE",
@@ -126,51 +116,66 @@ const DEL_STATUS_OPTIONS = [
   "DELETE SOME STORE (IN/OUT)",
 ];
 
-const NDIM_COLDEFS: TabColDef[] = [
-  { field: "seqNew",     col: 0,  label: "ลำดับ(New)",   editable: false, zone: "new" },
-  { field: "barcodeNew", col: 1,  label: "Barcode(New)",  editable: false, zone: "new" },
-  { field: "nameNew",    col: 2,  label: "Name(New)",     editable: false, zone: "new" },
-  { field: "dcNew",      col: 3,  label: "DC",            editable: false, zone: "new" },
-  { field: "byCodeNew",  col: 4,  label: "BY_CODE(New)",  editable: true,  zone: "new" },
-  { field: "statusNew",  col: 5,  label: "Status(New)",   editable: true,  zone: "new" },
-  { field: "remark",     col: 6,  label: "Remark",        editable: true,  zone: "new" },
-  { field: "seqDel",     col: 8,  label: "ลำดับ(Del)",   editable: false, zone: "del" },
-  { field: "barcodeDel", col: 9,  label: "Barcode(Del)",  editable: false, zone: "del" },
-  { field: "nameDel",    col: 10, label: "Name(Del)",     editable: false, zone: "del" },
-  { field: "dcDel",      col: 11, label: "DC(Del)",       editable: false, zone: "del" },
-  { field: "byCodeDel",  col: 12, label: "BY_CODE(Del)",  editable: true,  zone: "del" },
-  { field: "statusDel",  col: 13, label: "Status(Del)",   editable: true,  zone: "del" },
-  { field: "extraInfo",  col: 14, label: "Extra_Info",    editable: true,  zone: "del" },
+// ─── Minor Report preview table definitions (Step 5) ───────────────────────
+// `col` is unused by FillEditTable itself (only convertToEditableRows/FromEditableRows,
+// which Minor Report doesn't need — see minorRowsToEditable/editableToMinorRows below),
+// so it's just each field's display order here.
+
+const NEW_ITEM_COLDEFS: TabColDef[] = [
+  { field: "upc",                        col: 0,  label: "UPC",        editable: false },
+  { field: "name",                       col: 1,  label: "NAME",       editable: false },
+  { field: "division",                   col: 2,  label: "DIVISION",   editable: true },
+  { field: "department",                 col: 3,  label: "DEPARTMENT", editable: true },
+  { field: "salepack",                   col: 4,  label: "SALEPACK",   editable: true },
+  { field: "recipe",                     col: 5,  label: "RECIPE",     editable: true },
+  { field: "packSize",                   col: 6,  label: "PACK SIZE",  editable: true },
+  { field: "totalUnits",                 col: 7,  label: "TOTAL_UNITS", editable: true },
+  { field: "purShelfStockPiece",         col: 8,  label: "PUR Shelf stock (Piece)", editable: true },
+  { field: "pctOrdering",                col: 9,  label: "% Ordering", editable: true },
+  { field: "netCapacity",                col: 10, label: "Net Capacity", editable: false },
+  { field: "attClass",                   col: 11, label: "ATT_CLASS",  editable: true },
+  { field: "attCode",                    col: 12, label: "ATT_CODE",   editable: true },
+  { field: "storeNumber",                col: 13, label: "STORE NUMBER", editable: false },
+  { field: "link",                       col: 14, label: "LINK",       editable: false },
+  { field: "forecastSalesPerMonthStore", col: 15, label: "Forecast Sales/Month/Store", editable: true },
 ];
 
-const NSCM_COLDEFS: TabColDef[] = [
-  { field: "seq",       col: 0,  label: "ลำดับ",            editable: false },
-  { field: "barcode",   col: 3,  label: "Barcode",           editable: false },
-  { field: "name",      col: 4,  label: "ชื่อสินค้า",       editable: false },
-  { field: "division",  col: 5,  label: "F — DIVISION",      editable: true },
-  { field: "dept",      col: 6,  label: "G — DEPT",          editable: true, cascade: "division" },
-  { field: "subDept",   col: 7,  label: "H — SUB-DEPT",      editable: true, cascade: "dept" },
-  { field: "cls",       col: 8,  label: "I — Class",         editable: true, cascade: "subDept" },
-  { field: "planogram", col: 9,  label: "J — PLANOGRAM",     editable: true },
-  { field: "status",    col: 10, label: "Status",            editable: true },
-  { field: "remark",    col: 11, label: "Remark",            editable: true },
-  { field: "implement", col: 12, label: "POG ROUND", editable: true },
-  { field: "colN",      col: 13, label: "MBC FCST",  editable: true },
-  { field: "colPiece",  col: 14, label: "Piece",     editable: true },
-  { field: "colO",      col: 15, label: "%",          editable: true },
-  { field: "colNet",    col: 16, label: "Net",        editable: false },
+const NEW_NOT_LINK_COLDEFS: TabColDef[] = [
+  { field: "upc",         col: 0, label: "UPC",         editable: false },
+  { field: "name",        col: 1, label: "NAME",        editable: false },
+  { field: "division",    col: 2, label: "DIVISION",    editable: true },
+  { field: "department",  col: 3, label: "DEPARTMENT",  editable: true },
+  { field: "attClass",    col: 4, label: "ATT_CLASS",   editable: true },
+  { field: "attCode",     col: 5, label: "ATT_CODE",    editable: true },
+  { field: "storeNumber", col: 6, label: "STORENUMBER", editable: false },
+  { field: "link",        col: 7, label: "LINK",        editable: false },
 ];
 
-const DSCM_COLDEFS: TabColDef[] = [
-  { field: "seq",       col: 0, label: "ลำดับ",        editable: false },
-  { field: "barcode",   col: 3, label: "Barcode",       editable: false },
-  { field: "name",      col: 4, label: "ชื่อสินค้า",   editable: false },
-  { field: "division",  col: 5, label: "Division",      editable: true },
-  { field: "category",  col: 6, label: "Category",      editable: true, cascade: "division" },
-  { field: "implement", col: 7, label: "POG ROUND",     editable: true },
-  { field: "status",    col: 8, label: "Status",        editable: true },
-  { field: "extraInfo", col: 9, label: "Extra_Info",    editable: true },
+const DELETE_ITEM_COLDEFS: TabColDef[] = [
+  { field: "upc",         col: 0, label: "UPC",         editable: false },
+  { field: "name",        col: 1, label: "NAME",        editable: false },
+  { field: "division",    col: 2, label: "DIVISION",    editable: true },
+  { field: "department",  col: 3, label: "DEPARTMENT",  editable: true },
+  { field: "attClass",    col: 4, label: "ATT_CLASS",   editable: true },
+  { field: "attCode",     col: 5, label: "ATT_CODE",    editable: true },
+  { field: "storeNumber", col: 6, label: "STORENUMBER", editable: false },
+  { field: "link",        col: 7, label: "LINK",        editable: false },
+  { field: "remark",      col: 8, label: "REMARK",      editable: true },
 ];
+
+/** Converts one Minor Report sheet's typed rows into FillEditTable's generic
+ *  {rowIndex, fields} shape — rowIndex is just the array index since Minor Report
+ *  rows have no underlying spreadsheet row to track. All row fields are plain
+ *  strings (a couple are narrowed literal types like link: "LINK"), so the cast
+ *  here is just satisfying that, not discarding real type safety. */
+function minorRowsToEditable<T>(rows: T[]): EditableFillRow[] {
+  return rows.map((row, i) => ({ rowIndex: i, fields: { ...row } as unknown as Record<string, string> }));
+}
+
+/** Reverses minorRowsToEditable() after Step 5 edits, preserving row order. */
+function editableToMinorRows<T>(rows: EditableFillRow[]): T[] {
+  return rows.map(r => r.fields as unknown as T);
+}
 
 // ─── Home ──────────────────────────────────────────────────────────────────
 
@@ -183,21 +188,18 @@ export default function Home() {
 
   const [checkSpaceFile, setCheckSpaceFile] = useState<File | null>(null);
   const [fileIndexFile, setFileIndexFile] = useState<File | null>(null);
-  const [recapFiles, setRecapFiles] = useState<File[]>([]);
+  const [templateFiles, setTemplateFiles] = useState<File[]>([]); // Minor Report template (was RECAP)
   const [xlsbFiles, setXlsbFiles] = useState<File[]>([]);
   const [driveFileInfo, setDriveFileInfo] = useState<DriveFileInfo | null>(null);
   const [driveLoading, setDriveLoading] = useState(true);
-  const [results, setResults] = useState<ProcessedRow[]>([]);
 
-  // Check Space fill tables (3 editable tabs in Step 5)
-  interface FillTabData {
-    sheetName: string;
+  // Minor Report preview tables (Step 5) — 3 editable tabs, one per output sheet
+  interface MinorTabData {
     displayName: string;
     colDefs: TabColDef[];
     rows: EditableFillRow[];
-    originalFillRows: FillRow[];
   }
-  const [fillTabs, setFillTabs]     = useState<FillTabData[] | null>(null);
+  const [minorTabs, setMinorTabs]   = useState<MinorTabData[] | null>(null);
   const [previewTab, setPreviewTab] = useState(0);
 
   // Exception config — start with [] so server and client render identically (no hydration mismatch).
@@ -225,15 +227,12 @@ export default function Home() {
   const [queuePanelOpen, setQueuePanelOpen] = useState(false);
 
   // Refs — not in React state to avoid re-render overhead and serialization issues
-  const recapBufRef = useRef<ArrayBuffer | null>(null);
-  const checkSpacePlanRef = useRef<CheckSpaceFillPlan | null>(null);
-  // Minor Report reads this snapshot only — never recomputes, never touches handleProcess's
-  // own state. Populated once per run, right before setResults() below.
-  const pipelineSnapshotRef = useRef<PipelineSnapshot | null>(null);
+  const templateBufRef = useRef<ArrayBuffer | null>(null); // uploaded Minor Report template (Step 3)
+  const minorReportSheetsRef = useRef<MinorReportSheets | null>(null); // last computed (pre-edit) sheets
   const sessionIdRef = useRef<string>("");
   const pageSessionRef = useRef(`page-${Date.now().toString(36)}`);
   const workersRef = useRef<Map<string, Worker>>(new Map());
-  const jobDataRef = useRef<Map<string, { recapBuf: ArrayBuffer; rows: DownloadRow[]; checkSpacePlan?: CheckSpaceFillPlan; label: string }>>(new Map());
+  const jobDataRef = useRef<Map<string, { templateBuf: ArrayBuffer; plan: MinorReportFillPlan; label: string }>>(new Map());
   const jobCounterRef = useRef(0);
   const autoDownloadedRef = useRef<Set<string>>(new Set());
 
@@ -280,7 +279,7 @@ export default function Home() {
 
   // ── Core job starter (stable — only touches refs + functional setJobs) ──
 
-  const startJobFn = useCallback((id: string, recapBuf: ArrayBuffer, rows: DownloadRow[], checkSpacePlan?: CheckSpaceFillPlan) => {
+  const startJobFn = useCallback((id: string, templateBuf: ArrayBuffer, plan: MinorReportFillPlan) => {
     const buildSid = `build-${id.slice(0, 8)}`;
     const buildStart = Date.now();
 
@@ -290,14 +289,14 @@ export default function Home() {
       )
     );
 
-    const worker = new Worker(new URL("../lib/download.worker.ts", import.meta.url));
+    const worker = new Worker(new URL("../lib/minorReportDownload.worker.ts", import.meta.url));
     workersRef.current.set(id, worker);
 
     worker.onmessage = (e: MessageEvent) => {
       const msg = e.data as { type: string; pct?: number; buffer?: ArrayBuffer; message?: string };
       switch (msg.type) {
         case "init_ok":
-          worker.postMessage({ type: "build", rows, checkSpacePlan });
+          worker.postMessage({ type: "build", plan });
           break;
         case "progress":
           startTransition(() => {
@@ -366,7 +365,7 @@ export default function Home() {
     };
 
     // Transfer buffer to avoid a full copy (slice first to preserve original)
-    const buf = recapBuf.slice(0);
+    const buf = templateBuf.slice(0);
     worker.postMessage({ type: "init", buffer: buf }, [buf]);
   }, []); // stable — no external deps
 
@@ -379,22 +378,33 @@ export default function Home() {
     if (!next) return;
     const data = jobDataRef.current.get(next.id);
     if (!data) return;
-    startJobFn(next.id, data.recapBuf, data.rows, data.checkSpacePlan);
+    startJobFn(next.id, data.templateBuf, data.plan);
   }, [jobs, startJobFn]);
 
   // ── Queue actions ───────────────────────────────────────────────────────
 
+  /** Reassembles a MinorReportSheets from the (possibly Step-5-edited) preview tables —
+   *  build always uses what's currently on screen, never the raw pre-edit computation. */
+  const currentMinorReportSheets = (): MinorReportSheets | null => {
+    if (!minorTabs) return minorReportSheetsRef.current;
+    return {
+      newItem: editableToMinorRows<MinorReportNewItemRow>(minorTabs[0].rows),
+      newNotLink: editableToMinorRows<MinorReportNewNotLinkRow>(minorTabs[1].rows),
+      deleteItem: editableToMinorRows<MinorReportDeleteItemRow>(minorTabs[2].rows),
+    };
+  };
+
   const enqueueJob = () => {
-    if (!recapBufRef.current || (results.length === 0 && !checkSpacePlanRef.current)) return;
+    const sheets = currentMinorReportSheets();
+    if (!templateBufRef.current || !sheets) return;
     const id = crypto.randomUUID();
     const num = ++jobCounterRef.current;
-    const baseName = recapFiles[0]?.name.replace(/\.[^.]+$/, "") ?? "RECAP";
+    const baseName = templateFiles[0]?.name.replace(/\.[^.]+$/, "") ?? "Minor Report";
     const label = `${baseName}_filled_#${num}.xlsx`;
 
     jobDataRef.current.set(id, {
-      recapBuf: recapBufRef.current.slice(0),
-      rows: toDownloadRows(results),
-      checkSpacePlan: checkSpacePlanRef.current ?? undefined,
+      templateBuf: templateBufRef.current.slice(0),
+      plan: buildMinorReportFillPlan(sheets),
       label,
     });
 
@@ -454,12 +464,12 @@ export default function Home() {
   const canProcess = () =>
     checkSpaceFile !== null &&
     fileIndexFile !== null &&
-    recapFiles.length === 1 &&
+    templateFiles.length === 1 &&
     xlsbFiles.length > 0 &&
     driveFileInfo !== null;
 
   const handleProcess = async () => {
-    if (!checkSpaceFile || !fileIndexFile || !recapFiles[0] || xlsbFiles.length === 0 || !driveFileInfo) return;
+    if (!checkSpaceFile || !fileIndexFile || !templateFiles[0] || xlsbFiles.length === 0 || !driveFileInfo) return;
 
     const sessionId = crypto.randomUUID();
     sessionIdRef.current = sessionId;
@@ -470,9 +480,9 @@ export default function Home() {
     setPct(0);
 
     sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
-      `เริ่มประมวลผล: ${recapFiles[0].name} + ${xlsbFiles.length} ไฟล์ 100 ช่อง + ${driveFileInfo.name}`,
+      `เริ่มประมวลผล: ${templateFiles[0].name} + ${xlsbFiles.length} ไฟล์ 100 ช่อง + ${driveFileInfo.name}`,
       {
-        recapFile: recapFiles[0].name,
+        templateFile: templateFiles[0].name,
         xlsbFiles: xlsbFiles.map((f) => f.name),
         spacemanFile: driveFileInfo.name,
         spacemanFileId: driveFileInfo.id,
@@ -480,127 +490,34 @@ export default function Home() {
     )]);
 
     try {
-      setStatusMsg("อ่านไฟล์ RECAP...");
+      setStatusMsg("อ่านไฟล์ Minor Report template...");
       setPct(5);
-      const recapBuf = await recapFiles[0].arrayBuffer();
-      recapBufRef.current = recapBuf.slice(0);
+      // Just stored — the template's sheets/columns are only inspected at build time,
+      // by auto-detecting each sheet's header row (see minorReportDownload.worker.ts).
+      const templateBuf = await templateFiles[0].arrayBuffer();
+      templateBufRef.current = templateBuf.slice(0);
 
-      // Pass 1: read sheet names only (fast — no cell parsing)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const wbMeta = XLSX.read(recapBuf, { type: "array", bookSheets: true } as any);
-      const findActualName = (target: string) => {
-        const lo = target.toLowerCase().trim();
-        return wbMeta.SheetNames.find((n: string) => n.toLowerCase().trim() === lo) ?? target;
-      };
-      const newScmActual = findActualName("NEW SCM");
-      const ndimActual   = findActualName("NEW_DELETE_IM");
-      const dscmActual   = findActualName("DEL SCM");
-
-      // Pass 2: parse only the 3 sheets we need (avoids loading 165k+ cells in unused sheets)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const wb = XLSX.read(recapBuf, { type: "array", sheets: [newScmActual, ndimActual, dscmActual] } as any);
-
-      // ── Check Space pre-fill (runs BEFORE parseMissingRows so new rows are included) ──
-      // Fill functions write to wb in-memory (needed for parseMissingRows) AND
-      // return FillRow[] that the download worker uses for ZIP-patch — no XLSX.write needed.
       setStatusMsg("อ่านไฟล์ Check Space และ FILE_INDEX...");
-      setPct(8);
-      // Captured outside the CS try block so they're accessible after processRows
-      let csNdimRows: FillRow[] = [];
-      let csNewScmRows: FillRow[] = [];
-      let csDscmRows: FillRow[] = [];
-      // Captured for the Minor Report pipeline snapshot (assembled after processRows below)
-      let capturedIndexLookup: IndexLookup | null = null;
+      setPct(15);
+      const [checkSpaceItems, indexLookup] = await Promise.all([
+        parseCheckSpace(checkSpaceFile),
+        parseFileIndex(fileIndexFile),
+      ]);
 
-      checkSpacePlanRef.current = null;
-      try {
-        const [csItems, indexLookup, xlsbExtraInfo] = await Promise.all([
-          parseCheckSpace(checkSpaceFile),
-          parseFileIndex(fileIndexFile),
-          buildXlsbExtraInfoMap(xlsbFiles),
-        ]);
-        capturedIndexLookup = indexLookup;
+      sendLog([makeEntry(sessionId, "INDEX_PARSED", "INFO",
+        `FILE_INDEX: ${indexLookup.storeList.length} stores, ${indexLookup.pogToByCode.size} POG→BY_CODE`,
+        { storeCount: indexLookup.storeList.length, pogByCodeCount: indexLookup.pogToByCode.size }
+      )]);
 
-        sendLog([makeEntry(sessionId, "INDEX_PARSED", "INFO",
-          `FILE_INDEX: ${indexLookup.storeList.length} stores, ${indexLookup.pogToByCode.size} POG→BY_CODE`,
-          { storeCount: indexLookup.storeList.length, pogByCodeCount: indexLookup.pogToByCode.size }
-        )]);
+      const newCount = checkSpaceItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length;
+      const delCount = checkSpaceItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length;
+      sendLog([makeEntry(sessionId, "CHECKSPACE_PARSED", "INFO",
+        `Check Space: ${newCount} NEW / ${delCount} DELETE items`,
+        { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: checkSpaceItems.length }
+      )]);
 
-        if (csItems.length > 0) {
-          setStatusMsg(`พบ ${csItems.length} รายการจาก Check Space — เตรียมข้อมูล...`);
-          const newDeleteIMRows = fillNewDeleteIM(wb, csItems, indexLookup, xlsbExtraInfo);
-          const newScmRows      = fillNewSCM(wb, csItems, indexLookup);
-          const delScmRows      = fillDelSCM(wb, csItems, indexLookup, xlsbExtraInfo);
-
-          const delItems = csItems.filter(i => i.status.toUpperCase().startsWith("DELETE"));
-          const extraFromXlsb = delItems.filter(i => xlsbExtraInfo.has(i.barcode)).length;
-          const extraFromCs   = delItems.filter(i => !xlsbExtraInfo.has(i.barcode) && !!i.remark).length;
-          sendLog([makeEntry(sessionId, "EXTRA_INFO_DIAG", "INFO",
-            `Extra_Info (${delItems.length} delete items): จาก 100 ช่อง ${extraFromXlsb} | fallback Check Space ${extraFromCs} | ว่าง ${delItems.length - extraFromXlsb - extraFromCs} | xlsb map: ${xlsbExtraInfo.size} entries`,
-            {
-              xlsbMapSize: xlsbExtraInfo.size,
-              delItemCount: delItems.length,
-              fromXlsb: extraFromXlsb,
-              fromCheckSpace: extraFromCs,
-              blank: delItems.length - extraFromXlsb - extraFromCs,
-            }
-          )]);
-          csNdimRows    = newDeleteIMRows;
-          csNewScmRows  = newScmRows;
-          csDscmRows    = delScmRows;
-          // Store plan — use ACTUAL names resolved from the RECAP file (avoids name-mismatch in worker)
-          checkSpacePlanRef.current = {
-            newScmRows,
-            extraSheets: [
-              { sheetName: ndimActual, rows: newDeleteIMRows },
-              { sheetName: dscmActual, rows: delScmRows },
-            ],
-          };
-          // recapBufRef.current stays as the ORIGINAL buffer — no XLSX.write
-          const newCount = csItems.filter(i => !i.status.toUpperCase().startsWith("DELETE")).length;
-          const delCount = csItems.filter(i => i.status.toUpperCase().startsWith("DELETE")).length;
-          sendLog([makeEntry(sessionId, "PROCESS_START", "INFO",
-            `Check Space: ${newCount} NEW / ${delCount} DELETE items`,
-            { checkSpaceFile: checkSpaceFile.name, fileIndexFile: fileIndexFile.name, totalItems: csItems.length }
-          )]);
-          sendLog([makeEntry(sessionId, "CS_FILL_DIAG", "INFO",
-            `SheetNames: [${wbMeta.SheetNames.join(", ")}] → loaded: [${wb.SheetNames.join(", ")}] | NEW_DELETE_IM(${ndimActual}): ${newDeleteIMRows.length}r | DEL SCM(${dscmActual}): ${delScmRows.length}r | NEW SCM(${newScmActual}): ${newScmRows.length}r`,
-            {
-              allSheetNames: wbMeta.SheetNames,
-              loadedSheets:  wb.SheetNames,
-              ndimActual, dscmActual, newScmActual,
-              ndimRows: newDeleteIMRows.length,
-              nscmRows: newScmRows.length,
-              dscmRows: delScmRows.length,
-            }
-          )]);
-
-          // setFillTabs is called AFTER processRows below so NEW SCM tab has planogram data
-        }
-      } catch (csErr) {
-        sendLog([makeEntry(sessionId, "ERROR", "WARN",
-          `Check Space/FILE_INDEX parse failed: ${String(csErr)}`,
-          { error: String(csErr) }
-        )]);
-      }
-
-      setStatusMsg("อ่านไฟล์ RECAP...");
-      setPct(10);
-      const { rows: missing, totalScanned, alreadyFilled } = parseMissingRows(wb);
-
-      const recapLevel = missing.length === 0 && totalScanned > 0 ? "WARN" : "INFO";
-      const recapMsg = missing.length === 0 && totalScanned === 0
-        ? `ไม่พบบาร์โค้ดในชีท NEW SCM — ตรวจสอบว่าไฟล์ถูกต้อง`
-        : missing.length === 0
-          ? `ไม่พบแถวที่ต้องเติม — บาร์โค้ดทั้งหมด ${totalScanned} รายการมีข้อมูลคอลัมน์ F อยู่แล้ว`
-          : `RECAP: พบ ${missing.length} แถวที่ต้องเติม (สแกน ${totalScanned} แถว, ข้าม ${alreadyFilled} แถวที่มีข้อมูลอยู่แล้ว)`;
-      sendLog([makeEntry(sessionId, "RECAP_PARSED", recapLevel, recapMsg, {
-        totalScanned, rowsMissing: missing.length, rowsAlreadyFilled: alreadyFilled,
-      })]);
-
-      setStatusMsg(`พบ ${missing.length} รายการที่ต้องเติมข้อมูล — กำลังค้นหาในไฟล์ 100 ช่อง...`);
-      setPct(25);
-
+      setStatusMsg("กำลังค้นหาข้อมูลในไฟล์ 100 ช่อง...");
+      setPct(30);
       const [barcodeMap, structureMap] = await Promise.all([
         parseXlsbFiles(xlsbFiles),
         buildStructureLookup(xlsbFiles),
@@ -612,7 +529,7 @@ export default function Home() {
       )]);
 
       setStatusMsg("กำลังตรวจสอบข้อมูลจาก DATA_SPACEMAN...");
-      setPct(45);
+      setPct(50);
       const res = await fetch(`/api/spaceman/file?id=${driveFileInfo.id}`);
       if (!res.ok) throw new Error("ไม่สามารถดาวน์โหลดไฟล์ DATA_SPACEMAN จาก Google Drive ได้");
       const buf = await res.arrayBuffer();
@@ -620,10 +537,10 @@ export default function Home() {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       });
 
-      setStatusMsg("อ่าน DATA_SPACEMAN เพื่อหา PLANOGRAM...");
-      setPct(50);
+      setStatusMsg("อ่าน DATA_SPACEMAN...");
+      setPct(60);
       const planogramResult = await parsePlanogramLookup(spacemanFile, (p) =>
-        setPct(50 + p * 0.35)
+        setPct(60 + p * 0.25)
       );
 
       sendLog([makeEntry(sessionId, "SPACEMAN_PARSED", "INFO",
@@ -631,118 +548,35 @@ export default function Home() {
         { prefixCount: planogramResult.byPrefix.size, upcCount: planogramResult.byUpc.size, filename: driveFileInfo.name }
       )]);
 
-      setStatusMsg("ประมวลผลข้อมูล...");
+      setStatusMsg("กำลังสร้าง Minor Report...");
       setPct(90);
-      const processed = processRows(missing, barcodeMap, structureMap, planogramResult, exceptionConfig);
+      const sheets = buildMinorReportSheets({
+        checkSpaceItems,
+        indexLookup,
+        barcodeMap,
+        structureMap,
+        byUpc: planogramResult.byUpc,
+        exceptionConfig,
+      });
+      minorReportSheetsRef.current = sheets;
 
-      const cCount = processed.filter((r) => r.confidence === "confirmed").length;
-      const iCount = processed.filter((r) => r.confidence === "inferred").length;
-      const sCount = processed.filter((r) => r.confidence === "from_spaceman").length;
-      const nCount = processed.filter((r) => r.confidence === "not_found").length;
       const durSec = ((Date.now() - t0) / 1000).toFixed(1);
-
       sendLog([makeEntry(sessionId, "PROCESS_COMPLETE", "INFO",
-        `เสร็จใน ${durSec}s — ยืนยัน ${cCount} | ไม่มี Planogram ${iCount} | จาก Spaceman ${sCount} | ไม่พบ ${nCount}`,
-        { confirmed: cCount, inferred: iCount, fromSpaceman: sCount, notFound: nCount, durationSec: durSec }
+        `เสร็จใน ${durSec}s — Recap_New_item ${sheets.newItem.length} | Recap_New_not_link ${sheets.newNotLink.length} | Recap_Delete_item ${sheets.deleteItem.length}`,
+        {
+          newItemRows: sheets.newItem.length,
+          newNotLinkRows: sheets.newNotLink.length,
+          deleteItemRows: sheets.deleteItem.length,
+          durationSec: durSec,
+        }
       )]);
 
-      // ── Minor Report pipeline snapshot ──────────────────────────────────
-      // Read-only bundle for the Minor Report sub-tab. Assembled here (not inside
-      // Minor Report itself) because everything it needs — the enriched in-memory `wb`,
-      // barcodeMap/structureMap/planogramResult, indexLookup — only exists in this
-      // function's scope. Minor Report never re-parses a file or duplicates this logic.
-      //
-      // Isolated in its own try/catch (mirrors the Check Space block above) so that a
-      // bug in Minor Report's extraction can NEVER surface as a wizard error — the
-      // wizard's own results/Step 5 flow must succeed regardless of what happens here.
-      pipelineSnapshotRef.current = null;
-      try {
-        if (capturedIndexLookup) {
-          const newScmWs = wb.Sheets[newScmActual] ?? ({} as XLSX.WorkSheet);
-          const dscmWs   = wb.Sheets[dscmActual]   ?? ({} as XLSX.WorkSheet);
-          const ndimWs   = wb.Sheets[ndimActual]   ?? ({} as XLSX.WorkSheet);
-          pipelineSnapshotRef.current = {
-            results: processed,
-            checkSpacePlan: checkSpacePlanRef.current,
-            indexLookup: capturedIndexLookup,
-            barcodeMap,
-            structureMap,
-            byUpc: planogramResult.byUpc,
-            newScmStoreFlags: extractStoreFlags(newScmWs, 3, 4, 3, 17),
-            delScmStoreFlags: extractStoreFlags(dscmWs, 4, 5, 3, 14),
-            newScmRowInfo: extractNewScmRowInfo(newScmWs, 4),
-            delScmRowInfo: extractDelScmRowInfo(dscmWs, 5),
-            attributeMap: extractAttributeMap(ndimWs, 4),
-            newScmStoreColMap: mapStoreColumns(newScmWs, 3, 17),
-          };
-        }
-      } catch (minorReportErr) {
-        pipelineSnapshotRef.current = null;
-        sendLog([makeEntry(sessionId, "ERROR", "WARN",
-          `Minor Report snapshot ล้มเหลว (ไม่กระทบผลลัพธ์หลัก): ${String(minorReportErr)}`,
-          { error: String(minorReportErr) }
-        )]);
-      }
-
-      setResults(processed);
-
-      // Build fillTabs now that processRows has run — NEW SCM needs planogram data from `processed`
-      if (csNdimRows.length > 0 || csNewScmRows.length > 0 || csDscmRows.length > 0) {
-        const nscmEditableRows: EditableFillRow[] = csNewScmRows.map(fr => {
-          const pr = processed.find(r => r.rowIndex === fr.rowIndex);
-          const pdata = pr ? { ...pr.filled, ...pr.override } as Record<string, string> : {};
-          return {
-            rowIndex: fr.rowIndex,
-            fields: {
-              seq:       fr.cells.find(c => c.col === 0)?.value  ?? "",
-              barcode:   fr.cells.find(c => c.col === 3)?.value  ?? "",
-              name:      fr.cells.find(c => c.col === 4)?.value  ?? "",
-              division:  pdata.division  ?? "",
-              dept:      pdata.dept      ?? "",
-              subDept:   pdata.subDept   ?? "",
-              cls:       pdata.cls       ?? "",
-              planogram: pdata.planogram ?? "",
-              status:    fr.cells.find(c => c.col === 10)?.value ?? "",
-              remark:    fr.cells.find(c => c.col === 11)?.value ?? "",
-              implement: fr.cells.find(c => c.col === 12)?.value ?? "",
-              colN:      pdata.colN      ?? "",
-              colPiece:  pdata.colPiece  ?? "",
-              colO:      pdata.colO      ?? "",
-              colNet:    (() => {
-                const pct   = parseFloat(pdata.colO    ?? "") || 0;
-                const piece = parseFloat(pdata.colPiece ?? "") || 0;
-                return (pct > 0 && piece > 0)
-                  ? (Math.round((pct / 100) * piece * 100) / 100).toFixed(2)
-                  : "";
-              })(),
-            },
-          };
-        });
-        setFillTabs([
-          {
-            sheetName: ndimActual,
-            displayName: "NEW_DELETE_IM",
-            colDefs: NDIM_COLDEFS,
-            rows: convertToEditableRows(csNdimRows, NDIM_COLDEFS),
-            originalFillRows: csNdimRows,
-          },
-          {
-            sheetName: newScmActual,
-            displayName: "NEW SCM",
-            colDefs: NSCM_COLDEFS,
-            rows: nscmEditableRows,
-            originalFillRows: csNewScmRows,
-          },
-          {
-            sheetName: dscmActual,
-            displayName: "DEL SCM",
-            colDefs: DSCM_COLDEFS,
-            rows: convertToEditableRows(csDscmRows, DSCM_COLDEFS),
-            originalFillRows: csDscmRows,
-          },
-        ]);
-        setPreviewTab(0);
-      }
+      setMinorTabs([
+        { displayName: "Recap_New_item",     colDefs: NEW_ITEM_COLDEFS,     rows: minorRowsToEditable(sheets.newItem) },
+        { displayName: "Recap_New_not_link", colDefs: NEW_NOT_LINK_COLDEFS, rows: minorRowsToEditable(sheets.newNotLink) },
+        { displayName: "Recap_Delete_item",  colDefs: DELETE_ITEM_COLDEFS,  rows: minorRowsToEditable(sheets.deleteItem) },
+      ]);
+      setPreviewTab(0);
 
       setPct(100);
       setStatusMsg("เสร็จสิ้น!");
@@ -757,88 +591,28 @@ export default function Home() {
     }
   };
 
-  const handleResultsChange = (updated: ProcessedRow[]) => {
-    setResults(updated);
-  };
-
   const handleFillTabChange = (tabIdx: number, updatedRows: EditableFillRow[]) => {
-    setFillTabs(prev => {
+    setMinorTabs(prev => {
       if (!prev) return prev;
       const next = [...prev];
-      const tab = next[tabIdx];
-      // For NSCM: recompute colNet whenever colPiece or colO change
-      const rowsToStore = tabIdx === 1
-        ? updatedRows.map(r => {
-            const pct   = parseFloat(r.fields.colO    ?? "") || 0;
-            const piece = parseFloat(r.fields.colPiece ?? "") || 0;
-            const colNet = (pct > 0 && piece > 0)
-              ? (Math.round((pct / 100) * piece * 100) / 100).toFixed(2)
-              : "";
-            return colNet === r.fields.colNet ? r : { ...r, fields: { ...r.fields, colNet } };
-          })
-        : updatedRows;
-      next[tabIdx] = { ...tab, rows: rowsToStore };
-      // Sync edits back to checkSpacePlanRef so the worker uses the updated data
-      if (checkSpacePlanRef.current) {
-        const updatedFillRows = convertFromEditableRows(updatedRows, tab.originalFillRows, tab.colDefs);
-        if (tabIdx === 0) {
-          checkSpacePlanRef.current = {
-            ...checkSpacePlanRef.current,
-            extraSheets: checkSpacePlanRef.current.extraSheets.map(
-              (sf, i) => i === 0 ? { ...sf, rows: updatedFillRows } : sf
-            ),
-          };
-        } else if (tabIdx === 1) {
-          checkSpacePlanRef.current = { ...checkSpacePlanRef.current, newScmRows: updatedFillRows };
-        } else if (tabIdx === 2) {
-          checkSpacePlanRef.current = {
-            ...checkSpacePlanRef.current,
-            extraSheets: checkSpacePlanRef.current.extraSheets.map(
-              (sf, i) => i === 1 ? { ...sf, rows: updatedFillRows } : sf
-            ),
-          };
-        }
-      }
+      next[tabIdx] = { ...next[tabIdx], rows: updatedRows };
       return next;
     });
-    // For NEW SCM: sync F-J/N-Q edits to results so applyRows (worker) uses updated planogram values
-    if (tabIdx === 1) {
-      setResults(prevResults =>
-        prevResults.map(pr => {
-          const er = updatedRows.find(r => r.rowIndex === pr.rowIndex);
-          if (!er) return pr;
-          const override: Partial<FilledData> = {
-            ...(pr.override ?? {}),
-            division:  er.fields.division  ?? "",
-            dept:      er.fields.dept      ?? "",
-            subDept:   er.fields.subDept   ?? "",
-            cls:       er.fields.cls       ?? "",
-            planogram: er.fields.planogram ?? "",
-            colN:      er.fields.colN      ?? "",
-            colPiece:  er.fields.colPiece  ?? "",
-            colO:      er.fields.colO      ?? "",
-          };
-          return { ...pr, override };
-        })
-      );
-    }
   };
 
   const reset = () => {
     // Jobs persist across resets — do NOT clear them
-    recapBufRef.current = null;
-    checkSpacePlanRef.current = null;
-    pipelineSnapshotRef.current = null;
+    templateBufRef.current = null;
+    minorReportSheetsRef.current = null;
     setStep(1);
     setStatus("idle");
     setStatusMsg("");
     setPct(0);
     setCheckSpaceFile(null);
     setFileIndexFile(null);
-    setRecapFiles([]);
+    setTemplateFiles([]);
     setXlsbFiles([]);
-    setResults([]);
-    setFillTabs(null);
+    setMinorTabs(null);
     setPreviewTab(0);
   };
 
@@ -868,26 +642,16 @@ export default function Home() {
       });
   };
 
-  // ─── Fill-tab summary stats ─────────────────────────────────────────────────
-  const ndimRows  = fillTabs?.[0]?.rows ?? [];
-  const nscmRows  = fillTabs?.[1]?.rows ?? [];
-  const dscmRows  = fillTabs?.[2]?.rows ?? [];
+  // ─── Minor Report tab summary stats ─────────────────────────────────────────
+  const newItemRows    = minorTabs?.[0]?.rows ?? [];
+  const newNotLinkRows = minorTabs?.[1]?.rows ?? [];
+  const deleteItemRows = minorTabs?.[2]?.rows ?? [];
 
-  const ndimNewCount = new Set(ndimRows.map(r => r.fields.seqNew).filter(Boolean)).size;
-  const ndimDelCount = new Set(ndimRows.map(r => r.fields.seqDel).filter(Boolean)).size;
-
-  const nscmFilled    = nscmRows.filter(r => {
-    const pr = results.find(p => p.rowIndex === r.rowIndex);
-    return pr?.confidence === "confirmed" || pr?.confidence === "from_spaceman";
-  }).length;
-  const nscmNotFilled = nscmRows.length - nscmFilled;
-
-  const pendingNdim  = ndimRows.filter(r =>
-    (r.fields.seqNew && !r.fields.statusNew) || (r.fields.seqDel && !r.fields.statusDel)
-  ).length;
-  const pendingNscm  = nscmRows.filter(r => !r.fields.division).length;
-  const pendingDscm  = dscmRows.filter(r => !r.fields.status).length;
-  const pendingTotal = pendingNdim + pendingNscm + pendingDscm;
+  // "Incomplete" = missing DIVISION, the same basic-enrichment signal used across all 3 sheets
+  const pendingNewItem    = newItemRows.filter(r => !r.fields.division).length;
+  const pendingNewNotLink = newNotLinkRows.filter(r => !r.fields.division).length;
+  const pendingDeleteItem = deleteItemRows.filter(r => !r.fields.division).length;
+  const pendingTotal = pendingNewItem + pendingNewNotLink + pendingDeleteItem;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -943,10 +707,6 @@ export default function Home() {
             <TabBtn active={view === "newrenovate"} onClick={() => setView("newrenovate")}>
               <FileSpreadsheet className="w-4 h-4" />
               New and Renovate
-            </TabBtn>
-            <TabBtn active={view === "minorReport"} onClick={() => setView("minorReport")}>
-              <FileSpreadsheet className="w-4 h-4" />
-              Minor Report
             </TabBtn>
           </div>
           <div className="flex items-center gap-1">
@@ -1014,12 +774,6 @@ export default function Home() {
               </div>
             )}
 
-            {/* Minor Report sub-tab — read-only consumer of the wizard's finished output.
-                Never re-parses a file or duplicates wizard logic; see lib/minorReport.ts. */}
-            {view === "minorReport" && (
-              <MinorReportTab snapshot={pipelineSnapshotRef.current} />
-            )}
-
             {/* Main upload flow */}
             {view === "main" && (
               <>
@@ -1072,24 +826,25 @@ export default function Home() {
                   </Card>
                 )}
 
-                {/* Step 3 — Upload RECAP */}
+                {/* Step 3 — Upload Minor Report template */}
                 {step === 3 && (
-                  <Card title="Step 3 - อัปโหลดไฟล์ RECAP">
+                  <Card title="Step 3 - อัปโหลด Minor Report Template">
                     <DropZone
-                      label="ไฟล์ RECAP.xlsx"
+                      label="TO BE_Minor Report.xlsx"
+                      hint="ไฟล์ template เปล่า 3 ชีต (Recap_New_item / Recap_New_not_link / Recap_Delete_item) — format/สี/เส้นขอบในไฟล์นี้จะถูกเก็บไว้เป๊ะๆ"
                       accept=".xlsx,.xls"
-                      files={recapFiles}
+                      files={templateFiles}
                       onFiles={(files) => {
-                        setRecapFiles(files);
+                        setTemplateFiles(files);
                         if (files.length > 0) sendLog([makeEntry(pageSessionRef.current, "FILE_UPLOAD", "INFO",
-                          `อัปโหลด RECAP: ${files.map(f => f.name).join(", ")}`,
-                          { fileType: "RECAP", files: files.map(f => ({ name: f.name, sizeMB: (f.size / 1048576).toFixed(2) })) }
+                          `อัปโหลด Minor Report template: ${files.map(f => f.name).join(", ")}`,
+                          { fileType: "MinorReportTemplate", files: files.map(f => ({ name: f.name, sizeMB: (f.size / 1048576).toFixed(2) })) }
                         )]);
                       }}
                     />
                     <div className="flex gap-3">
                       <NavBtn variant="outline" onClick={() => setStep(2)}>← ย้อนกลับ</NavBtn>
-                      <NavBtn onClick={() => setStep(4)} disabled={recapFiles.length !== 1}>
+                      <NavBtn onClick={() => setStep(4)} disabled={templateFiles.length !== 1}>
                         ถัดไป →
                       </NavBtn>
                     </div>
@@ -1191,11 +946,11 @@ export default function Home() {
 
                     {status === "done" && (
                       <>
-                        {fillTabs && (
+                        {minorTabs && (
                           <>
                             {/* ── KPI Summary Cards (also serve as tab nav) ─── */}
                             <div className="grid grid-cols-4 gap-3 mb-4">
-                              {/* Card 0 — NEW_DELETE_IM */}
+                              {/* Card 0 — Recap_New_item */}
                               {(() => {
                                 const active = previewTab === 0;
                                 return (
@@ -1207,24 +962,16 @@ export default function Home() {
                                         : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
                                     }`}
                                   >
-                                    <span className="text-[11px] font-semibold text-slate-500 truncate w-full text-center">NEW_DELETE_IM</span>
+                                    <span className="text-[11px] font-semibold text-slate-500 truncate w-full text-center">Recap_New_item</span>
                                     <span className={`text-3xl font-bold ${active ? "text-[#E91E8C]" : "text-slate-700"}`}>
-                                      {ndimRows.length}
+                                      {newItemRows.length}
                                     </span>
-                                    <span className="text-[10px] text-slate-400">แถวทั้งหมด</span>
-                                    <div className="flex gap-1 flex-wrap justify-center mt-0.5">
-                                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-semibold">
-                                        NEW {ndimNewCount}
-                                      </span>
-                                      <span className="px-1.5 py-0.5 rounded-full bg-rose-100 text-rose-700 text-[10px] font-semibold">
-                                        DEL {ndimDelCount}
-                                      </span>
-                                    </div>
+                                    <span className="text-[10px] text-slate-400">แถวทั้งหมด (LINK)</span>
                                   </button>
                                 );
                               })()}
 
-                              {/* Card 1 — NEW SCM */}
+                              {/* Card 1 — Recap_New_not_link */}
                               {(() => {
                                 const active = previewTab === 1;
                                 return (
@@ -1236,26 +983,16 @@ export default function Home() {
                                         : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
                                     }`}
                                   >
-                                    <span className="text-[11px] font-semibold text-slate-500">NEW SCM</span>
+                                    <span className="text-[11px] font-semibold text-slate-500">Recap_New_not_link</span>
                                     <span className={`text-3xl font-bold ${active ? "text-blue-600" : "text-slate-700"}`}>
-                                      {nscmRows.length}
+                                      {newNotLinkRows.length}
                                     </span>
-                                    <span className="text-[10px] text-slate-400">แถวทั้งหมด</span>
-                                    <div className="flex gap-1 flex-wrap justify-center mt-0.5">
-                                      <span className="px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-semibold">
-                                        เจอ {nscmFilled}
-                                      </span>
-                                      {nscmNotFilled > 0 && (
-                                        <span className="px-1.5 py-0.5 rounded-full bg-red-100 text-red-600 text-[10px] font-semibold">
-                                          กรอกเอง {nscmNotFilled}
-                                        </span>
-                                      )}
-                                    </div>
+                                    <span className="text-[10px] text-slate-400">แถวทั้งหมด (ยังไม่ link)</span>
                                   </button>
                                 );
                               })()}
 
-                              {/* Card 2 — DEL SCM */}
+                              {/* Card 2 — Recap_Delete_item */}
                               {(() => {
                                 const active = previewTab === 2;
                                 return (
@@ -1267,16 +1004,11 @@ export default function Home() {
                                         : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
                                     }`}
                                   >
-                                    <span className="text-[11px] font-semibold text-slate-500">DEL SCM</span>
+                                    <span className="text-[11px] font-semibold text-slate-500">Recap_Delete_item</span>
                                     <span className={`text-3xl font-bold ${active ? "text-orange-500" : "text-slate-700"}`}>
-                                      {dscmRows.length}
+                                      {deleteItemRows.length}
                                     </span>
                                     <span className="text-[10px] text-slate-400">แถวทั้งหมด</span>
-                                    <div className="flex gap-1 flex-wrap justify-center mt-0.5">
-                                      <span className="px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-700 text-[10px] font-semibold">
-                                        ลบสินค้า {dscmRows.length}
-                                      </span>
-                                    </div>
                                   </button>
                                 );
                               })()}
@@ -1291,26 +1023,8 @@ export default function Home() {
                                 <span className={`text-3xl font-bold ${pendingTotal > 0 ? "text-amber-600" : "text-green-600"}`}>
                                   {pendingTotal}
                                 </span>
-                                <span className="text-[10px] text-slate-400">แถวที่ยังไม่สมบูรณ์</span>
-                                {pendingTotal > 0 ? (
-                                  <div className="flex flex-col gap-0.5 mt-0.5">
-                                    {pendingNdim > 0 && (
-                                      <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold">
-                                        NDIM {pendingNdim}
-                                      </span>
-                                    )}
-                                    {pendingNscm > 0 && (
-                                      <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold">
-                                        SCM {pendingNscm}
-                                      </span>
-                                    )}
-                                    {pendingDscm > 0 && (
-                                      <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold">
-                                        DEL {pendingDscm}
-                                      </span>
-                                    )}
-                                  </div>
-                                ) : (
+                                <span className="text-[10px] text-slate-400">แถวที่ยังไม่สมบูรณ์ (ไม่มี DIVISION)</span>
+                                {pendingTotal === 0 && (
                                   <span className="text-[10px] text-green-600 font-semibold mt-0.5">พร้อม Download ✓</span>
                                 )}
                               </div>
@@ -1320,90 +1034,56 @@ export default function Home() {
                             <div className="border border-slate-200 rounded-xl mb-6">
                               <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
                                 <span className="text-xs font-semibold text-slate-700">
-                                  {fillTabs[previewTab]?.displayName}
+                                  {minorTabs[previewTab]?.displayName}
                                 </span>
                                 <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold">
-                                  {fillTabs[previewTab]?.rows.length ?? 0} แถว
+                                  {minorTabs[previewTab]?.rows.length ?? 0} แถว
                                 </span>
                               </div>
                               <div className="p-3 bg-white">
-                                {(fillTabs[previewTab]?.rows.length ?? 0) === 0 ? (
+                                {(minorTabs[previewTab]?.rows.length ?? 0) === 0 ? (
                                   <p className="text-center text-amber-600 text-sm py-3 flex items-center justify-center gap-2">
                                     <AlertTriangle className="w-4 h-4" />
-                                    ไม่มีข้อมูลที่จะเติมในชีทนี้
+                                    ไม่มีข้อมูลในชีทนี้
                                   </p>
-                                ) : fillTabs[previewTab] ? (
+                                ) : minorTabs[previewTab] ? (
                                   <FillEditTable
                                     key={previewTab}
-                                    colDefs={fillTabs[previewTab].colDefs}
-                                    rows={fillTabs[previewTab].rows}
+                                    colDefs={minorTabs[previewTab].colDefs}
+                                    rows={minorTabs[previewTab].rows}
                                     onChange={(updated) => handleFillTabChange(previewTab, updated)}
                                     onEditSaved={(rowIndex, changes) => {
-                                      const tabName = fillTabs[previewTab]?.displayName ?? `tab${previewTab}`;
+                                      const tabName = minorTabs[previewTab]?.displayName ?? `tab${previewTab}`;
                                       sendLog([makeEntry(sessionIdRef.current, "USER_EDIT", "INFO",
                                         `แก้ไขแถว ${rowIndex} ใน ${tabName}: ${Object.keys(changes).join(", ")}`,
                                         { tab: tabName, rowIndex, changes }
                                       )]);
                                     }}
                                     onReplaceApplied={(col, from, to, count) => {
-                                      const tabName = fillTabs[previewTab]?.displayName ?? `tab${previewTab}`;
-                                      const colLabel = fillTabs[previewTab]?.colDefs.find(d => d.field === col)?.label ?? col;
+                                      const tabName = minorTabs[previewTab]?.displayName ?? `tab${previewTab}`;
+                                      const colLabel = minorTabs[previewTab]?.colDefs.find(d => d.field === col)?.label ?? col;
                                       sendLog([makeEntry(sessionIdRef.current, "USER_REPLACE", "INFO",
                                         `Replace ใน ${tabName} คอลัมน์ "${colLabel}": "${from}" → "${to}" (${count} แถว)`,
                                         { tab: tabName, col, colLabel, from, to, count }
                                       )]);
                                     }}
-                                    isKeyZone={previewTab === 0
-                                      ? (row, zone) =>
-                                          zone === "new" ? !!row.fields.seqNew
-                                          : zone === "del" ? !!row.fields.seqDel
-                                          : false
-                                      : undefined
-                                    }
-                                    isIncompleteRow={
-                                      previewTab === 0
-                                        ? (row) =>
-                                            (!!row.fields.seqNew && !row.fields.statusNew) ||
-                                            (!!row.fields.seqDel && !row.fields.statusDel)
-                                        : previewTab === 1
-                                        ? (row) => !row.fields.division
-                                        : (row) => !row.fields.status
-                                    }
+                                    isIncompleteRow={(row) => !row.fields.division}
                                     getOptions={(field, draft) => {
-                                      const tab = fillTabs[previewTab];
+                                      const tab = minorTabs[previewTab];
                                       if (!tab) return [];
                                       const allVals = (f: string) =>
                                         [...new Set(tab.rows.map(r => r.fields[f]).filter(Boolean))];
                                       const hm = spacemanValues.hierarchyMap;
-                                      if (previewTab === 1) {
-                                        switch (field) {
-                                          case "division":  return spacemanValues.descAList;
-                                          case "dept":      return draft.division && hm.divToDept[draft.division]
-                                            ? hm.divToDept[draft.division] : spacemanValues.descBList;
-                                          case "subDept":   return draft.dept && hm.deptToSub[draft.dept]
-                                            ? hm.deptToSub[draft.dept] : spacemanValues.descCList;
-                                          case "cls":       return draft.subDept && hm.subToCls[draft.subDept]
-                                            ? hm.subToCls[draft.subDept] : spacemanValues.categories;
-                                          case "planogram": return allVals("planogram");
-                                          case "status":    return NEW_STATUS_OPTIONS;
-                                          default:          return allVals(field);
-                                        }
-                                      }
                                       switch (field) {
-                                        case "statusNew":  return NEW_STATUS_OPTIONS;
-                                        case "statusDel":  return DEL_STATUS_OPTIONS;
-                                        case "status":     return previewTab === 2 ? DEL_STATUS_OPTIONS : NEW_STATUS_OPTIONS;
-                                        case "division":   return spacemanValues.descAList;
-                                        case "category": {
-                                          const cats = allVals("category");
-                                          if (draft.division) {
-                                            const pfx = draft.division.split(":")[0].trim();
-                                            const filtered = cats.filter(c => c.startsWith(pfx));
-                                            return filtered.length > 0 ? filtered : cats;
-                                          }
-                                          return cats;
-                                        }
-                                        default: return allVals(field);
+                                        case "division":
+                                          return spacemanValues.descAList;
+                                        case "department":
+                                          return draft.division && hm.divToDept[draft.division]
+                                            ? hm.divToDept[draft.division] : spacemanValues.descBList;
+                                        case "link":
+                                          return previewTab === 0 ? ["LINK"] : previewTab === 1 ? ["New not link"] : ["NOT LINK"];
+                                        default:
+                                          return allVals(field);
                                       }
                                     }}
                                   />
