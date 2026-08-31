@@ -291,6 +291,13 @@ export async function parsePlanogramLookup(
     return best;
   };
 
+  // A UPC can legitimately appear on multiple rows with DIFFERENT PLANOGRAM values
+  // (confirmed with the user: one barcode may sell on several planograms at once), so
+  // every distinct planogram per UPC is collected here across ALL its rows — unlike the
+  // other per-UPC fields below, which intentionally keep "first row wins" since they're
+  // expected to be identical across a UPC's rows anyway.
+  const planogramsByUpc = new Map<string, Set<string>>();
+
   for (let r = 1; r <= range.e.r; r++) {
     const subcat = cellVal(ws, r, subcatCol);
     if (!subcat) continue;
@@ -308,6 +315,12 @@ export async function parsePlanogramLookup(
     // Build UPC-level meta for config matching + TOTAL_UNITS lookup
     if (upcCol >= 0) {
       const upc = normalizeBarcode(cellVal(ws, r, upcCol));
+
+      if (upc && plog) {
+        if (!planogramsByUpc.has(upc)) planogramsByUpc.set(upc, new Set());
+        planogramsByUpc.get(upc)!.add(plog);
+      }
+
       if (upc && !byUpc.has(upc)) {
         const category   = categoryCol   >= 0 ? cellVal(ws, r, categoryCol)   : "";
         const descA      = descACol      >= 0 ? cellVal(ws, r, descACol)      : "";
@@ -316,15 +329,19 @@ export async function parsePlanogramLookup(
         const totalUnits = totalUnitsCol >= 0 ? cellVal(ws, r, totalUnitsCol) : "";
         const salepack   = salepackCol     >= 0 ? cellVal(ws, r, salepackCol)     : "";
         const purchaseItemForSalepack = purchaseItemCol >= 0 ? cellVal(ws, r, purchaseItemCol) : "";
-        // Per-UPC PLANOGRAM (col D) — the item's CURRENT/already-assigned planogram, used
-        // by the no-RECAP Minor Report flow to find "stores this item already sells at"
-        // (look this planogram up in FILE_INDEX.pogToStores) — see lib/minorReportV2.ts.
-        byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits, salepack, purchaseItemForSalepack, planogram: plog });
+        byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits, salepack, purchaseItemForSalepack });
         if (category) catSet.add(category);
         if (subcat)   subSet.add(subcat);
         if (descC)    descSet.add(descC);
       }
     }
+  }
+
+  // Attach the full per-UPC planogram set now that the whole sheet has been scanned —
+  // used by the no-RECAP Minor Report flow to find "stores this item already sells at"
+  // (look each planogram up in FILE_INDEX.pogToStores) — see lib/minorReport.ts.
+  for (const [upc, meta] of byUpc) {
+    meta.planograms = Array.from(planogramsByUpc.get(upc) ?? []);
   }
 
   const byPrefix = new Map<string, { planogram: string; colAL: string }>();

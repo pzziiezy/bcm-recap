@@ -161,11 +161,15 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
         });
       }
 
-      // ── Stores already selling this item, per DATA_SPACEMAN's recorded planogram ──
-      const existingPlanogram = spaceman?.planogram ?? "";
-      const existingStores = existingPlanogram
-        ? indexLookup.pogToStores.get(existingPlanogram) ?? new Set<string>()
-        : new Set<string>();
+      // ── Stores already selling this item — union across EVERY planogram DATA_SPACEMAN
+      //    has recorded for this barcode, not just one (a barcode can legitimately sell
+      //    on several planograms at once; using only one under-counted "existing" stores
+      //    and made NEW EXPAND's not-linked store list incomplete). ──
+      const existingStores = new Set<string>();
+      for (const plog of spaceman?.planograms ?? []) {
+        const stores = indexLookup.pogToStores.get(plog);
+        if (stores) for (const s of stores) existingStores.add(s);
+      }
 
       const cumulativeActive = new Set<string>(existingStores);
       for (const store of newStoreToPog.keys()) cumulativeActive.add(store);
