@@ -36,7 +36,7 @@ const NEW_ITEM_HEADER_TEXT: Record<keyof MinorReportNewItemRow, string> = {
   recipe: "RECIPE",
   packSize: "PACK SIZE",
   totalUnits: "TOTAL_UNITS",
-  purShelfStockPiece: "PUR Shelf stock ON POG (Piece) First Order (NEWNEW)",
+  purShelfStockPiece: "BCM Shelf stock  ON POG (Piece)",
   pctOrdering: "% Ordering",
   netCapacity: "Net Capacity for odering",
   attClass: "ATT_CLASS",

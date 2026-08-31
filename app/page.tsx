@@ -129,7 +129,7 @@ const NEW_ITEM_COLDEFS: TabColDef[] = [
   { field: "recipe",                     col: 5,  label: "RECIPE",     editable: true },
   { field: "packSize",                   col: 6,  label: "PACK SIZE",  editable: true },
   { field: "totalUnits",                 col: 7,  label: "TOTAL_UNITS", editable: true },
-  { field: "purShelfStockPiece",         col: 8,  label: "PUR Shelf stock (Piece)", editable: true },
+  { field: "purShelfStockPiece",         col: 8,  label: "BCM Shelf stock ON POG (Piece)", editable: true },
   { field: "pctOrdering",                col: 9,  label: "% Ordering", editable: true },
   { field: "netCapacity",                col: 10, label: "Net Capacity", editable: false },
   { field: "attClass",                   col: 11, label: "ATT_CLASS",  editable: true },

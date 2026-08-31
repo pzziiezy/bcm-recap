@@ -18,7 +18,7 @@ interface Enrichment {
   division: string;
   dept: string;
   colN: string;      // Forecast Sales/Month/Store — 100 ช่อง's colDF
-  colPiece: string;  // TOTAL_UNITS / PUR Shelf stock ON POG (Piece) — DATA_SPACEMAN's totalUnits
+  colPiece: string;  // TOTAL_UNITS / BCM Shelf stock ON POG (Piece) — DATA_SPACEMAN's totalUnits
   colO: string;       // % Ordering — exception-config match, default "100%"
 }
 
