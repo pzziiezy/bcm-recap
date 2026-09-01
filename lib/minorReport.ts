@@ -128,6 +128,15 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
     const firstPogByCode = item.pogs.length > 0 ? (indexLookup.pogToByCode.get(item.pogs[0]) ?? "") : "";
 
     if (!isDelete) {
+      // ── Stores already selling this item — union across EVERY planogram DATA_SPACEMAN
+      //    has recorded for this barcode, not just one (a barcode can legitimately sell
+      //    on several planograms at once). ──
+      const existingStores = new Set<string>();
+      for (const plog of spaceman?.planograms ?? []) {
+        const stores = indexLookup.pogToStores.get(plog);
+        if (stores) for (const s of stores) existingStores.add(s);
+      }
+
       // ── Stores newly targeted this round: union of the ticked POGs, remembering
       //    which POG each store came from so ATT_CODE is correct per store. ──
       const newStoreToPog = new Map<string, string>();
@@ -139,7 +148,12 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
         }
       }
 
+      // Recap_New_item lists only stores that are actually NEW to this barcode — for
+      // NEW EXPAND, a ticked POG's store that's already active under an existing
+      // planogram (ก้อน B) isn't "new" and is skipped here (confirmed with the user).
+      // It still counts toward "active" for the not-link exclusion below, though.
       for (const [store, pog] of newStoreToPog) {
+        if (existingStores.has(store)) continue;
         newItem.push({
           division: enrichment.division,
           department: enrichment.dept,
@@ -159,16 +173,6 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
           forecastSalesPerMonthStore: enrichment.colN,
           remark: item.status,
         });
-      }
-
-      // ── Stores already selling this item — union across EVERY planogram DATA_SPACEMAN
-      //    has recorded for this barcode, not just one (a barcode can legitimately sell
-      //    on several planograms at once; using only one under-counted "existing" stores
-      //    and made NEW EXPAND's not-linked store list incomplete). ──
-      const existingStores = new Set<string>();
-      for (const plog of spaceman?.planograms ?? []) {
-        const stores = indexLookup.pogToStores.get(plog);
-        if (stores) for (const s of stores) existingStores.add(s);
       }
 
       const cumulativeActive = new Set<string>(existingStores);
