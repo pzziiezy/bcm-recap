@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+const SPACEMAN_DRIVE_FOLDER_ID = "1jWxdKanbMCpf7pShHWdw1GdRzPDqID6S";
 
 export interface DriveFileInfo { id: string; name: string; createdTime: string; }
 
@@ -122,11 +123,24 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
             return;
           }
           try {
-            const fd = new FormData();
-            fd.append("file", file);
-            fd.append("accessToken", resp.access_token);
-            const res = await fetch("/api/spaceman/upload", { method: "POST", body: fd });
-            if (!res.ok) { const d = await res.json(); throw new Error(d.error || "อัปโหลดล้มเหลว"); }
+            // Upload straight to Google Drive from the browser instead of routing the file
+            // through our own /api/spaceman/upload Next.js route — that route re-uploads
+            // the bytes through a Vercel serverless function, which rejects anything over
+            // its ~4.5 MB request-body limit with a plain-text "Request Entity Too Large"
+            // response (not JSON), breaking res.json() with a SyntaxError. DATA_SPACEMAN
+            // files routinely exceed that, so the upload must bypass our backend entirely.
+            const metadata = JSON.stringify({ name: file.name, parents: [SPACEMAN_DRIVE_FOLDER_ID] });
+            const body = new FormData();
+            body.append("metadata", new Blob([metadata], { type: "application/json" }));
+            body.append("file", file);
+            const res = await fetch(
+              "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,createdTime",
+              { method: "POST", headers: { Authorization: `Bearer ${resp.access_token}` }, body }
+            );
+            if (!res.ok) {
+              const d = await res.json().catch(() => null);
+              throw new Error(d?.error?.message || `อัปโหลดล้มเหลว (${res.status})`);
+            }
             setUploadStatus("success");
             setSelectedFile(null);
             const newFile = await fetchLatest();
