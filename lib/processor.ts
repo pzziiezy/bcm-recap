@@ -877,6 +877,11 @@ export async function parseFileIndex(file: File): Promise<IndexLookup> {
     if (!storeCode) continue;
     const cell = ws[key];
     if (cell?.v == null) continue;
+    // A store only belongs to this POG if the cell actually has a quantity number
+    // entered (> 0) — confirmed with the user that a non-empty cell isn't enough
+    // (e.g. a stray "0"), it must genuinely be "หยอดจำนวน" for that store.
+    const rawQty = typeof cell.v === "number" ? cell.v : Number(String(cell.v).replace(/,/g, "").trim());
+    if (!Number.isFinite(rawQty) || rawQty <= 0) continue;
     if (!rowStoreMap.has(ri)) rowStoreMap.set(ri, []);
     rowStoreMap.get(ri)!.push(storeCode);
   }
