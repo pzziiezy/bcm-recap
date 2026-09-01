@@ -139,8 +139,12 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
             const body = new FormData();
             body.append("metadata", new Blob([metadata], { type: "application/json" }));
             body.append("file", file);
+            // supportsAllDrives is required — the target folder lives in a Shared Drive
+            // (the read side already sets this, see app/api/spaceman/latest/route.ts), and
+            // without it Drive API v3 answers "File not found" for the folder ID even when
+            // it exists and the user has access, instead of a permissions error.
             const res = await fetch(
-              "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,createdTime",
+              "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,createdTime&supportsAllDrives=true",
               { method: "POST", headers: { Authorization: `Bearer ${resp.access_token}` }, body }
             );
             if (!res.ok) {
