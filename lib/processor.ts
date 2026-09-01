@@ -261,6 +261,7 @@ export async function parsePlanogramLookup(
   // Locate columns by header name
   let subcatCol = -1, categoryCol = -1, upcCol = -1, descACol = -1, descBCol = -1, descCCol = -1, totalUnitsCol = -1;
   let salepackCol = -1, purchaseItemCol = -1; // Minor Report — SALEPACK / RECIPE
+  let planogramCol = -1;
   for (let c = 0; c <= range.e.c; c++) {
     const h = cellVal(ws, 0, c);
     if (h === "SUBCATEGORY") subcatCol = c;
@@ -272,10 +273,9 @@ export async function parsePlanogramLookup(
     else if (h === "TOTAL_UNITS") totalUnitsCol = c;
     else if (h === "SALEPACK") salepackCol = c;
     else if (h === "PURCHASE_ITEM_FOR_SALEPACK") purchaseItemCol = c;
+    else if (h === "PLANOGRAM") planogramCol = c;
   }
   if (subcatCol < 0) return empty;
-
-  const COL_D = 3; // PLANOGRAM column (col D, 0-indexed)
 
   const freqPlog = new Map<string, Map<string, number>>();
   const byUpc    = new Map<string, SpacemanRowMeta>();
@@ -305,7 +305,7 @@ export async function parsePlanogramLookup(
     const prefix = subcat.slice(0, 6);
     if (!/^\d{6}$/.test(prefix)) continue;
 
-    const plog = cellVal(ws, r, COL_D);
+    const plog = planogramCol >= 0 ? cellVal(ws, r, planogramCol) : "";
     if (plog) {
       if (!freqPlog.has(prefix)) freqPlog.set(prefix, new Map());
       const m = freqPlog.get(prefix)!;
