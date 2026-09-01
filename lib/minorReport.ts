@@ -175,6 +175,9 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
         });
       }
 
+      // TEMP: ก้อน C (Recap_New_not_link) disabled while checking A/B correctness — re-enable
+      // by uncommenting this block once Sheet 1's data is confirmed right.
+      /*
       const cumulativeActive = new Set<string>(existingStores);
       for (const store of newStoreToPog.keys()) cumulativeActive.add(store);
 
@@ -194,6 +197,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
           });
         }
       }
+      */
     } else {
       // ── DELETE ──
       const isDeleteAll = /DELETE\s+ALL/i.test(item.status);
