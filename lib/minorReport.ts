@@ -93,16 +93,17 @@ function resolveEnrichment(
  * Reshapes Check Space + FILE_INDEX + 100 ช่อง + DATA_SPACEMAN directly into the 3 Minor
  * Report sheets. Pure function — no RECAP file, no React, no file parsing.
  *
- * Per Check Space item (barcode × ticked POGs):
- *   Recap_New_item     = one row per (barcode × store) for every store the TICKED POGs
- *                         cover in FILE_INDEX — "what's newly targeted this round".
+ * Per Check Space item (barcode × ticked POGs), ก้อน A = stores the ticked POGs cover in
+ * FILE_INDEX, ก้อน B = stores already covered by every planogram DATA_SPACEMAN has
+ * recorded for the barcode:
+ *   Recap_New_item     = one row per (barcode × store) for every store in A that ISN'T
+ *                         already in B — "what's newly targeted this round" (excludes
+ *                         stores that already sell the item).
  *   Recap_New_not_link = one row per (barcode × store) in FILE_INDEX's full store master
- *                         that ISN'T already covered by either the ticked POGs (new) or
- *                         the item's DATA_SPACEMAN-recorded current planogram (existing) —
- *                         this single formula naturally handles NEW ADD ALL/SOME STORE
- *                         (no existing planogram yet, so it's just new vs total) and
- *                         NEW EXPAND (existing + new both subtracted) without special-casing
- *                         the status text at all.
+ *                         that isn't in A ∪ B (ก้อน C) — filled ONLY for NEW ADD ALL/SOME
+ *                         STORE. Per the user, NEW EXPAND / EXISTING ADD must not touch
+ *                         ก้อน C at all, so no rows are written to this sheet for those
+ *                         statuses (see isExpand below).
  *   Recap_Delete_item  = one row per (barcode × store): "DELETE ALL STORE" explodes over
  *                         the full store master (matches fillDelSCM's old behavior of
  *                         leaving store-flags blank to mean "everywhere"); "DELETE SOME
@@ -117,6 +118,10 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
 
   for (const item of checkSpaceItems) {
     const isDelete = item.status.toUpperCase().startsWith("DELETE");
+    // NEW EXPAND (and its alias EXISTING ADD) only fills Recap_New_item from ก้อน A − B —
+    // per the user, it must NOT touch ก้อน C / Recap_New_not_link at all.
+    const statusUpper = item.status.trim().toUpperCase();
+    const isExpand = statusUpper === "NEW EXPAND" || statusUpper === "EXISTING ADD";
     const enrichment = resolveEnrichment(item.barcode, barcodeMap, structureMap, byUpc, exceptionConfig);
     const spaceman = byUpc.get(item.barcode);
     const packInfo = barcodeMap.get(item.barcode);
@@ -175,29 +180,30 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
         });
       }
 
-      // TEMP: ก้อน C (Recap_New_not_link) disabled while checking A/B correctness — re-enable
-      // by uncommenting this block once Sheet 1's data is confirmed right.
-      /*
-      const cumulativeActive = new Set<string>(existingStores);
-      for (const store of newStoreToPog.keys()) cumulativeActive.add(store);
+      // ก้อน C (union of A and B) is only used to fill Recap_New_not_link — and per the
+      // user, NEW EXPAND / EXISTING ADD must not touch ก้อน C at all, so this whole block
+      // is skipped for those statuses (NEW ADD ALL/SOME STORE still gets it as before).
+      if (!isExpand) {
+        const cumulativeActive = new Set<string>(existingStores);
+        for (const store of newStoreToPog.keys()) cumulativeActive.add(store);
 
-      if (cumulativeActive.size > 0) {
-        for (const store of indexLookup.storeList) {
-          if (cumulativeActive.has(store)) continue;
-          newNotLink.push({
-            upc: item.barcode,
-            name: item.name,
-            division: enrichment.division,
-            department: enrichment.dept,
-            attClass: ATT_CLASS_CONST,
-            attCode: firstPogByCode,
-            storeNumber: store,
-            link: "New not link",
-            remark: item.status,
-          });
+        if (cumulativeActive.size > 0) {
+          for (const store of indexLookup.storeList) {
+            if (cumulativeActive.has(store)) continue;
+            newNotLink.push({
+              upc: item.barcode,
+              name: item.name,
+              division: enrichment.division,
+              department: enrichment.dept,
+              attClass: ATT_CLASS_CONST,
+              attCode: firstPogByCode,
+              storeNumber: store,
+              link: "New not link",
+              remark: item.status,
+            });
+          }
         }
       }
-      */
     } else {
       // ── DELETE ──
       const isDeleteAll = /DELETE\s+ALL/i.test(item.status);
