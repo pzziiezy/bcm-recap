@@ -65,6 +65,12 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
   const [totalRows, setTotalRows] = useState(0);
   const parseWorkerRef = useRef<Worker | null>(null);
 
+  // Search/filter results — computed in the worker over the FULL dataset (not just the
+  // capped rows loaded for initial display), so a match beyond MAX_DISPLAY_ROWS is still
+  // found. null = no active search/filter (show tableData as-is).
+  const [workerFilteredRows, setWorkerFilteredRows] = useState<DataRow[] | null>(null);
+  const [filterMatchCount, setFilterMatchCount] = useState<number | null>(null);
+
   // Table controls
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -202,6 +208,8 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
     setSearch("");
     setTreeSel({});
     setExpanded(new Set());
+    setWorkerFilteredRows(null);
+    setFilterMatchCount(null);
 
     try {
       const res = await fetch(`/api/spaceman/file?id=${file.id}`);
@@ -218,12 +226,17 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
         const msg = e.data as
           | { type: "progress"; pct: number }
           | { type: "done"; headers: string[]; rows: DataRow[]; totalRows: number; uniqueCategories: string[]; uniqueSubcategories: string[]; uniqueDescA: string[]; uniqueDescB: string[]; uniqueDescC: string[]; hierarchyMap: { divToDept: Record<string, string[]>; deptToSub: Record<string, string[]>; subToCls: Record<string, string[]> }; catToSub: Record<string, string[]> }
+          | { type: "filtered"; rows: DataRow[]; matchCount: number }
           | { type: "error"; message: string };
 
         if (msg.type === "progress") {
           setParseProgress(msg.pct);
+        } else if (msg.type === "filtered") {
+          setWorkerFilteredRows(msg.rows);
+          setFilterMatchCount(msg.matchCount);
         } else if (msg.type === "done") {
-          parseWorkerRef.current = null;
+          // Keep parseWorkerRef alive (don't null it) — the worker retains the full parsed
+          // dataset so later "filter" messages can search it, not just the capped display.
           setHeaders(msg.headers);
           setTableData(msg.rows);
           setTotalRows(msg.totalRows ?? msg.rows.length);
@@ -349,16 +362,23 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
     return root;
   }, [tableData]);
 
-  // ── Filter + sort ─────────────────────────────────────────────────────────
-  const filtered = useMemo(() => {
-    let data = tableData;
-    const activeFilters = Object.entries(colFilters).filter(([, v]) => v.trim());
-    if (activeFilters.length > 0)
-      data = data.filter((row) => activeFilters.every(([col, val]) => (row[col] || "").toLowerCase().includes(val.toLowerCase())));
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      data = data.filter((row) => Object.values(row).some((v) => v.toLowerCase().includes(q)));
+  // ── Search/filter dispatch: runs in the worker over the FULL dataset, debounced ──
+  useEffect(() => {
+    const hasActiveFilter = search.trim() !== "" || Object.values(colFilters).some((v) => v.trim());
+    if (!hasActiveFilter) {
+      setWorkerFilteredRows(null);
+      setFilterMatchCount(null);
+      return;
     }
+    const timer = setTimeout(() => {
+      parseWorkerRef.current?.postMessage({ type: "filter", search, colFilters });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [search, colFilters]);
+
+  // ── Sort (search/filter already applied — by the worker over the full dataset) ──
+  const filtered = useMemo(() => {
+    let data = workerFilteredRows ?? tableData;
     if (sortCol) {
       data = [...data].sort((a, b) => {
         const av = a[sortCol] || "", bv = b[sortCol] || "";
@@ -369,7 +389,7 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
       });
     }
     return data;
-  }, [tableData, search, colFilters, sortCol, sortDir]);
+  }, [tableData, workerFilteredRows, sortCol, sortDir]);
 
   // Apply tree selection on top of existing filters
   const displayData = useMemo(() => {
@@ -627,7 +647,7 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
           <span>
             แสดง {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, displayData.length)} จาก{" "}
             {displayData.length.toLocaleString()} แถว
-            {(search || Object.values(colFilters).some(Boolean)) && ` (กรองจาก ${tableData.length.toLocaleString()})`}
+            {(search || Object.values(colFilters).some(Boolean)) && ` (กรองจาก ${totalRows.toLocaleString()})`}
           </span>
           <div className="flex items-center gap-1">
             <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}
@@ -767,7 +787,12 @@ export default function SpacemanMaster({ onFileInfoChange, isVisible = false, on
                   แสดง {tableData.length.toLocaleString()} แถวแรก
                 </span>
               )}
-              {displayData.length !== tableData.length && (
+              {filterMatchCount !== null ? (
+                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+                  กรองแล้ว: {filterMatchCount.toLocaleString()} แถว
+                  {filterMatchCount > displayData.length && ` (แสดง ${displayData.length.toLocaleString()} แถวแรก)`}
+                </span>
+              ) : displayData.length !== tableData.length && (
                 <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
                   กรองแล้ว: {displayData.length.toLocaleString()} แถว
                 </span>

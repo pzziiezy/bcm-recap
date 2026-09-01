@@ -1,16 +1,45 @@
 import * as XLSX from "xlsx";
 
-type InMsg = { type: "parse"; buffer: ArrayBuffer };
+type InMsg =
+  | { type: "parse"; buffer: ArrayBuffer }
+  | { type: "filter"; search: string; colFilters: Record<string, string> };
 
-// Cap rows sent to main thread to avoid structured-clone crash on huge files.
-// Unique values (CATEGORY/SUBCATEGORY/DESC_C) are computed here and sent separately.
+// Cap rows sent to the main thread in any single response, to avoid a structured-clone
+// crash on huge files. Search/filter still runs over EVERY row (allRows, retained here in
+// the worker) — only the returned MATCHES get capped, so a specific barcode is always
+// found regardless of which row of a 200k+-row file it's on.
 const MAX_DISPLAY_ROWS = 50_000;
 
+// Full parsed dataset, retained in the worker so "filter" messages can search it — kept
+// out of the main thread except for the (capped) subset actually being displayed.
+let allRows: Record<string, string>[] = [];
+
+function applyFilter(search: string, colFilters: Record<string, string>) {
+  const activeFilters = Object.entries(colFilters).filter(([, v]) => v.trim());
+  const q = search.trim().toLowerCase();
+
+  let matchCount = 0;
+  const rows: Record<string, string>[] = [];
+  for (const row of allRows) {
+    if (activeFilters.length > 0 && !activeFilters.every(([col, val]) => (row[col] || "").toLowerCase().includes(val.toLowerCase()))) continue;
+    if (q && !Object.values(row).some((v) => v.toLowerCase().includes(q))) continue;
+    matchCount++;
+    if (rows.length < MAX_DISPLAY_ROWS) rows.push(row);
+  }
+  return { rows, matchCount };
+}
+
 addEventListener("message", (e: MessageEvent<InMsg>) => {
+  if (e.data.type === "filter") {
+    const { rows, matchCount } = applyFilter(e.data.search, e.data.colFilters);
+    self.postMessage({ type: "filtered", rows, matchCount });
+    return;
+  }
   if (e.data.type !== "parse") return;
   const { buffer } = e.data;
 
   try {
+    allRows = [];
     self.postMessage({ type: "progress", pct: 5 });
 
     // Memory-optimised read: skip computed cell properties we don't need
@@ -110,7 +139,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         clsToSubMap.get(vCat)!.add(vSub);
       }
 
-      // Only keep first MAX_DISPLAY_ROWS for the table display
+      // Retain every row in the worker for later full-dataset search/filter; only the
+      // first MAX_DISPLAY_ROWS go into the initial table display.
+      allRows.push(row);
       if (rows.length < MAX_DISPLAY_ROWS) rows.push(row);
 
       // Progress every 15,000 rows (avoids postMessage overhead)
