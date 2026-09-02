@@ -805,12 +805,27 @@ export async function parseCheckSpace(file: File): Promise<CheckSpaceItem[]> {
 // ─── Parse FILE_INDEX_1.xlsx ───────────────────────────────────────────────
 
 /**
+ * Locates a cell whose text matches `label` exactly (trim + case-insensitive) within a
+ * bounded top-left region of the sheet — used to find FILE_INDEX's header cells by their
+ * actual text instead of a hardcoded row/column, since this file's layout has already
+ * shifted more than once (confirmed with the user: never pin a position here).
+ */
+function findLabelCell(
+  ws: XLSX.WorkSheet, maxRow: number, maxCol: number, label: string
+): { row: number; col: number } | null {
+  const target = label.trim().toLowerCase();
+  for (let r = 0; r <= maxRow; r++) {
+    for (let c = 0; c <= maxCol; c++) {
+      if (cellVal(ws, r, c).trim().toLowerCase() === target) return { row: r, col: c };
+    }
+  }
+  return null;
+}
+
+/**
  * Parse FILE_INDEX_1.xlsx (sheet INDX_BCM).
- * Row 13 (index 12) = store codes starting col T (index 19).
- * Row 14 (index 13) = headers: col C = POG NAME, col I = BY_CODE.
- * Row 15+ (index 14+) = data.
- *
- * Uses sparse cell iteration to avoid scanning 1,929 store columns per row.
+ * Every position below is located by header TEXT, not a fixed row/column — this file's
+ * column layout has shifted more than once already, so none of it may be hardcoded.
  */
 export async function parseFileIndex(file: File): Promise<IndexLookup> {
   const empty: IndexLookup = { pogToByCode: new Map(), pogToStores: new Map(), storeList: [] };
@@ -825,11 +840,22 @@ export async function parseFileIndex(file: File): Promise<IndexLookup> {
   const ws = wb.Sheets["INDX_BCM"];
   if (!ws || !ws["!ref"]) return empty;
 
-  const STORE_ROW    = 12; // 0-indexed → Excel row 13
-  const DATA_START   = 14; // 0-indexed → Excel row 15
-  const POG_NAME_COL = 2;  // col C
-  const BY_CODE_COL  = 8;  // col I
-  const STORE_START  = 19; // col T (index 19)
+  // Header cells all live within the sheet's first ~30 rows / ~100 columns — bounding the
+  // search keeps it cheap even though the sheet itself can have ~1,900 store columns.
+  const HEADER_SCAN_MAX_ROW = 30;
+  const HEADER_SCAN_MAX_COL = 100;
+
+  const pogNameCell  = findLabelCell(ws, HEADER_SCAN_MAX_ROW, HEADER_SCAN_MAX_COL, "POG NAME");
+  const byCodeCell   = findLabelCell(ws, HEADER_SCAN_MAX_ROW, HEADER_SCAN_MAX_COL, "BY_CODE");
+  const storeCodeCell = findLabelCell(ws, HEADER_SCAN_MAX_ROW, HEADER_SCAN_MAX_COL, "Store Code");
+  if (!pogNameCell || !byCodeCell || !storeCodeCell) return empty;
+
+  const STORE_ROW    = storeCodeCell.row;     // row holding the actual store code values
+  const DATA_START   = pogNameCell.row + 1;   // rows above real data are blank in POG_NAME
+                                               // and get skipped below regardless
+  const POG_NAME_COL = pogNameCell.col;
+  const BY_CODE_COL  = byCodeCell.col;
+  const STORE_START  = storeCodeCell.col + 1; // store codes start right after the label
 
   // Build colIndex→storeCode map from store header row (sparse scan)
   const storeColMap = new Map<number, string>(); // colIdx → storeCode
