@@ -806,7 +806,7 @@ export async function parseCheckSpace(file: File): Promise<CheckSpaceItem[]> {
 
 /**
  * Parse FILE_INDEX_1.xlsx (sheet INDX_BCM).
- * Row 13 (index 12) = store codes starting col O (index 14).
+ * Row 13 (index 12) = store codes starting col T (index 19).
  * Row 14 (index 13) = headers: col C = POG NAME, col I = BY_CODE.
  * Row 15+ (index 14+) = data.
  *
@@ -829,7 +829,7 @@ export async function parseFileIndex(file: File): Promise<IndexLookup> {
   const DATA_START   = 14; // 0-indexed → Excel row 15
   const POG_NAME_COL = 2;  // col C
   const BY_CODE_COL  = 8;  // col I
-  const STORE_START  = 14; // col O (index 14)
+  const STORE_START  = 19; // col T (index 19)
 
   // Build colIndex→storeCode map from store header row (sparse scan)
   const storeColMap = new Map<number, string>(); // colIdx → storeCode
