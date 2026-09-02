@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useMemo, useTransition } from "react";
 import { Download, FileSpreadsheet, X, CheckCircle2 } from "lucide-react";
 import type { ExceptionConfig } from "@/lib/types";
+import { makeEntry, sendLog } from "@/lib/logger";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -159,6 +160,8 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
 
   const [status,    setStatus]    = useState<ProcStatus>("idle");
   const [statusMsg, setStatusMsg] = useState("");
+  const nrSessionRef   = useRef(crypto.randomUUID()); // refreshed on each process run
+  const nrStartTimeRef = useRef(0);
   const [pct,       setPct]       = useState(0);
   const [stats,     setStats]     = useState<Stats | null>(null);
   const [errorMsg,  setErrorMsg]  = useState("");
@@ -259,6 +262,10 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
   // ── Export unmatched planograms to Excel ───────────────────────────────────
   const handleExportUnmatched = async () => {
     if (!previewData || previewData.unmatchedPlanograms.length === 0) return;
+    sendLog([makeEntry(nrSessionRef.current, "NR_EXPORT_UNMATCHED", "INFO",
+      `[New&Renovate] Export unmatched planograms — ${previewData.unmatchedPlanograms.length} รายการ (PLANOGRAM ใน INDEX TO BE ไม่พบใน QRY)`,
+      { count: previewData.unmatchedPlanograms.length }
+    )]);
     const XLSX = await import("xlsx");
     const ws = XLSX.utils.aoa_to_sheet([
       ["PLANOGRAM NAME"],
@@ -288,6 +295,8 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
   const handleProcess = async () => {
     if (!targetFile || !qryFile || !spacemanFile || !masterFile || !indexFile || !fixtureFile) return;
 
+    nrSessionRef.current = crypto.randomUUID();
+    nrStartTimeRef.current = Date.now();
     setStatus("processing"); setStatusMsg("กำลังโหลดไฟล์..."); setPct(2);
     setErrorMsg(""); setStats(null); setPreviewData(null);
     setPreviewTab("compare"); setActiveFilters(new Set());
@@ -295,6 +304,18 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     setSrchBarcode(""); setSrchName(""); setSrchPlanogram("");
     setSrchStoreA(""); setSrchStoreB("");
     outputRef.current = null;
+
+    sendLog([makeEntry(nrSessionRef.current, "NR_PROCESS_START", "INFO",
+      `[New&Renovate] เริ่ม Build — Template: ${targetFile.name} | QRY: ${qryFile.name} | Spaceman: ${spacemanFile.name} | Master: ${masterFile.name} | INDEX: ${indexFile.name} | Fixture: ${fixtureFile.name}`,
+      {
+        template:  targetFile.name,
+        qry:       qryFile.name,
+        spaceman:  spacemanFile.name,
+        master:    masterFile.name,
+        index:     indexFile.name,
+        fixture:   fixtureFile.name,
+      }
+    )]);
 
     const [targetBuf, qryBuf, spacemanBuf, masterBuf, indexBuf, fixtureBuf] = await Promise.all([
       targetFile.arrayBuffer(), qryFile.arrayBuffer(), spacemanFile.arrayBuffer(),
@@ -319,9 +340,31 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
         setPreviewData(msg.preview ?? null);
         setStatus(msg.preview ? "preview" : "done");
         worker.terminate(); workerRef.current = null;
+        const durSec = ((Date.now() - nrStartTimeRef.current) / 1000).toFixed(1);
+        const s = msg.stats;
+        sendLog([makeEntry(nrSessionRef.current, "NR_PROCESS_COMPLETE", "INFO",
+          `[New&Renovate] Build เสร็จใน ${durSec}s — Sheet1: ${s.s1Rows ?? 0} rows | Sheet2 (NEW EXPAND): ${s.s2Rows ?? 0} rows | Sheet3 (DELETE): ${s.s3Rows ?? 0} rows | จับคู่ QRY: ${s.total} items (Spaceman ${s.matchedSpaceman} / Master ${s.matchedMaster} / INDEX ${s.matchedIndex} / Fixture ${s.matchedFixture})`,
+          {
+            durationSec:     durSec,
+            sheet1Rows:      s.s1Rows,
+            sheet2Rows:      s.s2Rows,
+            sheet3Rows:      s.s3Rows,
+            totalQryItems:   s.total,
+            matchedSpaceman: s.matchedSpaceman,
+            matchedMaster:   s.matchedMaster,
+            matchedIndex:    s.matchedIndex,
+            matchedFixture:  s.matchedFixture,
+            masterMapSize:   s.masterMapSize,
+          }
+        )]);
       } else if (msg.type === "error") {
         setStatus("error"); setErrorMsg(msg.message);
         worker.terminate(); workerRef.current = null;
+        const durSec = ((Date.now() - nrStartTimeRef.current) / 1000).toFixed(1);
+        sendLog([makeEntry(nrSessionRef.current, "NR_PROCESS_ERROR", "ERROR",
+          `[New&Renovate] Build ล้มเหลวหลังจาก ${durSec}s — ${msg.message}`,
+          { error: msg.message, durationSec: durSec }
+        )]);
       }
     };
 
@@ -330,6 +373,11 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
       const details = [e.message, e.filename ? `${e.filename}:${e.lineno}` : ""].filter(Boolean).join(" @ ");
       setErrorMsg(details || "Worker crashed (ดู Console สำหรับ error details)");
       workerRef.current = null;
+      const durSec = ((Date.now() - nrStartTimeRef.current) / 1000).toFixed(1);
+      sendLog([makeEntry(nrSessionRef.current, "NR_PROCESS_ERROR", "ERROR",
+        `[New&Renovate] Worker crashed หลังจาก ${durSec}s — ${details || "Unknown error"}`,
+        { error: details, durationSec: durSec }
+      )]);
     };
 
     worker.postMessage(
@@ -346,10 +394,15 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     });
     const url = URL.createObjectURL(blob);
     const a   = document.createElement("a");
+    const filename = targetFile.name.replace(/\.xlsx?$/i, "") + "_filled.xlsx";
     a.href = url;
-    a.download = targetFile.name.replace(/\.xlsx?$/i, "") + "_filled.xlsx";
+    a.download = filename;
     document.body.appendChild(a); a.click();
     document.body.removeChild(a); URL.revokeObjectURL(url);
+    sendLog([makeEntry(nrSessionRef.current, "NR_DOWNLOAD", "INFO",
+      `[New&Renovate] ดาวน์โหลด output: ${filename} (${(outputRef.current.byteLength / 1048576).toFixed(2)} MB)`,
+      { filename, sizeMB: +(outputRef.current.byteLength / 1048576).toFixed(2) }
+    )]);
   };
 
   const handleConfirm = () => {
@@ -378,7 +431,14 @@ export default function NewRenovateTab({ exceptionConfig = [] }: Props) {
     file: File | null, setter: (f: File | null) => void, accept: string,
   ) => (
     <CompactUploadSlot key={num} num={num} title={title} hint={hint} accept={accept}
-      file={file} onFile={(f) => { setter(f); if (status !== "idle") handleReset(); }} />
+      file={file} onFile={(f) => {
+        setter(f);
+        if (status !== "idle") handleReset();
+        if (f) sendLog([makeEntry(nrSessionRef.current, "FILE_UPLOAD", "INFO",
+          `[New&Renovate] อัปโหลด ${title}: ${f.name} (${(f.size / 1048576).toFixed(2)} MB)`,
+          { tab: "NewRenovate", slot: num, fileType: title, name: f.name, sizeMB: +(f.size / 1048576).toFixed(2) }
+        )]);
+      }} />
   );
 
   // ─── Render ────────────────────────────────────────────────────────────────

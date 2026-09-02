@@ -14,7 +14,12 @@ export type LogEvent =
   | "CHECKSPACE_PARSED" // Check Space parse result (NEW/DELETE item counts)
   | "EXTRA_INFO_DIAG"  // Extra_Info hit-rate: xlsb vs Check Space remark vs blank
   | "USER_EDIT"        // user saves a pencil-edit on a single row
-  | "USER_REPLACE";    // user executes Find & Replace (bulk)
+  | "USER_REPLACE"     // user executes Find & Replace (bulk)
+  | "NR_PROCESS_START"    // New&Renovate — เริ่ม Build
+  | "NR_PROCESS_COMPLETE" // New&Renovate — Build เสร็จสิ้น
+  | "NR_PROCESS_ERROR"    // New&Renovate — เกิดข้อผิดพลาด
+  | "NR_DOWNLOAD"         // New&Renovate — user ดาวน์โหลด output
+  | "NR_EXPORT_UNMATCHED";// New&Renovate — user export unmatched planograms
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";
 
