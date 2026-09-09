@@ -701,6 +701,25 @@ export default function Home() {
     ? storeCodeGroups.filter(([code]) => code.includes(storeCodeSearch.trim()))
     : storeCodeGroups;
 
+  // ─── Step 6 — per-sheet Status × Store count summary ────────────────────────
+  // Each row already IS one (barcode × store) pairing, so "how many stores" per Status
+  // is simply the row count within that Status group — same field (`remark`) that Step 5
+  // shows in the STATUS column and Minor Report writes into the template.
+  const buildSummary = useMemo(() => {
+    if (!minorTabs) return null;
+    return minorTabs.map(tab => {
+      const counts = new Map<string, number>();
+      for (const row of tab.rows) {
+        const status = row.fields.remark || "(ไม่ระบุ)";
+        counts.set(status, (counts.get(status) ?? 0) + 1);
+      }
+      const groups = [...counts.entries()]
+        .map(([status, count]) => ({ status, count }))
+        .sort((a, b) => b.count - a.count);
+      return { displayName: tab.displayName, total: tab.rows.length, groups };
+    });
+  }, [minorTabs]);
+
   // ── Render ──────────────────────────────────────────────────────────────
 
   return (
@@ -1244,6 +1263,42 @@ export default function Home() {
                         ตรวจสอบสถานะและดาวน์โหลดได้ที่{" "}
                         <span className="font-semibold text-[#E91E8C]">แผงคิวด้านขวามือ</span>
                       </p>
+
+                      {/* ── Summary: Status × จำนวน Store ต่อชีท ─────────────── */}
+                      {buildSummary && (
+                        <div className="max-w-3xl mx-auto text-left pt-2">
+                          <h3 className="text-xs font-bold text-slate-500 text-center mb-3 uppercase tracking-wide">
+                            สรุปผลลัพธ์แต่ละชีท
+                          </h3>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            {buildSummary.map(sheet => (
+                              <div key={sheet.displayName} className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                                <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                                  <span className="text-xs font-semibold text-slate-700 truncate">{sheet.displayName}</span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold flex-shrink-0">
+                                    {sheet.total} Store
+                                  </span>
+                                </div>
+                                <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
+                                  {sheet.groups.length === 0 ? (
+                                    <p className="px-3 py-3 text-[11px] text-slate-400 text-center">ไม่มีข้อมูล</p>
+                                  ) : (
+                                    sheet.groups.map(g => (
+                                      <div key={g.status} className="flex items-center justify-between gap-2 px-3 py-1.5">
+                                        <span className="text-[11px] text-slate-600 truncate" title={g.status}>{g.status}</span>
+                                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold tabular-nums flex-shrink-0">
+                                          {g.count}
+                                        </span>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <button
                         onClick={reset}
                         className="mt-4 px-6 py-3 text-white rounded-xl font-semibold transition-all shadow-md hover:shadow-lg hover:scale-[1.02] bg-gradient-to-r from-[#E91E8C] to-[#F15A22]"
