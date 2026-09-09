@@ -729,35 +729,42 @@ export default function Home() {
     ? upcGroups.filter(g => g.upc.toLowerCase().includes(search) || g.name.toLowerCase().includes(search))
     : upcGroups;
 
-  // ─── Step 6 — per-sheet Status summary: distinct UPC count + distinct Store count ──
-  // A raw row count conflates two very different things (1 item going to 100 stores
-  // vs. 100 items going to 1 store each) — per the user, each Status group instead
-  // reports how many DISTINCT UPCs carry that status, and how many DISTINCT store
-  // codes it touches (a store repeated across several UPCs under the same status only
-  // counts once).
-  interface StatusGroup { status: string; upcCount: number; storeCount: number }
-  interface SheetSummary { displayName: string; totalUpc: number; totalStore: number; groups: StatusGroup[] }
+  // ─── Step 6 — per-sheet summary, pivoted by UPC ─────────────────────────────
+  // Per the user: for each UPC, which Status(es) does it carry, and how many
+  // (distinct) stores under each one — a UPC CAN legitimately carry more than one
+  // Status within the same sheet (e.g. two separate Check Space rows for the same
+  // barcode), so this is a genuine one-to-many breakdown, not an approximation.
+  interface UpcStatusGroup { status: string; storeCount: number }
+  interface UpcSummary { upc: string; name: string; totalStore: number; statuses: UpcStatusGroup[] }
+  interface SheetSummary { displayName: string; totalUpc: number; totalStore: number; upcs: UpcSummary[] }
   const buildSummary = useMemo((): SheetSummary[] | null => {
     if (!minorTabs) return null;
     return minorTabs.map(tab => {
-      const byStatus = new Map<string, { upcs: Set<string>; stores: Set<string> }>();
-      const allUpcs = new Set<string>();
+      const byUpc = new Map<string, { name: string; byStatus: Map<string, Set<string>> }>();
       const allStores = new Set<string>();
       for (const row of tab.rows) {
-        const status = row.fields.remark || "(ไม่ระบุ)";
         const upc = row.fields.upc || "";
+        if (!upc) continue;
+        const status = row.fields.remark || "(ไม่ระบุ)";
         const store = row.fields.storeNumber || "";
-        if (upc) allUpcs.add(upc);
         if (store) allStores.add(store);
-        if (!byStatus.has(status)) byStatus.set(status, { upcs: new Set(), stores: new Set() });
-        const g = byStatus.get(status)!;
-        if (upc) g.upcs.add(upc);
-        if (store) g.stores.add(store);
+        if (!byUpc.has(upc)) byUpc.set(upc, { name: row.fields.name || "", byStatus: new Map() });
+        const entry = byUpc.get(upc)!;
+        if (!entry.byStatus.has(status)) entry.byStatus.set(status, new Set());
+        if (store) entry.byStatus.get(status)!.add(store);
       }
-      const groups = [...byStatus.entries()]
-        .map(([status, g]) => ({ status, upcCount: g.upcs.size, storeCount: g.stores.size }))
-        .sort((a, b) => b.storeCount - a.storeCount);
-      return { displayName: tab.displayName, totalUpc: allUpcs.size, totalStore: allStores.size, groups };
+      const upcs = [...byUpc.entries()]
+        .map(([upc, { name, byStatus }]) => {
+          const statuses = [...byStatus.entries()]
+            .map(([status, stores]) => ({ status, storeCount: stores.size }))
+            .sort((a, b) => b.storeCount - a.storeCount);
+          // Union across this UPC's own statuses — dedupes a store that (rarely) shows
+          // up under more than one status for the same item.
+          const totalStore = new Set([...byStatus.values()].flatMap(s => [...s])).size;
+          return { upc, name, totalStore, statuses };
+        })
+        .sort((a, b) => a.upc.localeCompare(b.upc, undefined, { numeric: true }));
+      return { displayName: tab.displayName, totalUpc: upcs.length, totalStore: allStores.size, upcs };
     });
   }, [minorTabs]);
 
@@ -1364,54 +1371,58 @@ export default function Home() {
                         <span className="font-semibold text-[#E91E8C]">แผงคิวด้านขวามือ</span>
                       </p>
 
-                      {/* ── Summary: Status × (จำนวน UPC, จำนวน Store ไม่ซ้ำ) ต่อชีท ── */}
+                      {/* ── Summary: pivoted by UPC — Status(es) × Store count per UPC ── */}
                       {buildSummary && (
                         <div className="max-w-5xl mx-auto text-left pt-2">
                           <h3 className="text-xs font-bold text-slate-500 text-center uppercase tracking-wide">
                             สรุปผลลัพธ์แต่ละชีท
                           </h3>
                           <p className="text-[11px] text-slate-400 text-center mb-3">
-                            <span className="text-blue-600 font-semibold">UPC</span> = จำนวนสินค้าที่ไม่ซ้ำกัน &nbsp;·&nbsp;
-                            <span className="text-[#E91E8C] font-semibold">Store</span> = จำนวนร้านค้าที่ไม่ซ้ำกัน (ร้านเดียวกันนับครั้งเดียว)
+                            แต่ละสินค้า (UPC) มี Status อะไรบ้าง และแต่ละ Status ไปกี่
+                            <span className="text-[#E91E8C] font-semibold"> Store</span> (นับร้านไม่ซ้ำ ร้านเดียวกันนับครั้งเดียว)
                           </p>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             {buildSummary.map(sheet => (
                               <div key={sheet.displayName} className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                                <div className="px-3 py-2.5 bg-slate-50 border-b border-slate-200">
-                                  <span className="text-sm font-bold text-slate-800 truncate block">{sheet.displayName}</span>
+                                <div className="px-3 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2">
+                                  <span className="text-sm font-bold text-slate-800 truncate">{sheet.displayName}</span>
+                                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold">
+                                      {sheet.totalUpc.toLocaleString()} UPC
+                                    </span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold">
+                                      {sheet.totalStore.toLocaleString()} Store
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="overflow-x-auto">
-                                  <table className="w-full text-xs">
-                                    <thead>
-                                      <tr className="bg-slate-50/70 border-b border-slate-200">
-                                        <th className="text-left px-3 py-2 font-semibold text-slate-500">Status</th>
-                                        <th className="text-right px-3 py-2 font-semibold text-blue-600">UPC</th>
-                                        <th className="text-right px-3 py-2 font-semibold text-[#E91E8C]">Store</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                      {sheet.groups.length === 0 ? (
-                                        <tr>
-                                          <td colSpan={3} className="px-3 py-4 text-[11px] text-slate-400 text-center">ไม่มีข้อมูล</td>
-                                        </tr>
-                                      ) : (
-                                        sheet.groups.map(g => (
-                                          <tr key={g.status}>
-                                            <td className="px-3 py-2 text-slate-700 max-w-[140px] truncate" title={g.status}>{g.status}</td>
-                                            <td className="px-3 py-2 text-right font-bold text-blue-600 tabular-nums">{g.upcCount.toLocaleString()}</td>
-                                            <td className="px-3 py-2 text-right font-bold text-[#E91E8C] tabular-nums">{g.storeCount.toLocaleString()}</td>
-                                          </tr>
-                                        ))
-                                      )}
-                                    </tbody>
-                                    <tfoot>
-                                      <tr className="border-t-2 border-slate-200 bg-slate-50">
-                                        <td className="px-3 py-2 font-bold text-slate-700">รวมทั้งหมด</td>
-                                        <td className="px-3 py-2 text-right font-bold text-blue-700 tabular-nums">{sheet.totalUpc.toLocaleString()}</td>
-                                        <td className="px-3 py-2 text-right font-bold text-[#E91E8C] tabular-nums">{sheet.totalStore.toLocaleString()}</td>
-                                      </tr>
-                                    </tfoot>
-                                  </table>
+                                <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+                                  {sheet.upcs.length === 0 ? (
+                                    <p className="px-3 py-4 text-[11px] text-slate-400 text-center">ไม่มีข้อมูล</p>
+                                  ) : (
+                                    sheet.upcs.map(u => (
+                                      <div key={u.upc} className="px-3 py-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <span className="text-xs font-bold text-slate-800 truncate" title={u.upc}>{u.upc}</span>
+                                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-50 text-[#E91E8C] font-bold tabular-nums flex-shrink-0">
+                                            {u.totalStore.toLocaleString()} Store
+                                          </span>
+                                        </div>
+                                        {u.name && (
+                                          <p className="text-[10px] text-slate-400 truncate mt-0.5" title={u.name}>{u.name}</p>
+                                        )}
+                                        <div className="mt-1.5 space-y-1 pl-2 border-l-2 border-slate-100">
+                                          {u.statuses.map(s => (
+                                            <div key={s.status} className="flex items-center justify-between gap-2">
+                                              <span className="text-[11px] text-slate-600 truncate" title={s.status}>{s.status}</span>
+                                              <span className="text-[11px] text-slate-500 font-semibold tabular-nums flex-shrink-0">
+                                                {s.storeCount.toLocaleString()} Store
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
                                 </div>
                               </div>
                             ))}
