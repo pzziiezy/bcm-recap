@@ -1367,47 +1367,51 @@ export default function Home() {
                       {/* ── Summary: Status × (จำนวน UPC, จำนวน Store ไม่ซ้ำ) ต่อชีท ── */}
                       {buildSummary && (
                         <div className="max-w-5xl mx-auto text-left pt-2">
-                          <h3 className="text-xs font-bold text-slate-500 text-center mb-3 uppercase tracking-wide">
+                          <h3 className="text-xs font-bold text-slate-500 text-center uppercase tracking-wide">
                             สรุปผลลัพธ์แต่ละชีท
                           </h3>
+                          <p className="text-[11px] text-slate-400 text-center mb-3">
+                            <span className="text-blue-600 font-semibold">UPC</span> = จำนวนสินค้าที่ไม่ซ้ำกัน &nbsp;·&nbsp;
+                            <span className="text-[#E91E8C] font-semibold">Store</span> = จำนวนร้านค้าที่ไม่ซ้ำกัน (ร้านเดียวกันนับครั้งเดียว)
+                          </p>
                           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             {buildSummary.map(sheet => (
                               <div key={sheet.displayName} className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                                <div className="px-3 py-2 bg-slate-50 border-b border-slate-200">
-                                  <span className="text-xs font-semibold text-slate-700 truncate block">{sheet.displayName}</span>
-                                  <div className="flex items-center gap-1.5 mt-1">
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold">
-                                      {sheet.totalUpc.toLocaleString()} UPC
-                                    </span>
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold">
-                                      {sheet.totalStore.toLocaleString()} Store
-                                    </span>
-                                  </div>
+                                <div className="px-3 py-2.5 bg-slate-50 border-b border-slate-200">
+                                  <span className="text-sm font-bold text-slate-800 truncate block">{sheet.displayName}</span>
                                 </div>
-                                {sheet.groups.length > 0 && (
-                                  <div className="flex items-center justify-between gap-2 px-3 pt-2 pb-1 text-[9px] font-semibold text-slate-400 uppercase tracking-wide">
-                                    <span>Status</span>
-                                    <span className="flex-shrink-0">UPC / Store</span>
-                                  </div>
-                                )}
-                                <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
-                                  {sheet.groups.length === 0 ? (
-                                    <p className="px-3 py-3 text-[11px] text-slate-400 text-center">ไม่มีข้อมูล</p>
-                                  ) : (
-                                    sheet.groups.map(g => (
-                                      <div key={g.status} className="flex items-center justify-between gap-2 px-3 py-1.5">
-                                        <span className="text-[11px] text-slate-600 truncate" title={g.status}>{g.status}</span>
-                                        <span className="flex items-center gap-1 flex-shrink-0">
-                                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 font-bold tabular-nums">
-                                            {g.upcCount.toLocaleString()}
-                                          </span>
-                                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-50 text-[#E91E8C] font-bold tabular-nums">
-                                            {g.storeCount.toLocaleString()}
-                                          </span>
-                                        </span>
-                                      </div>
-                                    ))
-                                  )}
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="bg-slate-50/70 border-b border-slate-200">
+                                        <th className="text-left px-3 py-2 font-semibold text-slate-500">Status</th>
+                                        <th className="text-right px-3 py-2 font-semibold text-blue-600">UPC</th>
+                                        <th className="text-right px-3 py-2 font-semibold text-[#E91E8C]">Store</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {sheet.groups.length === 0 ? (
+                                        <tr>
+                                          <td colSpan={3} className="px-3 py-4 text-[11px] text-slate-400 text-center">ไม่มีข้อมูล</td>
+                                        </tr>
+                                      ) : (
+                                        sheet.groups.map(g => (
+                                          <tr key={g.status}>
+                                            <td className="px-3 py-2 text-slate-700 max-w-[140px] truncate" title={g.status}>{g.status}</td>
+                                            <td className="px-3 py-2 text-right font-bold text-blue-600 tabular-nums">{g.upcCount.toLocaleString()}</td>
+                                            <td className="px-3 py-2 text-right font-bold text-[#E91E8C] tabular-nums">{g.storeCount.toLocaleString()}</td>
+                                          </tr>
+                                        ))
+                                      )}
+                                    </tbody>
+                                    <tfoot>
+                                      <tr className="border-t-2 border-slate-200 bg-slate-50">
+                                        <td className="px-3 py-2 font-bold text-slate-700">รวมทั้งหมด</td>
+                                        <td className="px-3 py-2 text-right font-bold text-blue-700 tabular-nums">{sheet.totalUpc.toLocaleString()}</td>
+                                        <td className="px-3 py-2 text-right font-bold text-[#E91E8C] tabular-nums">{sheet.totalStore.toLocaleString()}</td>
+                                      </tr>
+                                    </tfoot>
+                                  </table>
                                 </div>
                               </div>
                             ))}
