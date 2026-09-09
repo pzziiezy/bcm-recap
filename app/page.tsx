@@ -25,6 +25,7 @@ import {
   AlertTriangle,
   Search,
   Store,
+  Barcode,
 } from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
@@ -205,17 +206,23 @@ export default function Home() {
   const [minorTabs, setMinorTabs]   = useState<MinorTabData[] | null>(null);
   const [previewTab, setPreviewTab] = useState(0);
 
-  // Step 5 — left-side "Group by Store Code" filter panel
-  const [storeCodeFilter, setStoreCodeFilter] = useState<string | null>(null);
-  const [storeCodeSearch, setStoreCodeSearch] = useState("");
-  // Store codes only make sense within the currently active tab — clear the selection
-  // when switching tabs so a stale code never silently hides everything in the newly-
-  // selected tab. (Not reset on every minorTabs edit — an in-place row edit shouldn't
+  // Step 5 — left-side pivot/filter panel: group by Store Code, or by UPC/Item.
+  // ONE filter + ONE search field shared by both modes (never two active filters at
+  // once) — deliberately kept this simple so there's exactly one thing to reset, one
+  // thing to pass into externalFilter, and no way for a stale filter from the other
+  // mode to silently linger and hide rows.
+  type PanelMode = "store" | "upc";
+  const [panelMode, setPanelMode] = useState<PanelMode>("store");
+  const [panelFilter, setPanelFilter] = useState<string | null>(null);
+  const [panelSearch, setPanelSearch] = useState("");
+  // Groupings only make sense within the currently active tab (and mode) — clear the
+  // selection when switching tabs or modes so a stale code/UPC never silently hides
+  // everything. (Not reset on every minorTabs edit — an in-place row edit shouldn't
   // throw away the filter the user is browsing with.)
   useEffect(() => {
-    setStoreCodeFilter(null);
-    setStoreCodeSearch("");
-  }, [previewTab]);
+    setPanelFilter(null);
+    setPanelSearch("");
+  }, [previewTab, panelMode]);
 
   // Exception config — start with [] so server and client render identically (no hydration mismatch).
   // localStorage is loaded in useEffect (client-only, after hydration).
@@ -600,8 +607,8 @@ export default function Home() {
         { displayName: "Recap_Delete_item",  colDefs: DELETE_ITEM_COLDEFS,  rows: minorRowsToEditable(sheets.deleteItem) },
       ]);
       setPreviewTab(0);
-      setStoreCodeFilter(null);
-      setStoreCodeSearch("");
+      setPanelFilter(null);
+      setPanelSearch("");
 
       setPct(100);
       setStatusMsg("เสร็จสิ้น!");
@@ -639,8 +646,8 @@ export default function Home() {
     setXlsbFiles([]);
     setMinorTabs(null);
     setPreviewTab(0);
-    setStoreCodeFilter(null);
-    setStoreCodeSearch("");
+    setPanelFilter(null);
+    setPanelSearch("");
   };
 
   const handleConfigChange = (updated: ExceptionConfig[]) => {
@@ -680,11 +687,12 @@ export default function Home() {
   const pendingDeleteItem = deleteItemRows.filter(r => !r.fields.division).length;
   const pendingTotal = pendingNewItem + pendingNewNotLink + pendingDeleteItem;
 
-  // ─── Step 5 — "Group by Store Code" side panel ──────────────────────────────
-  // One pass over the active tab's rows builds a store code → row count map. Runs only
-  // when that tab's row array actually changes (a fresh Process, or a row edit/replace),
-  // not on every render or on switching tabs to look at a DIFFERENT sheet.
+  // ─── Step 5 — side panel: group by Store Code, or by UPC/Item ───────────────
+  // Both are single passes over the active tab's rows, recomputed only when that tab's
+  // row array actually changes (a fresh Process, or a row edit/replace) — not on every
+  // render, and not on switching tabs to look at a DIFFERENT sheet.
   const activeTabRows = minorTabs?.[previewTab]?.rows;
+
   const storeCodeGroups = useMemo(() => {
     const counts = new Map<string, number>();
     for (const row of activeTabRows ?? []) {
@@ -697,9 +705,29 @@ export default function Home() {
     return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
   }, [activeTabRows]);
 
-  const filteredStoreCodeGroups = storeCodeSearch.trim()
-    ? storeCodeGroups.filter(([code]) => code.includes(storeCodeSearch.trim()))
+  // Per UPC: NAME and STATUS are captured from the first row seen — every row generated
+  // from one Check Space item shares the same barcode, name and status, so this is a
+  // genuine constant per UPC within a sheet, not a "first occurrence wins" approximation.
+  interface UpcGroup { upc: string; name: string; status: string; count: number }
+  const upcGroups = useMemo((): UpcGroup[] => {
+    const byUpc = new Map<string, UpcGroup>();
+    for (const row of activeTabRows ?? []) {
+      const upc = row.fields.upc || "";
+      if (!upc) continue;
+      const existing = byUpc.get(upc);
+      if (existing) existing.count++;
+      else byUpc.set(upc, { upc, name: row.fields.name || "", status: row.fields.remark || "", count: 1 });
+    }
+    return [...byUpc.values()].sort((a, b) => a.upc.localeCompare(b.upc, undefined, { numeric: true }));
+  }, [activeTabRows]);
+
+  const search = panelSearch.trim().toLowerCase();
+  const filteredStoreCodeGroups = search
+    ? storeCodeGroups.filter(([code]) => code.toLowerCase().includes(search))
     : storeCodeGroups;
+  const filteredUpcGroups = search
+    ? upcGroups.filter(g => g.upc.toLowerCase().includes(search) || g.name.toLowerCase().includes(search))
+    : upcGroups;
 
   // ─── Step 6 — per-sheet Status × Store count summary ────────────────────────
   // Each row already IS one (barcode × store) pairing, so "how many stores" per Status
@@ -1097,67 +1125,122 @@ export default function Home() {
                               </div>
                             </div>
 
-                            {/* ── Table content: Store Code panel + table ───── */}
+                            {/* ── Table content: pivot panel + table ────────── */}
                             <div className="flex gap-3 mb-6 items-start">
-                              {/* Left panel — Group by Store Code */}
-                              {storeCodeGroups.length > 0 && (
-                                <div className="w-56 flex-shrink-0 border border-slate-200 rounded-xl overflow-hidden bg-white">
-                                  <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-1.5">
-                                    <Store className="w-3.5 h-3.5 text-slate-400" />
-                                    <span className="text-xs font-semibold text-slate-700">Store Code</span>
+                              {/* Left panel — group by Store Code, or by UPC/Item */}
+                              {(storeCodeGroups.length > 0 || upcGroups.length > 0) && (
+                                <div className="w-64 flex-shrink-0 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                                  {/* Mode toggle */}
+                                  <div className="flex bg-slate-100 p-0.5 gap-0.5 m-2 rounded-lg">
+                                    <button
+                                      onClick={() => setPanelMode("store")}
+                                      className={`flex-1 flex items-center justify-center gap-1 text-[11px] font-medium px-2 py-1.5 rounded-md transition-all ${
+                                        panelMode === "store" ? "bg-white text-[#E91E8C] shadow-sm" : "text-slate-500 hover:text-slate-700"
+                                      }`}
+                                    >
+                                      <Store className="w-3 h-3" /> Store Code
+                                    </button>
+                                    <button
+                                      onClick={() => setPanelMode("upc")}
+                                      className={`flex-1 flex items-center justify-center gap-1 text-[11px] font-medium px-2 py-1.5 rounded-md transition-all ${
+                                        panelMode === "upc" ? "bg-white text-[#E91E8C] shadow-sm" : "text-slate-500 hover:text-slate-700"
+                                      }`}
+                                    >
+                                      <Barcode className="w-3 h-3" /> UPC / Item
+                                    </button>
+                                  </div>
+
+                                  <div className="px-3 pb-2 flex items-center gap-1.5">
+                                    <span className="text-[10px] text-slate-400 font-medium">
+                                      {panelMode === "store" ? "จำนวน Store ทั้งหมด" : "จำนวน Item ทั้งหมด"}
+                                    </span>
                                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600 font-bold ml-auto">
-                                      {storeCodeGroups.length}
+                                      {panelMode === "store" ? storeCodeGroups.length : upcGroups.length}
                                     </span>
                                   </div>
-                                  <div className="px-2 py-2 border-b border-slate-100">
+
+                                  <div className="px-2 pb-2 border-b border-slate-100">
                                     <div className="relative">
                                       <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
                                       <input
                                         type="text"
-                                        value={storeCodeSearch}
-                                        onChange={(e) => setStoreCodeSearch(e.target.value)}
-                                        placeholder="ค้นหา Store Code..."
+                                        value={panelSearch}
+                                        onChange={(e) => setPanelSearch(e.target.value)}
+                                        placeholder={panelMode === "store" ? "ค้นหา Store Code..." : "ค้นหา UPC หรือชื่อสินค้า..."}
                                         className="w-full pl-6 pr-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C]"
                                       />
                                     </div>
                                   </div>
+
                                   <div className="max-h-[68vh] overflow-y-auto py-1">
                                     <button
-                                      onClick={() => setStoreCodeFilter(null)}
+                                      onClick={() => setPanelFilter(null)}
                                       className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors ${
-                                        storeCodeFilter === null
+                                        panelFilter === null
                                           ? "bg-pink-50 text-[#E91E8C] font-semibold"
                                           : "text-slate-600 hover:bg-slate-50"
                                       }`}
                                     >
                                       <span>ทั้งหมด</span>
                                       <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums ${
-                                        storeCodeFilter === null ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"
+                                        panelFilter === null ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"
                                       }`}>
                                         {minorTabs[previewTab]?.rows.length ?? 0}
                                       </span>
                                     </button>
-                                    {filteredStoreCodeGroups.length === 0 ? (
-                                      <p className="px-3 py-3 text-[11px] text-slate-400 text-center">ไม่พบ Store Code</p>
+
+                                    {panelMode === "store" ? (
+                                      filteredStoreCodeGroups.length === 0 ? (
+                                        <p className="px-3 py-3 text-[11px] text-slate-400 text-center">ไม่พบ Store Code</p>
+                                      ) : (
+                                        filteredStoreCodeGroups.map(([code, count]) => (
+                                          <button
+                                            key={code}
+                                            onClick={() => setPanelFilter(f => f === code ? null : code)}
+                                            className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors ${
+                                              panelFilter === code
+                                                ? "bg-pink-50 text-[#E91E8C] font-semibold"
+                                                : "text-slate-600 hover:bg-slate-50"
+                                            }`}
+                                          >
+                                            <span className="truncate">{code}</span>
+                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums flex-shrink-0 ${
+                                              panelFilter === code ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"
+                                            }`}>
+                                              {count}
+                                            </span>
+                                          </button>
+                                        ))
+                                      )
                                     ) : (
-                                      filteredStoreCodeGroups.map(([code, count]) => (
-                                        <button
-                                          key={code}
-                                          onClick={() => setStoreCodeFilter(f => f === code ? null : code)}
-                                          className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors ${
-                                            storeCodeFilter === code
-                                              ? "bg-pink-50 text-[#E91E8C] font-semibold"
-                                              : "text-slate-600 hover:bg-slate-50"
-                                          }`}
-                                        >
-                                          <span className="truncate">{code}</span>
-                                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums flex-shrink-0 ${
-                                            storeCodeFilter === code ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"
-                                          }`}>
-                                            {count}
-                                          </span>
-                                        </button>
-                                      ))
+                                      filteredUpcGroups.length === 0 ? (
+                                        <p className="px-3 py-3 text-[11px] text-slate-400 text-center">ไม่พบ UPC</p>
+                                      ) : (
+                                        filteredUpcGroups.map((g) => (
+                                          <button
+                                            key={g.upc}
+                                            onClick={() => setPanelFilter(f => f === g.upc ? null : g.upc)}
+                                            title={g.name}
+                                            className={`w-full flex flex-col gap-0.5 px-3 py-1.5 text-left transition-colors ${
+                                              panelFilter === g.upc
+                                                ? "bg-pink-50"
+                                                : "hover:bg-slate-50"
+                                            }`}
+                                          >
+                                            <div className="flex items-center justify-between gap-2">
+                                              <span className={`text-xs truncate ${panelFilter === g.upc ? "text-[#E91E8C] font-semibold" : "text-slate-700 font-medium"}`}>
+                                                {g.upc}
+                                              </span>
+                                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums flex-shrink-0 ${
+                                                panelFilter === g.upc ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"
+                                              }`}>
+                                                {g.count}
+                                              </span>
+                                            </div>
+                                            <span className="text-[10px] text-slate-400 truncate">{g.status || "—"}</span>
+                                          </button>
+                                        ))
+                                      )
                                     )}
                                   </div>
                                 </div>
@@ -1172,10 +1255,10 @@ export default function Home() {
                                   <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold">
                                     {minorTabs[previewTab]?.rows.length ?? 0} แถว
                                   </span>
-                                  {storeCodeFilter && (
+                                  {panelFilter && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center gap-1">
-                                      Store {storeCodeFilter}
-                                      <button onClick={() => setStoreCodeFilter(null)} className="hover:text-blue-900">
+                                      {panelMode === "store" ? "Store" : "UPC"} {panelFilter}
+                                      <button onClick={() => setPanelFilter(null)} className="hover:text-blue-900">
                                         <X className="w-2.5 h-2.5" />
                                       </button>
                                     </span>
@@ -1192,7 +1275,11 @@ export default function Home() {
                                       key={previewTab}
                                       colDefs={minorTabs[previewTab].colDefs}
                                       rows={minorTabs[previewTab].rows}
-                                      externalFilter={storeCodeFilter ? (row) => row.fields.storeNumber === storeCodeFilter : undefined}
+                                      externalFilter={
+                                        panelFilter === null ? undefined
+                                        : panelMode === "store" ? (row) => row.fields.storeNumber === panelFilter
+                                        : (row) => row.fields.upc === panelFilter
+                                      }
                                       onChange={(updated) => handleFillTabChange(previewTab, updated)}
                                       onEditSaved={(rowIndex, changes) => {
                                         const tabName = minorTabs[previewTab]?.displayName ?? `tab${previewTab}`;
