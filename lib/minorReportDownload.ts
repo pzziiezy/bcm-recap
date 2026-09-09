@@ -4,6 +4,7 @@ import type {
   MinorReportDeleteItemRow,
 } from "./types";
 import type { FillRow } from "./download";
+import { normalizeHeaderText } from "./xlsxPatch";
 
 export const MINOR_REPORT_SHEET_NAMES = {
   newItem: "Recap_New_item",
@@ -96,7 +97,7 @@ export function buildFillRowsForSheet<T>(
   const missingHeaders: string[] = [];
   for (const [field, headerText] of Object.entries(headerTextMap)) {
     if (!headerText.trim()) continue; // "" means this field intentionally has no template column
-    const col = discoveredColumns.get(headerText.trim().toLowerCase());
+    const col = discoveredColumns.get(normalizeHeaderText(headerText));
     if (col === undefined) {
       missingHeaders.push(headerText);
       continue;

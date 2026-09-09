@@ -344,13 +344,25 @@ function readCellText(attrs: string, inner: string, sstStrings: string[]): strin
  * assumed either. Cheap enough: header rows are short and this only scans the first
  * `maxScanRows` rows.
  */
+/**
+ * Normalizes header text for comparison: trim, lowercase, and collapse underscores and
+ * runs of whitespace into a single space — so "PACK SIZE", "PACK_SIZE", and "Pack  Size"
+ * all match each other. Confirmed with the user this kind of cosmetic difference (a
+ * space swapped for an underscore) has already silently broken a column match once;
+ * every header-text comparison in this file goes through this instead of an exact
+ * trim+lowercase, so a future space/underscore variant can't do that again.
+ */
+export function normalizeHeaderText(s: string): string {
+  return s.trim().toLowerCase().replace(/[_\s]+/g, " ");
+}
+
 export function findHeaderRowNum(
   sheetXml: string,
   sstStrings: string[],
   markerText: string,
   maxScanRows = 30
 ): number | null {
-  const target = markerText.trim().toLowerCase();
+  const target = normalizeHeaderText(markerText);
   const rowRe = /<row r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
   let m: RegExpExecArray | null;
   while ((m = rowRe.exec(sheetXml)) !== null) {
@@ -360,7 +372,7 @@ export function findHeaderRowNum(
     let cm: RegExpExecArray | null;
     while ((cm = cellRe.exec(m[2])) !== null) {
       const value = readCellText(cm[1], cm[2], sstStrings);
-      if (value !== null && value.trim().toLowerCase() === target) return rowNum;
+      if (value !== null && normalizeHeaderText(value) === target) return rowNum;
     }
   }
   return null;
@@ -387,7 +399,7 @@ export function mapHeaderColumns(
   while ((cm = cellRe.exec(rowMatch[1])) !== null) {
     const value = readCellText(cm[2], cm[3], sstStrings);
     if (value === null) continue;
-    const norm = value.trim().toLowerCase();
+    const norm = normalizeHeaderText(value);
     if (norm && !map.has(norm)) map.set(norm, colLetterIdx(cm[1]));
   }
   return map;
