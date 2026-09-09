@@ -44,7 +44,7 @@ const NEW_ITEM_HEADER_TEXT: Record<keyof MinorReportNewItemRow, string> = {
   storeNumber: "STORE NUMBER",
   link: "LINK",
   forecastSalesPerMonthStore: "Forecast Sales/Month/Store",
-  remark: "REMARK",
+  remark: "STATUS",
 };
 
 const NEW_NOT_LINK_HEADER_TEXT: Record<keyof MinorReportNewNotLinkRow, string> = {
@@ -56,7 +56,7 @@ const NEW_NOT_LINK_HEADER_TEXT: Record<keyof MinorReportNewNotLinkRow, string> =
   attCode: "ATT_CODE",
   storeNumber: "STORENUMBER",
   link: "LINK",
-  remark: "REMARK",
+  remark: "STATUS",
 };
 
 const DELETE_ITEM_HEADER_TEXT: Record<keyof MinorReportDeleteItemRow, string> = {
@@ -68,7 +68,7 @@ const DELETE_ITEM_HEADER_TEXT: Record<keyof MinorReportDeleteItemRow, string> = 
   attCode: "ATT_CODE",
   storeNumber: "STORENUMBER",
   link: "LINK",
-  remark: "REMARK",
+  remark: "STATUS",
 };
 
 export const MINOR_REPORT_HEADER_TEXT_MAP: Record<string, Record<string, string>> = {

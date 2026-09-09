@@ -137,7 +137,7 @@ const NEW_ITEM_COLDEFS: TabColDef[] = [
   { field: "storeNumber",                col: 13, label: "STORE NUMBER", editable: false },
   { field: "link",                       col: 14, label: "LINK",       editable: false },
   { field: "forecastSalesPerMonthStore", col: 15, label: "Forecast Sales/Month/Store", editable: true },
-  { field: "remark",                     col: 16, label: "REMARK",     editable: true },
+  { field: "remark",                     col: 16, label: "STATUS",     editable: true },
 ];
 
 const NEW_NOT_LINK_COLDEFS: TabColDef[] = [
@@ -149,7 +149,7 @@ const NEW_NOT_LINK_COLDEFS: TabColDef[] = [
   { field: "attCode",     col: 5, label: "ATT_CODE",    editable: true },
   { field: "storeNumber", col: 6, label: "STORENUMBER", editable: false },
   { field: "link",        col: 7, label: "LINK",        editable: false },
-  { field: "remark",      col: 8, label: "REMARK",      editable: true },
+  { field: "remark",      col: 8, label: "STATUS",      editable: true },
 ];
 
 const DELETE_ITEM_COLDEFS: TabColDef[] = [
@@ -161,7 +161,7 @@ const DELETE_ITEM_COLDEFS: TabColDef[] = [
   { field: "attCode",     col: 5, label: "ATT_CODE",    editable: true },
   { field: "storeNumber", col: 6, label: "STORENUMBER", editable: false },
   { field: "link",        col: 7, label: "LINK",        editable: false },
-  { field: "remark",      col: 8, label: "REMARK",      editable: true },
+  { field: "remark",      col: 8, label: "STATUS",      editable: true },
 ];
 
 /** Converts one Minor Report sheet's typed rows into FillEditTable's generic
