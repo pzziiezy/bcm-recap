@@ -13,6 +13,9 @@ import { computeNetCapacity } from "./netCapacity";
 import { buildRecapCodes, findMatchingConfig } from "./processor";
 
 const ATT_CLASS_CONST = "MBC1"; // always a fixed constant — verified against real RECAP data
+const ATT_CODE_CONST  = "MINI"; // always a fixed constant — matches New and Renovate's own
+                                 // hardcoded ATT_CODE value (lib/newrenovate.worker.ts), not
+                                 // derived from FILE_INDEX's BY_CODE column
 
 interface Enrichment {
   division: string;
@@ -124,11 +127,6 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
     // DATA_SPACEMAN when Check Space doesn't have a value for this row.
     const resolvedPiece = item.totalUnits.trim() || enrichment.colPiece;
     const netCapacity = computeNetCapacity(enrichment.colO, resolvedPiece);
-    // Reference ATT_CODE for rows that can't be tied to one specific POG (e.g. a
-    // not-linked store, or a "DELETE ALL STORE" store outside any ticked POG) —
-    // first ticked POG's code, same "first occurrence wins" simplification used
-    // throughout this codebase for one-barcode-many-attributes cases.
-    const firstPogByCode = item.pogs.length > 0 ? (indexLookup.pogToByCode.get(item.pogs[0]) ?? "") : "";
 
     if (!isDelete) {
       // ── Stores already selling this item — union across EVERY planogram DATA_SPACEMAN
@@ -140,22 +138,18 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
         if (stores) for (const s of stores) existingStores.add(s);
       }
 
-      // ── Stores newly targeted this round: union of the ticked POGs, remembering
-      //    which POG each store came from so ATT_CODE is correct per store. ──
-      const newStoreToPog = new Map<string, string>();
+      // ── Stores newly targeted this round: union of the ticked POGs. ──
+      const newStores = new Set<string>();
       for (const pog of item.pogs) {
         const stores = indexLookup.pogToStores.get(pog);
-        if (!stores) continue;
-        for (const store of stores) {
-          if (!newStoreToPog.has(store)) newStoreToPog.set(store, pog);
-        }
+        if (stores) for (const store of stores) newStores.add(store);
       }
 
       // Recap_New_item lists only stores that are actually NEW to this barcode — for
       // NEW EXPAND, a ticked POG's store that's already active under an existing
       // planogram (ก้อน B) isn't "new" and is skipped here (confirmed with the user).
       // It still counts toward "active" for the not-link exclusion below, though.
-      for (const [store, pog] of newStoreToPog) {
+      for (const store of newStores) {
         if (existingStores.has(store)) continue;
         newItem.push({
           division: enrichment.division,
@@ -170,7 +164,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
           pctOrdering: enrichment.colO,
           netCapacity: netCapacity !== null ? String(netCapacity) : "",
           attClass: ATT_CLASS_CONST,
-          attCode: indexLookup.pogToByCode.get(pog) ?? "",
+          attCode: ATT_CODE_CONST,
           storeNumber: store,
           link: "LINK",
           forecastSalesPerMonthStore: enrichment.colN,
@@ -181,7 +175,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
       // ── Recap_New_not_link: every store that is in NEITHER A nor B (Store Master
       //    minus A ∪ B) — applies the same way regardless of status text. ──
       const cumulativeActive = new Set<string>(existingStores);
-      for (const store of newStoreToPog.keys()) cumulativeActive.add(store);
+      for (const store of newStores) cumulativeActive.add(store);
 
       if (cumulativeActive.size > 0) {
         for (const store of indexLookup.storeList) {
@@ -192,7 +186,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
             division: enrichment.division,
             department: enrichment.dept,
             attClass: ATT_CLASS_CONST,
-            attCode: firstPogByCode,
+            attCode: ATT_CODE_CONST,
             storeNumber: store,
             link: "New not link",
             remark: item.status,
@@ -219,7 +213,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
           division: enrichment.division,
           department: enrichment.dept,
           attClass: ATT_CLASS_CONST,
-          attCode: firstPogByCode,
+          attCode: ATT_CODE_CONST,
           storeNumber: store,
           link: "NOT LINK",
           // Verified against fillDelSCM(): DEL SCM's REMARK column was always written
