@@ -119,7 +119,7 @@ export function parseMissingRows(wb: XLSX.WorkBook): ParseMissingResult {
 // ─── Step 2: Parse xlsb/xlsx source files (100 ช่อง) ──────────────────────
 
 const COL_DF_HEADER = "MBC Forecast sale / Month / Store (pcs)";
-const PACK_SIZE_HEADER = "LABL size of UOM : ขนาด หรือ น้ำหนักสินค้า"; // Minor Report — PACK SIZE
+const PACK_SIZE_HEADER = "Purchase Pack Size : จำนวนสั่งซื้อสินค้าทั้งหมดใน 1 ลัง"; // Minor Report — PACK SIZE
 
 export async function parseXlsbFiles(
   files: File[]
