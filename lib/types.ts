@@ -94,6 +94,11 @@ export interface CheckSpaceItem {
   status: string;   // Check Space col C (e.g. "NEW ADD SOME STORE", "DELETE ALL STORE")
   remark: string;   // Check Space col D
   pogs: string[];   // POG names from unpivot of matrix col E+
+  // Optional TOTAL_UNITS column (found by header text, wherever it sits) — when present,
+  // takes priority over DATA_SPACEMAN's TOTAL_UNITS for Minor Report's "BCM Shelf stock
+  // ON POG (Piece)" column and its Net Capacity calc; falls back to DATA_SPACEMAN when
+  // blank. "" when the column isn't in the file at all.
+  totalUnits: string;
 }
 
 /** Lookup tables built from FILE_INDEX_1.xlsx (INDX_BCM) */

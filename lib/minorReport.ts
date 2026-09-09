@@ -119,7 +119,11 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
     const enrichment = resolveEnrichment(item.barcode, barcodeMap, structureMap, byUpc, exceptionConfig);
     const spaceman = byUpc.get(item.barcode);
     const packInfo = barcodeMap.get(item.barcode);
-    const netCapacity = computeNetCapacity(enrichment.colO, enrichment.colPiece);
+    // Check Space's own TOTAL_UNITS (when present) takes priority over DATA_SPACEMAN's
+    // for "BCM Shelf stock ON POG (Piece)" and its Net Capacity calc — falls back to
+    // DATA_SPACEMAN when Check Space doesn't have a value for this row.
+    const resolvedPiece = item.totalUnits.trim() || enrichment.colPiece;
+    const netCapacity = computeNetCapacity(enrichment.colO, resolvedPiece);
     // Reference ATT_CODE for rows that can't be tied to one specific POG (e.g. a
     // not-linked store, or a "DELETE ALL STORE" store outside any ticked POG) —
     // first ticked POG's code, same "first occurrence wins" simplification used
@@ -162,7 +166,7 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
           recipe: spaceman?.purchaseItemForSalepack ?? "",
           packSize: packInfo?.packSize ?? "",
           totalUnits: spaceman?.totalUnits ?? "",
-          purShelfStockPiece: enrichment.colPiece,
+          purShelfStockPiece: resolvedPiece,
           pctOrdering: enrichment.colO,
           netCapacity: netCapacity !== null ? String(netCapacity) : "",
           attClass: ATT_CLASS_CONST,

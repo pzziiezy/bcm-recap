@@ -35,7 +35,7 @@ const NEW_ITEM_HEADER_TEXT: Record<keyof MinorReportNewItemRow, string> = {
   salepack: "SALEPACK",
   recipe: "RECIPE",
   packSize: "PACK SIZE",
-  totalUnits: "TOTAL_UNITS",
+  totalUnits: "", // template no longer has this column — fed into purShelfStockPiece instead
   purShelfStockPiece: "BCM Shelf stock  ON POG (Piece)",
   pctOrdering: "% Ordering",
   netCapacity: "Net Capacity for odering",
@@ -95,6 +95,7 @@ export function buildFillRowsForSheet<T>(
   const fieldToCol: Array<[string, number]> = [];
   const missingHeaders: string[] = [];
   for (const [field, headerText] of Object.entries(headerTextMap)) {
+    if (!headerText.trim()) continue; // "" means this field intentionally has no template column
     const col = discoveredColumns.get(headerText.trim().toLowerCase());
     if (col === undefined) {
       missingHeaders.push(headerText);

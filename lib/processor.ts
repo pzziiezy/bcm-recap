@@ -776,9 +776,18 @@ export async function parseCheckSpace(file: File): Promise<CheckSpaceItem[]> {
   const DATA_START = 5; // 0-indexed → Excel row 6
   const POG_START_COL = 4; // col E
 
+  // TOTAL_UNITS is an optional column that may or may not be in the file, found by its
+  // header text wherever it sits — it must be excluded from the POG-columns unpivot
+  // below, or it would be mistaken for a POG name.
+  let totalUnitsCol = -1;
+  for (let c = 0; c <= range.e.c; c++) {
+    if (cellVal(ws, HEADER_ROW, c).trim().toUpperCase() === "TOTAL_UNITS") { totalUnitsCol = c; break; }
+  }
+
   // Collect POG names from header row (col E onwards)
   const pogCols: Array<{ col: number; name: string }> = [];
   for (let c = POG_START_COL; c <= range.e.c; c++) {
+    if (c === totalUnitsCol) continue;
     const h = cellVal(ws, HEADER_ROW, c);
     if (h) pogCols.push({ col: c, name: h });
   }
@@ -797,6 +806,7 @@ export async function parseCheckSpace(file: File): Promise<CheckSpaceItem[]> {
       status: cellVal(ws, r, 2),
       remark: cellVal(ws, r, 3),
       pogs,
+      totalUnits: totalUnitsCol >= 0 ? cellVal(ws, r, totalUnitsCol) : "",
     });
   }
   return items;
