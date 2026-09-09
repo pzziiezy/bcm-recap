@@ -414,7 +414,7 @@ export default function ConfigMenu({
           <div className="flex items-center gap-2 flex-wrap text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-xl px-4 py-2.5">
             <span className="font-semibold text-slate-700 whitespace-nowrap">📋 Rule ถูกอ่านอย่างไร?</span>
             <span className="text-slate-300">|</span>
-            <span>CATEGORY + SUBCATEGORY + DESC_C ต้องตรงกันครบทั้ง 3 ช่อง</span>
+            <span>DESC_C + CATEGORY + SUBCATEGORY ต้องตรงกันครบทั้ง 3 ช่อง</span>
             <span className="text-slate-300">·</span>
             <span><strong className="text-[#E91E8C]">ทั้งหมด</strong> = จับคู่ทุก value ในช่องนั้น</span>
             <span className="text-slate-300">·</span>
