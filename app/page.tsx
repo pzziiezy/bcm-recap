@@ -1063,7 +1063,7 @@ export default function Home() {
                                 const active = previewTab === 0;
                                 return (
                                   <button
-                                    onClick={() => setPreviewTab(0)}
+                                    onClick={() => startTransition(() => setPreviewTab(0))}
                                     className={`rounded-xl border-2 p-4 flex flex-col items-center gap-1.5 text-center transition-all ${
                                       active
                                         ? "border-[#E91E8C] bg-pink-50 shadow-sm"
@@ -1084,7 +1084,7 @@ export default function Home() {
                                 const active = previewTab === 1;
                                 return (
                                   <button
-                                    onClick={() => setPreviewTab(1)}
+                                    onClick={() => startTransition(() => setPreviewTab(1))}
                                     className={`rounded-xl border-2 p-4 flex flex-col items-center gap-1.5 text-center transition-all ${
                                       active
                                         ? "border-blue-400 bg-blue-50 shadow-sm"
@@ -1105,7 +1105,7 @@ export default function Home() {
                                 const active = previewTab === 2;
                                 return (
                                   <button
-                                    onClick={() => setPreviewTab(2)}
+                                    onClick={() => startTransition(() => setPreviewTab(2))}
                                     className={`rounded-xl border-2 p-4 flex flex-col items-center gap-1.5 text-center transition-all ${
                                       active
                                         ? "border-orange-400 bg-orange-50 shadow-sm"
@@ -1187,7 +1187,7 @@ export default function Home() {
 
                                   <div className="max-h-[68vh] overflow-y-auto py-1">
                                     <button
-                                      onClick={() => setPanelFilter(null)}
+                                      onClick={() => startTransition(() => setPanelFilter(null))}
                                       className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors ${
                                         panelFilter === null
                                           ? "bg-pink-50 text-[#E91E8C] font-semibold"
@@ -1209,7 +1209,7 @@ export default function Home() {
                                         filteredStoreCodeGroups.map(([code, count]) => (
                                           <button
                                             key={code}
-                                            onClick={() => setPanelFilter(f => f === code ? null : code)}
+                                            onClick={() => startTransition(() => setPanelFilter(f => f === code ? null : code))}
                                             className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors ${
                                               panelFilter === code
                                                 ? "bg-pink-50 text-[#E91E8C] font-semibold"
@@ -1232,7 +1232,7 @@ export default function Home() {
                                         filteredUpcGroups.map((g) => (
                                           <button
                                             key={g.upc}
-                                            onClick={() => setPanelFilter(f => f === g.upc ? null : g.upc)}
+                                            onClick={() => startTransition(() => setPanelFilter(f => f === g.upc ? null : g.upc))}
                                             title={g.name}
                                             className={`w-full flex flex-col gap-0.5 px-3 py-1.5 text-left transition-colors ${
                                               panelFilter === g.upc
@@ -1271,7 +1271,7 @@ export default function Home() {
                                   {panelFilter && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center gap-1">
                                       {panelMode === "store" ? "Store" : "UPC"} {panelFilter}
-                                      <button onClick={() => setPanelFilter(null)} className="hover:text-blue-900">
+                                      <button onClick={() => startTransition(() => setPanelFilter(null))} className="hover:text-blue-900">
                                         <X className="w-2.5 h-2.5" />
                                       </button>
                                     </span>

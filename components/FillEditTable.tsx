@@ -1,7 +1,37 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef, useLayoutEffect } from "react";
 import { Pencil, Check, X, ArrowLeftRight, Filter } from "lucide-react";
 import type { FillRow } from "@/lib/download";
+
+// ─── Virtualized rendering (large tables only) ─────────────────────────────────
+// Below this many rows, the table renders normally — no windowing, identical to the
+// original behavior. Above it, only a small window of rows around the visible area
+// is actually mounted, so clicking a filter / typing while editing doesn't force the
+// browser to reconcile thousands of <tr> elements it isn't even showing.
+const VIRTUALIZE_THRESHOLD = 150;
+const DEFAULT_ROW_HEIGHT_PX = 29; // corrected from the real DOM the moment the first row mounts
+const OVERSCAN_ROWS = 10;
+
+/**
+ * Pure windowing math, kept separate from the component so it can be unit-tested
+ * without a DOM: given how far the user has scrolled, how tall the visible area is,
+ * how tall one row is, and how many rows exist in total, returns the [start, end)
+ * slice that should actually be rendered (padded by `overscan` rows on each side so
+ * fast scrolling doesn't flash empty space before the next frame renders).
+ */
+export function computeVirtualRange(
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeight: number,
+  totalRows: number,
+  overscan: number
+): { start: number; end: number } {
+  if (totalRows <= 0) return { start: 0, end: 0 };
+  if (viewportHeight <= 0 || rowHeight <= 0) return { start: 0, end: totalRows };
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const end = Math.min(totalRows, Math.ceil((scrollTop + viewportHeight) / rowHeight) + overscan);
+  return { start, end };
+}
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -109,12 +139,52 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
   const [matchMode, setMatchMode]       = useState<MatchMode>("exact");
   const [replaceMsg, setReplaceMsg]     = useState<string | null>(null);
 
+  // ── virtualization state (only matters once displayRows crosses the threshold) ──
+  const scrollBoxRef = useRef<HTMLDivElement>(null);
+  const firstRowRef  = useRef<HTMLTableRowElement>(null);
+  const [scrollTop, setScrollTop]       = useState(0);
+  const [viewportH, setViewportH]       = useState(0);
+  const [rowH, setRowH]                 = useState(DEFAULT_ROW_HEIGHT_PX);
+
   let displayRows = rows;
   if (showOnlyIncomplete && isIncompleteRow) displayRows = displayRows.filter(isIncompleteRow);
   if (externalFilter) displayRows = displayRows.filter(externalFilter);
 
   const incompleteCount = isIncompleteRow ? rows.filter(isIncompleteRow).length : 0;
   const isFiltered = displayRows.length !== rows.length;
+
+  // Below the threshold, render every row exactly as before (range = the whole list) —
+  // virtualization only ever narrows what's shown for genuinely large tables, and never
+  // changes displayRows/rows themselves, so onChange/Replace/edit stay untouched either way.
+  const shouldVirtualize = displayRows.length > VIRTUALIZE_THRESHOLD;
+  const { start: rangeStart, end: rangeEnd } = shouldVirtualize
+    ? computeVirtualRange(scrollTop, viewportH, rowH, displayRows.length, OVERSCAN_ROWS)
+    : { start: 0, end: displayRows.length };
+  const visibleRows = shouldVirtualize ? displayRows.slice(rangeStart, rangeEnd) : displayRows;
+  const topSpacerPx = shouldVirtualize ? rangeStart * rowH : 0;
+  const bottomSpacerPx = shouldVirtualize ? (displayRows.length - rangeEnd) * rowH : 0;
+  const totalCols = colDefs.length + 1; // +1 for the action (pencil) column
+
+  // Measure the viewport once it's virtualizing, and keep it in sync with resizes.
+  useLayoutEffect(() => {
+    if (!shouldVirtualize) return;
+    const el = scrollBoxRef.current;
+    if (!el) return;
+    setViewportH(el.clientHeight);
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setViewportH(el.clientHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [shouldVirtualize]);
+
+  // Correct the estimated row height from the real, currently-rendered first row —
+  // every row here is single-line/truncated (whitespace-nowrap), so they're all the
+  // same height and one measurement is enough for the whole list.
+  useLayoutEffect(() => {
+    if (!shouldVirtualize) return;
+    const h = firstRowRef.current?.getBoundingClientRect().height;
+    if (h && Math.abs(h - rowH) > 0.5) setRowH(h);
+  });
 
   const startEdit = (rowIndex: number) => {
     const row = rows.find(r => r.rowIndex === rowIndex);
@@ -321,7 +391,11 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
 
       {/* ── Table ────────────────────────────────────────────────────────────── */}
       {/* overflow-auto + max-h lets position:sticky work on thead th (overflow-x-only would block it) */}
-      <div className="overflow-auto max-h-[68vh]">
+      <div
+        ref={scrollBoxRef}
+        onScroll={shouldVirtualize ? (e) => setScrollTop(e.currentTarget.scrollTop) : undefined}
+        className="overflow-auto max-h-[68vh]"
+      >
         <table className="text-xs w-full border-collapse">
           <thead>
             <tr>
@@ -344,14 +418,24 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
             </tr>
           </thead>
           <tbody>
-            {displayRows.map((row, i) => {
+            {topSpacerPx > 0 && (
+              <tr aria-hidden="true" style={{ height: topSpacerPx }}>
+                <td colSpan={totalCols} style={{ padding: 0, border: "none" }} />
+              </tr>
+            )}
+            {visibleRows.map((row, i) => {
+              const realIndex = rangeStart + i;
               const isEditing = row.rowIndex === editRowIndex;
               const anyZoneKey = isKeyZone
                 ? colDefs.some(cd => cd.zone && isKeyZone(row, cd.zone))
                 : false;
 
               return (
-                <tr key={row.rowIndex} className={i % 2 === 0 ? "bg-white" : "bg-slate-50/40"}>
+                <tr
+                  key={row.rowIndex}
+                  ref={i === 0 ? firstRowRef : undefined}
+                  className={realIndex % 2 === 0 ? "bg-white" : "bg-slate-50/40"}
+                >
                   {/* Action cell */}
                   <td className={[
                     "px-1 py-1 border-b border-slate-100 text-center align-middle",
@@ -433,6 +517,11 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
                 </tr>
               );
             })}
+            {bottomSpacerPx > 0 && (
+              <tr aria-hidden="true" style={{ height: bottomSpacerPx }}>
+                <td colSpan={totalCols} style={{ padding: 0, border: "none" }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
