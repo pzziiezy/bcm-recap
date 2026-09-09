@@ -78,6 +78,13 @@ interface Props {
   isKeyZone?: (row: EditableFillRow, zone: string) => boolean;
   /** When provided, enables the "แสดงเฉพาะแถวที่ยังไม่สมบูรณ์" filter toggle. */
   isIncompleteRow?: (row: EditableFillRow) => boolean;
+  /**
+   * Optional external view filter (e.g. a "Group by Store Code" side panel) — narrows
+   * only what's RENDERED in the table body. `rows` itself, onChange, Find & Replace, and
+   * option datalists all keep operating on the full unfiltered set, so applying a view
+   * filter can never drop or hide data from what gets written back.
+   */
+  externalFilter?: (row: EditableFillRow) => boolean;
   /** Called after user saves a pencil-edit; receives only the fields that actually changed. */
   onEditSaved?: (rowIndex: number, changes: Record<string, { from: string; to: string }>) => void;
   /** Called after user executes a Replace operation. */
@@ -86,7 +93,7 @@ interface Props {
 
 type MatchMode = "exact" | "contains";
 
-export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyZone, isIncompleteRow, onEditSaved, onReplaceApplied }: Props) {
+export default function FillEditTable({ colDefs, rows, onChange, getOptions, isKeyZone, isIncompleteRow, externalFilter, onEditSaved, onReplaceApplied }: Props) {
   // ── row edit state (tracked by rowIndex, not array index, so filter doesn't break it) ──
   const [editRowIndex, setEditRowIndex] = useState<number | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -102,11 +109,12 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
   const [matchMode, setMatchMode]       = useState<MatchMode>("exact");
   const [replaceMsg, setReplaceMsg]     = useState<string | null>(null);
 
-  const displayRows = (showOnlyIncomplete && isIncompleteRow)
-    ? rows.filter(isIncompleteRow)
-    : rows;
+  let displayRows = rows;
+  if (showOnlyIncomplete && isIncompleteRow) displayRows = displayRows.filter(isIncompleteRow);
+  if (externalFilter) displayRows = displayRows.filter(externalFilter);
 
   const incompleteCount = isIncompleteRow ? rows.filter(isIncompleteRow).length : 0;
+  const isFiltered = displayRows.length !== rows.length;
 
   const startEdit = (rowIndex: number) => {
     const row = rows.find(r => r.rowIndex === rowIndex);
@@ -170,8 +178,8 @@ export default function FillEditTable({ colDefs, rows, onChange, getOptions, isK
       {/* ── Toolbar ────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-2 py-1.5 bg-slate-50 border-b border-slate-200">
         <span className="text-[10px] text-slate-400 select-none">
-          {showOnlyIncomplete
-            ? `${displayRows.length} / ${rows.length} แถว (ยังไม่สมบูรณ์)`
+          {isFiltered
+            ? `${displayRows.length} / ${rows.length} แถว${showOnlyIncomplete ? " (ยังไม่สมบูรณ์)" : ""}`
             : `${rows.length} แถว`}
         </span>
         <div className="flex items-center gap-1.5">

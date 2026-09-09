@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useEffect, useCallback, startTransition } from "react";
+import { useRef, useState, useEffect, useCallback, useMemo, startTransition } from "react";
 import * as XLSX from "xlsx";
 import {
   Download,
@@ -23,6 +23,8 @@ import {
   BookOpen,
   Database,
   AlertTriangle,
+  Search,
+  Store,
 } from "lucide-react";
 
 import StepIndicator from "@/components/StepIndicator";
@@ -202,6 +204,18 @@ export default function Home() {
   }
   const [minorTabs, setMinorTabs]   = useState<MinorTabData[] | null>(null);
   const [previewTab, setPreviewTab] = useState(0);
+
+  // Step 5 — left-side "Group by Store Code" filter panel
+  const [storeCodeFilter, setStoreCodeFilter] = useState<string | null>(null);
+  const [storeCodeSearch, setStoreCodeSearch] = useState("");
+  // Store codes only make sense within the currently active tab — clear the selection
+  // when switching tabs so a stale code never silently hides everything in the newly-
+  // selected tab. (Not reset on every minorTabs edit — an in-place row edit shouldn't
+  // throw away the filter the user is browsing with.)
+  useEffect(() => {
+    setStoreCodeFilter(null);
+    setStoreCodeSearch("");
+  }, [previewTab]);
 
   // Exception config — start with [] so server and client render identically (no hydration mismatch).
   // localStorage is loaded in useEffect (client-only, after hydration).
@@ -586,6 +600,8 @@ export default function Home() {
         { displayName: "Recap_Delete_item",  colDefs: DELETE_ITEM_COLDEFS,  rows: minorRowsToEditable(sheets.deleteItem) },
       ]);
       setPreviewTab(0);
+      setStoreCodeFilter(null);
+      setStoreCodeSearch("");
 
       setPct(100);
       setStatusMsg("เสร็จสิ้น!");
@@ -623,6 +639,8 @@ export default function Home() {
     setXlsbFiles([]);
     setMinorTabs(null);
     setPreviewTab(0);
+    setStoreCodeFilter(null);
+    setStoreCodeSearch("");
   };
 
   const handleConfigChange = (updated: ExceptionConfig[]) => {
@@ -661,6 +679,27 @@ export default function Home() {
   const pendingNewNotLink = newNotLinkRows.filter(r => !r.fields.division).length;
   const pendingDeleteItem = deleteItemRows.filter(r => !r.fields.division).length;
   const pendingTotal = pendingNewItem + pendingNewNotLink + pendingDeleteItem;
+
+  // ─── Step 5 — "Group by Store Code" side panel ──────────────────────────────
+  // One pass over the active tab's rows builds a store code → row count map. Runs only
+  // when that tab's row array actually changes (a fresh Process, or a row edit/replace),
+  // not on every render or on switching tabs to look at a DIFFERENT sheet.
+  const activeTabRows = minorTabs?.[previewTab]?.rows;
+  const storeCodeGroups = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const row of activeTabRows ?? []) {
+      const code = row.fields.storeNumber || "";
+      if (!code) continue;
+      counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+    // Numeric-aware sort so store codes like "1001", "1002", "10010" order sensibly
+    // instead of lexicographically.
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [activeTabRows]);
+
+  const filteredStoreCodeGroups = storeCodeSearch.trim()
+    ? storeCodeGroups.filter(([code]) => code.includes(storeCodeSearch.trim()))
+    : storeCodeGroups;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -1039,64 +1078,140 @@ export default function Home() {
                               </div>
                             </div>
 
-                            {/* ── Table content ─────────────────────────────── */}
-                            <div className="border border-slate-200 rounded-xl mb-6">
-                              <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
-                                <span className="text-xs font-semibold text-slate-700">
-                                  {minorTabs[previewTab]?.displayName}
-                                </span>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold">
-                                  {minorTabs[previewTab]?.rows.length ?? 0} แถว
-                                </span>
-                              </div>
-                              <div className="p-3 bg-white">
-                                {(minorTabs[previewTab]?.rows.length ?? 0) === 0 ? (
-                                  <p className="text-center text-amber-600 text-sm py-3 flex items-center justify-center gap-2">
-                                    <AlertTriangle className="w-4 h-4" />
-                                    ไม่มีข้อมูลในชีทนี้
-                                  </p>
-                                ) : minorTabs[previewTab] ? (
-                                  <FillEditTable
-                                    key={previewTab}
-                                    colDefs={minorTabs[previewTab].colDefs}
-                                    rows={minorTabs[previewTab].rows}
-                                    onChange={(updated) => handleFillTabChange(previewTab, updated)}
-                                    onEditSaved={(rowIndex, changes) => {
-                                      const tabName = minorTabs[previewTab]?.displayName ?? `tab${previewTab}`;
-                                      sendLog([makeEntry(sessionIdRef.current, "USER_EDIT", "INFO",
-                                        `แก้ไขแถว ${rowIndex} ใน ${tabName}: ${Object.keys(changes).join(", ")}`,
-                                        { tab: tabName, rowIndex, changes }
-                                      )]);
-                                    }}
-                                    onReplaceApplied={(col, from, to, count) => {
-                                      const tabName = minorTabs[previewTab]?.displayName ?? `tab${previewTab}`;
-                                      const colLabel = minorTabs[previewTab]?.colDefs.find(d => d.field === col)?.label ?? col;
-                                      sendLog([makeEntry(sessionIdRef.current, "USER_REPLACE", "INFO",
-                                        `Replace ใน ${tabName} คอลัมน์ "${colLabel}": "${from}" → "${to}" (${count} แถว)`,
-                                        { tab: tabName, col, colLabel, from, to, count }
-                                      )]);
-                                    }}
-                                    isIncompleteRow={(row) => !row.fields.division}
-                                    getOptions={(field, draft) => {
-                                      const tab = minorTabs[previewTab];
-                                      if (!tab) return [];
-                                      const allVals = (f: string) =>
-                                        [...new Set(tab.rows.map(r => r.fields[f]).filter(Boolean))];
-                                      const hm = spacemanValues.hierarchyMap;
-                                      switch (field) {
-                                        case "division":
-                                          return spacemanValues.descAList;
-                                        case "department":
-                                          return draft.division && hm.divToDept[draft.division]
-                                            ? hm.divToDept[draft.division] : spacemanValues.descBList;
-                                        case "link":
-                                          return previewTab === 0 ? ["LINK"] : previewTab === 1 ? ["New not link"] : ["NOT LINK"];
-                                        default:
-                                          return allVals(field);
-                                      }
-                                    }}
-                                  />
-                                ) : null}
+                            {/* ── Table content: Store Code panel + table ───── */}
+                            <div className="flex gap-3 mb-6 items-start">
+                              {/* Left panel — Group by Store Code */}
+                              {storeCodeGroups.length > 0 && (
+                                <div className="w-56 flex-shrink-0 border border-slate-200 rounded-xl overflow-hidden bg-white">
+                                  <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-1.5">
+                                    <Store className="w-3.5 h-3.5 text-slate-400" />
+                                    <span className="text-xs font-semibold text-slate-700">Store Code</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600 font-bold ml-auto">
+                                      {storeCodeGroups.length}
+                                    </span>
+                                  </div>
+                                  <div className="px-2 py-2 border-b border-slate-100">
+                                    <div className="relative">
+                                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
+                                      <input
+                                        type="text"
+                                        value={storeCodeSearch}
+                                        onChange={(e) => setStoreCodeSearch(e.target.value)}
+                                        placeholder="ค้นหา Store Code..."
+                                        className="w-full pl-6 pr-2 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-pink-300 focus:border-[#E91E8C]"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="max-h-[68vh] overflow-y-auto py-1">
+                                    <button
+                                      onClick={() => setStoreCodeFilter(null)}
+                                      className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors ${
+                                        storeCodeFilter === null
+                                          ? "bg-pink-50 text-[#E91E8C] font-semibold"
+                                          : "text-slate-600 hover:bg-slate-50"
+                                      }`}
+                                    >
+                                      <span>ทั้งหมด</span>
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums ${
+                                        storeCodeFilter === null ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"
+                                      }`}>
+                                        {minorTabs[previewTab]?.rows.length ?? 0}
+                                      </span>
+                                    </button>
+                                    {filteredStoreCodeGroups.length === 0 ? (
+                                      <p className="px-3 py-3 text-[11px] text-slate-400 text-center">ไม่พบ Store Code</p>
+                                    ) : (
+                                      filteredStoreCodeGroups.map(([code, count]) => (
+                                        <button
+                                          key={code}
+                                          onClick={() => setStoreCodeFilter(f => f === code ? null : code)}
+                                          className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-xs transition-colors ${
+                                            storeCodeFilter === code
+                                              ? "bg-pink-50 text-[#E91E8C] font-semibold"
+                                              : "text-slate-600 hover:bg-slate-50"
+                                          }`}
+                                        >
+                                          <span className="truncate">{code}</span>
+                                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full tabular-nums flex-shrink-0 ${
+                                            storeCodeFilter === code ? "bg-[#E91E8C] text-white" : "bg-slate-100 text-slate-500"
+                                          }`}>
+                                            {count}
+                                          </span>
+                                        </button>
+                                      ))
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Right — table */}
+                              <div className="flex-1 min-w-0 border border-slate-200 rounded-xl">
+                                <div className="px-4 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-slate-700">
+                                    {minorTabs[previewTab]?.displayName}
+                                  </span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-100 text-[#E91E8C] font-bold">
+                                    {minorTabs[previewTab]?.rows.length ?? 0} แถว
+                                  </span>
+                                  {storeCodeFilter && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center gap-1">
+                                      Store {storeCodeFilter}
+                                      <button onClick={() => setStoreCodeFilter(null)} className="hover:text-blue-900">
+                                        <X className="w-2.5 h-2.5" />
+                                      </button>
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="p-3 bg-white">
+                                  {(minorTabs[previewTab]?.rows.length ?? 0) === 0 ? (
+                                    <p className="text-center text-amber-600 text-sm py-3 flex items-center justify-center gap-2">
+                                      <AlertTriangle className="w-4 h-4" />
+                                      ไม่มีข้อมูลในชีทนี้
+                                    </p>
+                                  ) : minorTabs[previewTab] ? (
+                                    <FillEditTable
+                                      key={previewTab}
+                                      colDefs={minorTabs[previewTab].colDefs}
+                                      rows={minorTabs[previewTab].rows}
+                                      externalFilter={storeCodeFilter ? (row) => row.fields.storeNumber === storeCodeFilter : undefined}
+                                      onChange={(updated) => handleFillTabChange(previewTab, updated)}
+                                      onEditSaved={(rowIndex, changes) => {
+                                        const tabName = minorTabs[previewTab]?.displayName ?? `tab${previewTab}`;
+                                        sendLog([makeEntry(sessionIdRef.current, "USER_EDIT", "INFO",
+                                          `แก้ไขแถว ${rowIndex} ใน ${tabName}: ${Object.keys(changes).join(", ")}`,
+                                          { tab: tabName, rowIndex, changes }
+                                        )]);
+                                      }}
+                                      onReplaceApplied={(col, from, to, count) => {
+                                        const tabName = minorTabs[previewTab]?.displayName ?? `tab${previewTab}`;
+                                        const colLabel = minorTabs[previewTab]?.colDefs.find(d => d.field === col)?.label ?? col;
+                                        sendLog([makeEntry(sessionIdRef.current, "USER_REPLACE", "INFO",
+                                          `Replace ใน ${tabName} คอลัมน์ "${colLabel}": "${from}" → "${to}" (${count} แถว)`,
+                                          { tab: tabName, col, colLabel, from, to, count }
+                                        )]);
+                                      }}
+                                      isIncompleteRow={(row) => !row.fields.division}
+                                      getOptions={(field, draft) => {
+                                        const tab = minorTabs[previewTab];
+                                        if (!tab) return [];
+                                        const allVals = (f: string) =>
+                                          [...new Set(tab.rows.map(r => r.fields[f]).filter(Boolean))];
+                                        const hm = spacemanValues.hierarchyMap;
+                                        switch (field) {
+                                          case "division":
+                                            return spacemanValues.descAList;
+                                          case "department":
+                                            return draft.division && hm.divToDept[draft.division]
+                                              ? hm.divToDept[draft.division] : spacemanValues.descBList;
+                                          case "link":
+                                            return previewTab === 0 ? ["LINK"] : previewTab === 1 ? ["New not link"] : ["NOT LINK"];
+                                          default:
+                                            return allVals(field);
+                                        }
+                                      }}
+                                    />
+                                  ) : null}
+                                </div>
                               </div>
                             </div>
                           </>
