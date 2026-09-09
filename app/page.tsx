@@ -1369,7 +1369,7 @@ export default function Home() {
 
                       {/* ── Summary: UPC | Name | Status | Count Store ────────── */}
                       {buildSummary && (
-                        <div className="max-w-6xl mx-auto text-left pt-2">
+                        <div className="w-full text-left pt-2">
                           <h3 className="text-xs font-bold text-slate-500 text-center uppercase tracking-wide">
                             สรุปผลลัพธ์แต่ละชีท
                           </h3>
@@ -1410,8 +1410,8 @@ export default function Home() {
                                         sheet.rows.map((r, i) => (
                                           <tr key={`${r.upc}-${r.status}-${i}`}>
                                             <td className="px-2.5 py-1.5 text-slate-700 font-medium whitespace-nowrap">{r.upc}</td>
-                                            <td className="px-2.5 py-1.5 text-slate-500 max-w-[110px] truncate" title={r.name}>{r.name}</td>
-                                            <td className="px-2.5 py-1.5 text-slate-600 max-w-[110px] truncate" title={r.status}>{r.status}</td>
+                                            <td className="px-2.5 py-1.5 text-slate-500 max-w-[220px] truncate" title={r.name}>{r.name}</td>
+                                            <td className="px-2.5 py-1.5 text-slate-600 max-w-[220px] truncate" title={r.status}>{r.status}</td>
                                             <td className="px-2.5 py-1.5 text-right font-bold text-[#E91E8C] tabular-nums">{r.storeCount.toLocaleString()}</td>
                                           </tr>
                                         ))
