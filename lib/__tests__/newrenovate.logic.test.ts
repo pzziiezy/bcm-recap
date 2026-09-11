@@ -255,6 +255,29 @@ describe("planofolder mapping — Sheet 1 column data sources", () => {
   });
 });
 
+// ─── 4a. Pack Size — Master Assortment primary, DATA_SPACEMAN UNITS_CASE fallback ───
+
+describe("Pack Size — Master Assortment primary, UNITS_CASE fallback", () => {
+  const packSizeVal = (master: { skuPack?: string } | undefined, sm: { unitsCase?: string } | undefined) =>
+    (master?.skuPack || "").trim() || (sm?.unitsCase || "").trim();
+
+  it("uses Master Assortment's value when present", () => {
+    expect(packSizeVal({ skuPack: "12" }, { unitsCase: "99" })).toBe("12");
+  });
+
+  it("falls back to DATA_SPACEMAN UNITS_CASE when barcode isn't in Master Assortment at all", () => {
+    expect(packSizeVal(undefined, { unitsCase: "99" })).toBe("99");
+  });
+
+  it("falls back to UNITS_CASE when Master Assortment's own Pack Size cell is blank", () => {
+    expect(packSizeVal({ skuPack: "" }, { unitsCase: "99" })).toBe("99");
+  });
+
+  it("blank when neither source has a value (no spurious 0)", () => {
+    expect(packSizeVal(undefined, undefined)).toBe("");
+  });
+});
+
 // ─── 4b. % Ordering Config Rule matching — must key on CATEGORY/SUBCATEGORY/DESC_C ──
 
 describe("% Ordering — Config Rule matching keys", () => {

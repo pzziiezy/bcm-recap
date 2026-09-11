@@ -7,6 +7,8 @@
  *     │  PLANOGRAM → DATA_SPACEMAN  → POG CATE(PLANOFOLDER05) — keyed by planogram name, not
  *     │                                barcode, since one barcode can sell on several planograms
  *     │  BARCODE → Master Assortment→ SALE PACK CODE / Pack Size / Extra info / Status / Store / Name
+ *     │           (Pack Size falls back to DATA_SPACEMAN's UNITS_CASE when Master Assortment
+ *     │            has no value for this barcode)
  *     │  PLANOGRAM + SEGMENT → Fixture Index → New Fixture (Code Fixture)
  *     │  PLANOGRAM → INDEX   → Status(fallback) / Store(fallback) / PLANOGRAM NAME
  *     │  QRY itself          → No.Bay / SEQ / SHELF STOCK / Name
@@ -43,6 +45,7 @@ interface SpacemanEntry {
   descA:         string; // DIVISION source (by barcode)
   descB:         string; // DEPARTMENT source (by barcode)
   descC:         string;
+  unitsCase:     string; // UNITS_CASE — Pack Size fallback when Master Assortment has none
 }
 
 interface MasterEntry {
@@ -453,6 +456,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const descAIdx = sIdx("DESC_A");
     const descBIdx = sIdx("DESC_B");
     const descCIdx = sIdx("DESC_C");
+    const unitsCaseIdx = sIdx("UNITS_CASE");
     progress(14, `DATA_SPACEMAN headers: UPC=${upcIdx} DESC_A=${descAIdx} DESC_B=${descBIdx} PF05=${pf05Idx}`);
 
     // No separate cell.w (formatted display) once read via the grid — harmless here:
@@ -486,6 +490,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           descA:         descAIdx >= 0 ? getS(r, descAIdx) : "",
           descB:         descBIdx >= 0 ? getS(r, descBIdx) : "",
           descC:         descCIdx >= 0 ? getS(r, descCIdx) : "",
+          unitsCase:     unitsCaseIdx >= 0 ? getS(r, unitsCaseIdx) : "",
         });
       }
       if (r % 10000 === 0)
@@ -1263,9 +1268,13 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
       if (bEntry.master) {
         ss(SALEPACK_COL, bEntry.master.barSingle || bEntry.master.barIngredient);
-        sn(PACKSIZE_COL, bEntry.master.skuPack);
         ss(EXTRA_COL,    bEntry.master.extraInfo);
       }
+      // Pack Size: Master Assortment is the primary source; fall back to DATA_SPACEMAN's
+      // UNITS_CASE column when Master Assortment doesn't have this barcode (or its Pack
+      // Size cell is blank) — same fallback the Minor Report wizard already uses.
+      const packSizeVal = (bEntry.master?.skuPack || "").trim() || (bEntry.sm?.unitsCase || "").trim();
+      if (packSizeVal) sn(PACKSIZE_COL, packSizeVal);
 
       ss(STATUS_COL, rowStatus);
 
