@@ -59,6 +59,7 @@ export interface SpacemanRowMeta {
   totalUnits: string;  // TOTAL_UNITS column from DATA_SPACEMAN
   salepack?: string;                 // SALEPACK column — used by Minor Report
   purchaseItemForSalepack?: string;  // PURCHASE_ITEM_FOR_SALEPACK column — used by Minor Report
+  unitsCase?: string;                 // UNITS_CASE column — fallback for PACK SIZE when 100 ช่อง doesn't have it
   // Every DISTINCT PLANOGRAM (col D) value seen across all of this UPC's rows in
   // QRY_Product_by_POG — confirmed with the user that one barcode can legitimately sell
   // on multiple planograms at once, so this must be the full set, not just one row's value.

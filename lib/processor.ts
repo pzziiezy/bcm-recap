@@ -353,6 +353,7 @@ export async function parsePlanogramLookup(
   let subcatCol = -1, categoryCol = -1, upcCol = -1, descACol = -1, descBCol = -1, descCCol = -1, totalUnitsCol = -1;
   let salepackCol = -1, purchaseItemCol = -1; // Minor Report — SALEPACK / RECIPE
   let planogramCol = -1;
+  let unitsCaseCol = -1; // Minor Report — PACK SIZE fallback when 100 ช่อง doesn't have it
   for (let c = 0; c <= lastCol; c++) {
     const h = headerRow[c] ?? "";
     if (h === "SUBCATEGORY") subcatCol = c;
@@ -365,6 +366,7 @@ export async function parsePlanogramLookup(
     else if (h === "SALEPACK") salepackCol = c;
     else if (h === "PURCHASE_ITEM_FOR_SALEPACK") purchaseItemCol = c;
     else if (h === "PLANOGRAM") planogramCol = c;
+    else if (h === "UNITS_CASE") unitsCaseCol = c;
   }
   if (subcatCol < 0) return empty;
 
@@ -420,7 +422,8 @@ export async function parsePlanogramLookup(
         const totalUnits = totalUnitsCol >= 0 ? cell(r, totalUnitsCol) : "";
         const salepack   = salepackCol     >= 0 ? cell(r, salepackCol)     : "";
         const purchaseItemForSalepack = purchaseItemCol >= 0 ? cell(r, purchaseItemCol) : "";
-        byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits, salepack, purchaseItemForSalepack });
+        const unitsCase  = unitsCaseCol    >= 0 ? cell(r, unitsCaseCol)    : "";
+        byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits, salepack, purchaseItemForSalepack, unitsCase });
         if (category) catSet.add(category);
         if (subcat)   subSet.add(subcat);
         if (descC)    descSet.add(descC);

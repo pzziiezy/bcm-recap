@@ -158,7 +158,9 @@ export function buildMinorReportSheets(input: MinorReportInput): MinorReportShee
           name: item.name,
           salepack: spaceman?.salepack ?? "",
           recipe: spaceman?.purchaseItemForSalepack ?? "",
-          packSize: packInfo?.packSize ?? "",
+          // 100 ช่อง is the primary PACK SIZE source; when it doesn't have this barcode
+          // at all, fall back to DATA_SPACEMAN's UNITS_CASE column.
+          packSize: packInfo?.packSize || spaceman?.unitsCase || "",
           totalUnits: spaceman?.totalUnits ?? "",
           purShelfStockPiece: resolvedPiece,
           pctOrdering: enrichment.colO,
