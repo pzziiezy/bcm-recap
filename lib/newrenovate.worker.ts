@@ -15,6 +15,7 @@
 import * as XLSX from "xlsx";
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
 import type { ExceptionConfig } from "./types";
+import { readSheetGridFromBuffer } from "./processor";
 
 const ctx = self as unknown as {
   postMessage(msg: unknown, transfer?: Transferable[]): void;
@@ -428,18 +429,16 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // ── 2. DATA_SPACEMAN → map by UPC matchKey ───────────────────────────────
     progress(14, "อ่านไฟล์ DATA_SPACEMAN...");
 
-    const spacemanWb = XLSX.read(new Uint8Array(spacemanBuf), {
-      type: "array", cellText: true, cellHTML: false, cellNF: false, cellDates: false,
-    });
-    const spacemanWs = spacemanWb.Sheets["QRY_Product_by_POG"];
-    if (!spacemanWs) throw new Error('ไม่พบ sheet "QRY_Product_by_POG" ใน DATA_SPACEMAN');
+    // readSheetGridFromBuffer tries SheetJS first (unchanged fast path for typical
+    // files), then falls back to reading the raw ZIP/XML directly — confirmed against a
+    // real 80,000+-row DATA_SPACEMAN file where SheetJS's XLSX.read() silently left the
+    // sheet undefined even though it genuinely exists under the exact expected name
+    // (same failure already worked around for Master Assortment below).
+    const spacemanGrid = readSheetGridFromBuffer(spacemanBuf, "QRY_Product_by_POG");
+    if (!spacemanGrid || spacemanGrid.length === 0) throw new Error('ไม่พบ sheet "QRY_Product_by_POG" ใน DATA_SPACEMAN');
 
-    const sRange = XLSX.utils.decode_range(spacemanWs["!ref"] || "A1");
-    const sHdrs: string[] = [];
-    for (let c = 0; c <= sRange.e.c; c++) {
-      const cell = spacemanWs[XLSX.utils.encode_cell({ r: 0, c })];
-      sHdrs.push(cell?.v != null ? String(cell.v).replace(/\s+/g, "").toUpperCase() : "");
-    }
+    const sHeaderRow = spacemanGrid[0] ?? [];
+    const sHdrs: string[] = sHeaderRow.map(h => (h ?? "").replace(/\s+/g, "").toUpperCase());
     // Case-insensitive + whitespace-stripped exact match
     const sIdx = (name: string) => sHdrs.indexOf(name.replace(/\s+/g, "").toUpperCase());
     const upcIdx   = sIdx("UPC");
@@ -454,16 +453,15 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const descCIdx = sIdx("DESC_C");
     progress(14, `DATA_SPACEMAN headers: UPC=${upcIdx} PF02=${pf02Idx} PF04=${pf04Idx} PF05=${pf05Idx}`);
 
-    const getS = (r: number, c: number, useW = false): string => {
-      const cell = spacemanWs[XLSX.utils.encode_cell({ r, c })];
-      if (!cell) return "";
-      if (useW && cell.w != null) return String(cell.w).replace(/,/g, "").trim();
-      return cell.v != null ? String(cell.v).trim() : "";
-    };
+    // No separate cell.w (formatted display) once read via the grid — harmless here:
+    // barcodeMatchKey() strips leading zeros from whichever value it's given anyway, so
+    // the match key converges to the same result regardless of source.
+    const getS = (r: number, c: number): string => (spacemanGrid[r]?.[c] ?? "").trim();
 
+    const totalSRows = spacemanGrid.length - 1;
     const spacemanMap = new Map<string, SpacemanEntry>(); // key = barcodeMatchKey
-    for (let r = 1; r <= sRange.e.r; r++) {
-      const rawUpc = upcIdx >= 0 ? normalizeBarcode(getS(r, upcIdx), getS(r, upcIdx, true)) : "";
+    for (let r = 1; r < spacemanGrid.length; r++) {
+      const rawUpc = upcIdx >= 0 ? normalizeBarcode(getS(r, upcIdx)) : "";
       const key    = barcodeMatchKey(rawUpc);
       if (!key) continue;
       if (!spacemanMap.has(key)) {
@@ -480,7 +478,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
         });
       }
       if (r % 10000 === 0)
-        progress(14 + Math.floor((r / sRange.e.r) * 18), `DATA_SPACEMAN: ${r.toLocaleString()} rows...`);
+        progress(14 + Math.floor((r / totalSRows) * 18), `DATA_SPACEMAN: ${r.toLocaleString()} rows...`);
     }
     progress(32, `DATA_SPACEMAN: ${spacemanMap.size.toLocaleString()} barcodes`);
 
