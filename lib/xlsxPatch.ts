@@ -372,6 +372,24 @@ export function parseSheetGrid(sheetXml: string, sstStrings: string[]): string[]
 }
 
 /**
+ * Same idea as parseSheetGrid(), but keyed by cell reference ("T13" → "21002") instead
+ * of a dense [row][col] array — for sheets too WIDE/sparse to materialize densely
+ * without wasting a lot of memory on empty cells (FILE_INDEX has ~1,900 mostly-empty
+ * store columns per POG row). This mirrors SheetJS's own sparse worksheet shape, so
+ * existing Object.keys(ws)-style scanning code can consume it with no changes at all.
+ */
+export function parseSheetSparse(sheetXml: string, sstStrings: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  const cellRe = /<c r="([A-Z]+\d+)"([^>]*)>([\s\S]*?)<\/c>/g;
+  let cm: RegExpExecArray | null;
+  while ((cm = cellRe.exec(sheetXml)) !== null) {
+    const text = readCellText(cm[2], cm[3], sstStrings);
+    if (text !== null) out[cm[1]] = text;
+  }
+  return out;
+}
+
+/**
  * Find the Excel row number (1-based) that contains a cell matching `markerText`
  * (case-insensitive, trimmed) — used to auto-detect a template's header row instead of
  * hardcoding an assumed row count. Counting legend/filler rows from a screenshot has

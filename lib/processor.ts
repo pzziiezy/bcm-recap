@@ -13,7 +13,7 @@ import type {
   IndexLookup,
 } from "./types";
 import type { FillCell, FillRow } from "./download";
-import { normalizeHeaderText, findSheetPath, parseSST, parseSheetGrid } from "./xlsxPatch";
+import { normalizeHeaderText, findSheetPath, parseSST, parseSheetGrid, parseSheetSparse } from "./xlsxPatch";
 import { unzipSync, strFromU8 } from "fflate";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -77,6 +77,48 @@ export function readSheetGridFromBuffer(buf: ArrayBuffer, sheetName: string): st
     const sstStrings = zip[sstPath] ? parseSST(strFromU8(zip[sstPath])) : [];
     const grid = parseSheetGrid(sheetXml, sstStrings);
     return grid.length > 0 ? grid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Same fallback idea as readSheetGridFromBuffer(), but for sheets too WIDE/sparse to
+ * materialize as a dense grid economically — FILE_INDEX has ~1,900 mostly-empty store
+ * columns per POG row, so a dense read would multiply memory use for no reason. Builds
+ * a minimal object shaped exactly like a SheetJS worksheet (cellRef → {v}, plus "!ref"),
+ * so it's a drop-in replacement wherever code already does ws[ref]/ws["!ref"]/cellVal(ws,
+ * r, c) against a real SheetJS sheet — no downstream code needs to change.
+ */
+export function sparseWorksheetFromZip(buf: ArrayBuffer, sheetName: string): XLSX.WorkSheet | null {
+  try {
+    const zip = unzipSync(new Uint8Array(buf));
+    const wbXml = zip["xl/workbook.xml"] ? strFromU8(zip["xl/workbook.xml"]) : "";
+    const relsXml = zip["xl/_rels/workbook.xml.rels"] ? strFromU8(zip["xl/_rels/workbook.xml.rels"]) : "";
+    if (!wbXml) return null;
+    const sheetPath = findSheetPath(wbXml, relsXml, sheetName);
+    if (!sheetPath || !zip[sheetPath]) return null;
+    const sheetXml = strFromU8(zip[sheetPath]);
+    const sstPath = "xl/sharedStrings.xml";
+    const sstStrings = zip[sstPath] ? parseSST(strFromU8(zip[sstPath])) : [];
+    const sparse = parseSheetSparse(sheetXml, sstStrings);
+    const refs = Object.keys(sparse);
+    if (refs.length === 0) return null;
+
+    const ws: XLSX.WorkSheet = {};
+    let maxR = 0, maxC = 0;
+    const refRe = /^([A-Z]+)(\d+)$/;
+    for (const ref of refs) {
+      ws[ref] = { v: sparse[ref] } as XLSX.CellObject;
+      const m = refRe.exec(ref);
+      if (!m) continue;
+      const c = colLetterToIdx(m[1]);
+      const r = parseInt(m[2], 10) - 1;
+      if (r > maxR) maxR = r;
+      if (c > maxC) maxC = c;
+    }
+    ws["!ref"] = `A1:${colLetter(maxC)}${maxR + 1}`;
+    return ws;
   } catch {
     return null;
   }
@@ -889,14 +931,21 @@ function findLabelCell(
 export async function parseFileIndex(file: File): Promise<IndexLookup> {
   const empty: IndexLookup = { pogToByCode: new Map(), pogToStores: new Map(), storeList: [] };
   const buf = await file.arrayBuffer();
-  let wb: XLSX.WorkBook;
-  try {
-    wb = XLSX.read(buf, { type: "array", cellFormula: false, cellStyles: false });
-  } catch {
-    return empty;
-  }
 
-  const ws = wb.Sheets["INDX_BCM"];
+  // SheetJS handles the common case; if it can't find the sheet at all — confirmed as
+  // the same class of failure already fixed for DATA_SPACEMAN: XLSX.read() can silently
+  // leave wb.Sheets[name] undefined for very large/wide sheets even though the sheet
+  // genuinely exists under the exact expected name, and this file can have ~1,900 store
+  // columns — fall back to a sparse ZIP/XML read instead of a dense one (a dense grid
+  // here would multiply memory use for almost entirely empty cells).
+  let ws: XLSX.WorkSheet | null = null;
+  try {
+    const wb = XLSX.read(buf, { type: "array", cellFormula: false, cellStyles: false });
+    ws = findWbSheet(wb, "INDX_BCM");
+  } catch {
+    // fall through to the sparse ZIP fallback below
+  }
+  if (!ws || !ws["!ref"]) ws = sparseWorksheetFromZip(buf, "INDX_BCM");
   if (!ws || !ws["!ref"]) return empty;
 
   // Header cells all live within the sheet's first ~30 rows / ~100 columns — bounding the
