@@ -3,7 +3,9 @@
  *
  * Data flow (QRY-driven):
  *   QRY_Product_by_POG_by_Position  ← primary source of rows
- *     │  BARCODE → DATA_SPACEMAN    → DIVISION(PF01|PF02) / PF03 / PF04 / PLANOGRAM
+ *     │  BARCODE   → DATA_SPACEMAN  → DIVISION(DESC_A) / DEPARTMENT(DESC_B)
+ *     │  PLANOGRAM → DATA_SPACEMAN  → POG CATE(PLANOFOLDER05) — keyed by planogram name, not
+ *     │                                barcode, since one barcode can sell on several planograms
  *     │  BARCODE → Master Assortment→ SALE PACK CODE / Pack Size / Extra info / Status / Store / Name
  *     │  PLANOGRAM + SEGMENT → Fixture Index → New Fixture (Code Fixture)
  *     │  PLANOGRAM → INDEX   → Status(fallback) / Store(fallback) / PLANOGRAM NAME
@@ -36,13 +38,13 @@ type InMsg = {
 
 interface SpacemanEntry {
   planofolder01: string;
-  planofolder02: string;
   planofolder03: string;
   planofolder04: string;
-  planofolder05: string;
   planogram:     string;
   category:      string;
   subcategory:   string;
+  descA:         string; // DIVISION source (by barcode)
+  descB:         string; // DEPARTMENT source (by barcode)
   descC:         string;
 }
 
@@ -443,15 +445,16 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     const sIdx = (name: string) => sHdrs.indexOf(name.replace(/\s+/g, "").toUpperCase());
     const upcIdx   = sIdx("UPC");
     const pf01Idx  = sIdx("PLANOFOLDER01");
-    const pf02Idx  = sIdx("PLANOFOLDER02");
     const pf03Idx  = sIdx("PLANOFOLDER03");
     const pf04Idx  = sIdx("PLANOFOLDER04");
     const pf05Idx  = sIdx("PLANOFOLDER05");
     const plogIdx  = sIdx("PLANOGRAM") >= 0 ? sIdx("PLANOGRAM") : 3;
     const catIdx   = sIdx("CATEGORY");
     const subIdx   = sIdx("SUBCATEGORY");
+    const descAIdx = sIdx("DESC_A");
+    const descBIdx = sIdx("DESC_B");
     const descCIdx = sIdx("DESC_C");
-    progress(14, `DATA_SPACEMAN headers: UPC=${upcIdx} PF02=${pf02Idx} PF04=${pf04Idx} PF05=${pf05Idx}`);
+    progress(14, `DATA_SPACEMAN headers: UPC=${upcIdx} DESC_A=${descAIdx} DESC_B=${descBIdx} PF05=${pf05Idx}`);
 
     // No separate cell.w (formatted display) once read via the grid — harmless here:
     // barcodeMatchKey() strips leading zeros from whichever value it's given anyway, so
@@ -460,27 +463,39 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     const totalSRows = spacemanGrid.length - 1;
     const spacemanMap = new Map<string, SpacemanEntry>(); // key = barcodeMatchKey
+    // POG CATE (PLANOFOLDER05) is a property of the PLANOGRAM itself, not of one barcode —
+    // the same barcode can sell on several planograms with different POG CATE values, so this
+    // must be keyed by planogram name (scanning every row) rather than folded into
+    // spacemanMap's one-row-per-barcode shape above.
+    const planogramToCate = new Map<string, string>(); // key = normalizeKey(planogram)
     for (let r = 1; r < spacemanGrid.length; r++) {
       const rawUpc = upcIdx >= 0 ? normalizeBarcode(getS(r, upcIdx)) : "";
       const key    = barcodeMatchKey(rawUpc);
+
+      const plogName = getS(r, plogIdx);
+      if (plogName && pf05Idx >= 0) {
+        const plogKey = normalizeKey(plogName);
+        if (!planogramToCate.has(plogKey)) planogramToCate.set(plogKey, getS(r, pf05Idx));
+      }
+
       if (!key) continue;
       if (!spacemanMap.has(key)) {
         spacemanMap.set(key, {
           planofolder01: pf01Idx >= 0 ? getS(r, pf01Idx) : "",
-          planofolder02: pf02Idx >= 0 ? getS(r, pf02Idx) : "",
           planofolder03: pf03Idx >= 0 ? getS(r, pf03Idx) : "",
           planofolder04: pf04Idx >= 0 ? getS(r, pf04Idx) : "",
-          planofolder05: pf05Idx >= 0 ? getS(r, pf05Idx) : "",
-          planogram:     getS(r, plogIdx),
+          planogram:     plogName,
           category:      catIdx   >= 0 ? getS(r, catIdx)   : "",
           subcategory:   subIdx   >= 0 ? getS(r, subIdx)   : "",
+          descA:         descAIdx >= 0 ? getS(r, descAIdx) : "",
+          descB:         descBIdx >= 0 ? getS(r, descBIdx) : "",
           descC:         descCIdx >= 0 ? getS(r, descCIdx) : "",
         });
       }
       if (r % 10000 === 0)
         progress(14 + Math.floor((r / totalSRows) * 18), `DATA_SPACEMAN: ${r.toLocaleString()} rows...`);
     }
-    progress(32, `DATA_SPACEMAN: ${spacemanMap.size.toLocaleString()} barcodes`);
+    progress(32, `DATA_SPACEMAN: ${spacemanMap.size.toLocaleString()} barcodes, ${planogramToCate.size.toLocaleString()} planograms`);
 
     // ── 3. Master Assortment → map by BARCODE matchKey ───────────────────────
     progress(34, "อ่านไฟล์ Master Assortment Orderable...");
@@ -1167,7 +1182,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       const fixtureKey  = qry.segment && planogram ? `${qry.segment}|${planogram}` : "";
       const fixtureCode = fixtureKey ? (fixtureMap.get(fixtureKey) ?? "") : "";
       const productName = qry.name || master?.name || "";
-      const divisionVal = sm?.planofolder02 || "";
+      const divisionVal = sm?.descA || "";
 
       if (sm)          matchedSpaceman++;
       if (master)      matchedMaster++;
@@ -1245,8 +1260,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       cols1.set(BARCODE_COL, { t: "s", v: bEntry.barcode });
       ss(NAME_COL,      bEntry.productName);
       ss(DIVISION_COL,  bEntry.divisionVal);
-      ss(PF03_COL,      bEntry.sm?.planofolder04 ?? "");
-      ss(PF04_COL,      bEntry.sm?.planofolder05 ?? "");
+      ss(PF03_COL,      bEntry.sm?.descB ?? "");
+      ss(PF04_COL,      planogramToCate.get(normalizeKey(bEntry.qry.planogram)) ?? "");
       // PLANOGRAM NAME = QRY planogram name (from Group B's row), per requirement
       ss(PLOGNAME_COL,  bEntry.qry.planogram);
 
@@ -1314,9 +1329,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
           ss2(BARCODE2_COL, bEntry.barcode);
           ss2(DIV2_COL,     bEntry.divisionVal);
           ss2(NAME2_COL,    bEntry.productName);
-          ss2(POG04_2_COL,  bEntry.sm?.planofolder05 ?? "");
-          ss2(POG03_2_COL,  bEntry.sm?.planofolder05 ?? "");
-          ss2(DEPT2_COL,    bEntry.sm?.planofolder04 ?? "");
+          ss2(POG04_2_COL,  planogramToCate.get(normalizeKey(bEntry.qry.planogram)) ?? "");
+          ss2(POG03_2_COL,  planogramToCate.get(normalizeKey(bEntry.qry.planogram)) ?? "");
+          ss2(DEPT2_COL,    bEntry.sm?.descB ?? "");
           ss2(STATUS2_COL,  rowStatus);
           ss2(SALEPACK2_COL, bEntry.master?.barSingle || bEntry.master?.barIngredient || "");
           ss2(ATTCLASS2_COL, "MBC1");
@@ -1352,9 +1367,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
         const cols3 = new Map<number, CellPatch>();
         const ss3 = (col: number, v: string) => { if (v) cols3.set(col, { t: "s", v }); };
-        ss3(DIV3_COL,     aEntry.sm?.planofolder02 || "");
-        ss3(DEPT3_COL,    aEntry.sm?.planofolder04 || "");
-        ss3(POG3_COL,     aEntry.sm?.planofolder05 || "");
+        ss3(DIV3_COL,     aEntry.divisionVal);
+        ss3(DEPT3_COL,    aEntry.sm?.descB || "");
+        ss3(POG3_COL,     planogramToCate.get(normalizeKey(aEntry.qry.planogram)) || "");
         ss3(BARCODE3_COL, aEntry.barcode);
         ss3(NAME3_COL,    aEntry.productName);
         ss3(STATUS3_COL,  "DELETE");

@@ -206,28 +206,39 @@ describe("sheet routing — each store goes to the correct sheet", () => {
 describe("planofolder mapping — Sheet 1 column data sources", () => {
   const sm = {
     planofolder01: "PF01_val",
-    planofolder02: "PF02_val",
     planofolder03: "PF03_val",
     planofolder04: "PF04_val",
-    planofolder05: "PF05_val",
+    descA: "DESC_A_val",
+    descB: "DESC_B_val",
   };
 
-  it("DIVISION uses planofolder02 (not planofolder01)", () => {
-    const divisionVal = sm.planofolder02;
-    expect(divisionVal).toBe("PF02_val");
-    expect(divisionVal).not.toBe(sm.planofolder01);
+  it("DIVISION uses DESC_A (not a PLANOFOLDER column)", () => {
+    const divisionVal = sm.descA || "";
+    expect(divisionVal).toBe("DESC_A_val");
   });
 
-  it("DEPARTMENT column (PF03_COL) uses planofolder04 (not planofolder03)", () => {
-    const deptVal = sm.planofolder04;
-    expect(deptVal).toBe("PF04_val");
-    expect(deptVal).not.toBe(sm.planofolder03);
+  it("DEPARTMENT column (PF03_COL) uses DESC_B (not planofolder04)", () => {
+    const deptVal = sm.descB ?? "";
+    expect(deptVal).toBe("DESC_B_val");
+    expect(deptVal).not.toBe(sm.planofolder04);
   });
 
-  it("POG CATE column (PF04_COL) uses planofolder05 (not planofolder04)", () => {
-    const pogVal = sm.planofolder05;
-    expect(pogVal).toBe("PF05_val");
-    expect(pogVal).not.toBe(sm.planofolder04);
+  it("POG CATE is keyed by planogram name, not by barcode — same barcode on two planograms can get two different POG CATE values", () => {
+    const planogramToCate = new Map<string, string>([
+      ["POG A", "CATE_A"],
+      ["POG B", "CATE_B"],
+    ]);
+    const pogCateForRowOnPogA = planogramToCate.get("POG A") ?? "";
+    const pogCateForRowOnPogB = planogramToCate.get("POG B") ?? "";
+    expect(pogCateForRowOnPogA).toBe("CATE_A");
+    expect(pogCateForRowOnPogB).toBe("CATE_B");
+    expect(pogCateForRowOnPogA).not.toBe(pogCateForRowOnPogB);
+  });
+
+  it("POG CATE falls back to blank (not row exclusion) when the planogram isn't in DATA_SPACEMAN", () => {
+    const planogramToCate = new Map<string, string>([["POG A", "CATE_A"]]);
+    const pogCateForUnknownPog = planogramToCate.get("POG UNKNOWN") ?? "";
+    expect(pogCateForUnknownPog).toBe("");
   });
 });
 
