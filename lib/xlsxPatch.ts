@@ -97,10 +97,20 @@ export function findSheetPath(wbXml: string, relsXml: string, name: string): str
   const xmlName = encodeXml(name).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   // Step 1: find the <sheet> element with this name (attribute-order independent)
-  const sheetMatch = new RegExp(
+  let sheetMatch = new RegExp(
     `<sheet\\b[^>]*name="${xmlName}"[^>]*/?>`,
     "i"
   ).exec(wbXml);
+
+  // Fallback: normalized match ("_" vs " ", case, trim) across every <sheet> element —
+  // same class of cosmetic mismatch already handled for header text.
+  if (!sheetMatch) {
+    const target = normalizeHeaderText(name);
+    const allSheets = wbXml.matchAll(/<sheet\b[^>]*name="([^"]*)"[^>]*\/?>/gi);
+    for (const sm of allSheets) {
+      if (normalizeHeaderText(decodeXml(sm[1])) === target) { sheetMatch = sm as RegExpExecArray; break; }
+    }
+  }
   if (!sheetMatch) return null;
 
   // Step 2: extract r:id from the matched element (regardless of attribute order)
@@ -329,6 +339,36 @@ function readCellText(attrs: string, inner: string, sstStrings: string[]): strin
   if (!vMatch) return null;
   const raw = decodeXml(vMatch[1]);
   return /\bt="s"/.test(attrs) ? (sstStrings[+raw] ?? "") : raw;
+}
+
+/**
+ * Parses an entire sheet's XML directly into a plain 0-indexed grid (row → column →
+ * text), bypassing SheetJS entirely. Confirmed with a real DATA_SPACEMAN file (80,000+
+ * rows): SheetJS's XLSX.read() can silently fail to populate wb.Sheets[name] for very
+ * large sheets, even though the sheet genuinely exists with the exact expected name —
+ * this is the same class of failure already worked around for Master Assortment in
+ * lib/newrenovate.worker.ts. Use this as the fallback once `wb.Sheets[name]` comes back
+ * undefined for a sheet you can otherwise confirm exists (e.g. via findSheetPath).
+ *
+ * Self-closing cells (`<c .../>`, always empty — no `<v>`) are skipped, same as every
+ * other cell reader in this file; a row with gaps keeps those indices as "".
+ */
+export function parseSheetGrid(sheetXml: string, sstStrings: string[]): string[][] {
+  const grid: string[][] = [];
+  const rowRe = /<row r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
+  const cellRe = /<c r="([A-Z]+)\d+"([^>]*)>([\s\S]*?)<\/c>/g;
+  let rm: RegExpExecArray | null;
+  while ((rm = rowRe.exec(sheetXml)) !== null) {
+    const rowNum = +rm[1];
+    const row: string[] = [];
+    cellRe.lastIndex = 0;
+    let cm: RegExpExecArray | null;
+    while ((cm = cellRe.exec(rm[2])) !== null) {
+      row[colLetterIdx(cm[1])] = readCellText(cm[2], cm[3], sstStrings) ?? "";
+    }
+    grid[rowNum - 1] = row;
+  }
+  return grid;
 }
 
 /**

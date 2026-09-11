@@ -13,7 +13,8 @@ import type {
   IndexLookup,
 } from "./types";
 import type { FillCell, FillRow } from "./download";
-import { normalizeHeaderText } from "./xlsxPatch";
+import { normalizeHeaderText, findSheetPath, parseSST, parseSheetGrid } from "./xlsxPatch";
+import { unzipSync, strFromU8 } from "fflate";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -36,6 +37,49 @@ export function resolveSheetName(wb: XLSX.WorkBook, name: string): string {
   if (wb.Sheets[name]) return name;
   const target = normalizeHeaderText(name);
   return wb.SheetNames.find(n => normalizeHeaderText(n) === target) ?? name;
+}
+
+/**
+ * Reads one sheet as a plain grid (row → column → text), headers included as row 0.
+ * SheetJS handles the common case; if it can't find the sheet at all (confirmed against
+ * a real 80,000+-row DATA_SPACEMAN file: XLSX.read() can silently leave wb.Sheets[name]
+ * undefined for very large sheets even though the sheet genuinely exists under the exact
+ * expected name — the same failure already worked around for Master Assortment in
+ * lib/newrenovate.worker.ts), this falls back to reading the raw ZIP/XML directly.
+ */
+export function readSheetGridFromBuffer(buf: ArrayBuffer, sheetName: string): string[][] | null {
+  try {
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = findWbSheet(wb, sheetName);
+    if (ws) {
+      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+      const grid: string[][] = [];
+      for (let r = 0; r <= range.e.r; r++) {
+        const row: string[] = [];
+        for (let c = 0; c <= range.e.c; c++) row[c] = cellVal(ws, r, c);
+        grid[r] = row;
+      }
+      return grid;
+    }
+  } catch {
+    // fall through to the ZIP fallback below
+  }
+
+  try {
+    const zip = unzipSync(new Uint8Array(buf));
+    const wbXml = zip["xl/workbook.xml"] ? strFromU8(zip["xl/workbook.xml"]) : "";
+    const relsXml = zip["xl/_rels/workbook.xml.rels"] ? strFromU8(zip["xl/_rels/workbook.xml.rels"]) : "";
+    if (!wbXml) return null;
+    const sheetPath = findSheetPath(wbXml, relsXml, sheetName);
+    if (!sheetPath || !zip[sheetPath]) return null;
+    const sheetXml = strFromU8(zip[sheetPath]);
+    const sstPath = "xl/sharedStrings.xml";
+    const sstStrings = zip[sstPath] ? parseSST(strFromU8(zip[sstPath])) : [];
+    const grid = parseSheetGrid(sheetXml, sstStrings);
+    return grid.length > 0 ? grid : null;
+  } catch {
+    return null;
+  }
 }
 
 function cellVal(ws: XLSX.WorkSheet, r: number, c: number): string {
@@ -251,26 +295,24 @@ export async function parsePlanogramLookup(
 
   const buf = await file.arrayBuffer();
   onProgress?.(20);
-
-  let wb: XLSX.WorkBook;
-  try {
-    wb = XLSX.read(buf, { type: "array" });
-  } catch {
-    return empty;
-  }
+  const grid = readSheetGridFromBuffer(buf, "QRY_Product_by_POG");
   onProgress?.(60);
+  if (!grid || grid.length === 0) return empty;
 
-  const ws = findWbSheet(wb, "QRY_Product_by_POG");
-  if (!ws) return empty;
-
-  const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+  // Same ".0"-stripping cellVal() does — the ZIP fallback path doesn't already apply it.
+  const cell = (r: number, c: number): string => {
+    const s = grid[r]?.[c] ?? "";
+    return s.includes(".") && !isNaN(Number(s)) ? s.split(".")[0] : s;
+  };
+  const headerRow = grid[0] ?? [];
+  const lastCol = headerRow.length - 1;
 
   // Locate columns by header name
   let subcatCol = -1, categoryCol = -1, upcCol = -1, descACol = -1, descBCol = -1, descCCol = -1, totalUnitsCol = -1;
   let salepackCol = -1, purchaseItemCol = -1; // Minor Report — SALEPACK / RECIPE
   let planogramCol = -1;
-  for (let c = 0; c <= range.e.c; c++) {
-    const h = cellVal(ws, 0, c);
+  for (let c = 0; c <= lastCol; c++) {
+    const h = headerRow[c] ?? "";
     if (h === "SUBCATEGORY") subcatCol = c;
     else if (h === "CATEGORY") categoryCol = c;
     else if (h === "UPC") upcCol = c;
@@ -305,14 +347,14 @@ export async function parsePlanogramLookup(
   // expected to be identical across a UPC's rows anyway.
   const planogramsByUpc = new Map<string, Set<string>>();
 
-  for (let r = 1; r <= range.e.r; r++) {
-    const subcat = cellVal(ws, r, subcatCol);
+  for (let r = 1; r < grid.length; r++) {
+    const subcat = cell(r, subcatCol);
     if (!subcat) continue;
 
     const prefix = subcat.slice(0, 6);
     if (!/^\d{6}$/.test(prefix)) continue;
 
-    const plog = planogramCol >= 0 ? cellVal(ws, r, planogramCol) : "";
+    const plog = planogramCol >= 0 ? cell(r, planogramCol) : "";
     if (plog) {
       if (!freqPlog.has(prefix)) freqPlog.set(prefix, new Map());
       const m = freqPlog.get(prefix)!;
@@ -321,7 +363,7 @@ export async function parsePlanogramLookup(
 
     // Build UPC-level meta for config matching + TOTAL_UNITS lookup
     if (upcCol >= 0) {
-      const upc = normalizeBarcode(cellVal(ws, r, upcCol));
+      const upc = normalizeBarcode(cell(r, upcCol));
 
       if (upc && plog) {
         if (!planogramsByUpc.has(upc)) planogramsByUpc.set(upc, new Set());
@@ -329,13 +371,13 @@ export async function parsePlanogramLookup(
       }
 
       if (upc && !byUpc.has(upc)) {
-        const category   = categoryCol   >= 0 ? cellVal(ws, r, categoryCol)   : "";
-        const descA      = descACol      >= 0 ? cellVal(ws, r, descACol)      : "";
-        const descB      = descBCol      >= 0 ? cellVal(ws, r, descBCol)      : "";
-        const descC      = descCCol      >= 0 ? cellVal(ws, r, descCCol)      : "";
-        const totalUnits = totalUnitsCol >= 0 ? cellVal(ws, r, totalUnitsCol) : "";
-        const salepack   = salepackCol     >= 0 ? cellVal(ws, r, salepackCol)     : "";
-        const purchaseItemForSalepack = purchaseItemCol >= 0 ? cellVal(ws, r, purchaseItemCol) : "";
+        const category   = categoryCol   >= 0 ? cell(r, categoryCol)   : "";
+        const descA      = descACol      >= 0 ? cell(r, descACol)      : "";
+        const descB      = descBCol      >= 0 ? cell(r, descBCol)      : "";
+        const descC      = descCCol      >= 0 ? cell(r, descCCol)      : "";
+        const totalUnits = totalUnitsCol >= 0 ? cell(r, totalUnitsCol) : "";
+        const salepack   = salepackCol     >= 0 ? cell(r, salepackCol)     : "";
+        const purchaseItemForSalepack = purchaseItemCol >= 0 ? cell(r, purchaseItemCol) : "";
         byUpc.set(upc, { category, subcategory: subcat, descA, descB, descC, totalUnits, salepack, purchaseItemForSalepack });
         if (category) catSet.add(category);
         if (subcat)   subSet.add(subcat);

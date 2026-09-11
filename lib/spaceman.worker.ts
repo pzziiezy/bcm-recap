@@ -1,18 +1,4 @@
-import * as XLSX from "xlsx";
-import { normalizeHeaderText } from "./xlsxPatch";
-
-/**
- * Find a worksheet by name — exact match first, then a normalized fallback (trim +
- * case-insensitive + "_" and " " treated as the same character). A real DATA_SPACEMAN
- * upload has already been seen with its tab named "QRY_Product by POG" (spaces) instead
- * of "QRY_Product_by_POG" (underscores) — same class of mismatch as header text.
- */
-function findWbSheet(wb: XLSX.WorkBook, name: string): XLSX.WorkSheet | null {
-  if (wb.Sheets[name]) return wb.Sheets[name];
-  const target = normalizeHeaderText(name);
-  const actual = wb.SheetNames.find(n => normalizeHeaderText(n) === target);
-  return actual ? wb.Sheets[actual] : null;
-}
+import { readSheetGridFromBuffer } from "./processor";
 
 type InMsg =
   | { type: "parse"; buffer: ArrayBuffer }
@@ -56,30 +42,25 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     allRows = [];
     self.postMessage({ type: "progress", pct: 5 });
 
-    // Memory-optimised read: skip computed cell properties we don't need
-    const wb = XLSX.read(buffer, {
-      type: "array",
-      cellText: false,
-      cellHTML: false,
-      cellNF: false,
-      cellDates: false,
-    });
-
-    self.postMessage({ type: "progress", pct: 20 });
-
-    const ws = findWbSheet(wb, "QRY_Product_by_POG");
-    if (!ws) {
+    // readSheetGridFromBuffer tries SheetJS first (fast path for typical files), then
+    // falls back to reading the raw ZIP/XML directly — confirmed against a real
+    // 80,000+-row DATA_SPACEMAN file where SheetJS's XLSX.read() silently left the sheet
+    // undefined even though it genuinely exists under the exact expected name (same
+    // failure already worked around for Master Assortment in newrenovate.worker.ts).
+    const grid = readSheetGridFromBuffer(buffer, "QRY_Product_by_POG");
+    if (!grid || grid.length === 0) {
       self.postMessage({ type: "error", message: 'ไม่พบ Sheet "QRY_Product_by_POG" ในไฟล์' });
       return;
     }
 
-    const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+    self.postMessage({ type: "progress", pct: 20 });
 
-    // Extract headers
+    const headerRow = grid[0] ?? [];
+    const colCount = headerRow.length;
     const headers: string[] = [];
-    for (let c = 0; c <= range.e.c; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r: 0, c })];
-      headers.push(cell?.v != null ? String(cell.v).trim() : `คอลัมน์ ${c + 1}`);
+    for (let c = 0; c < colCount; c++) {
+      const h = headerRow[c];
+      headers.push(h ? h.trim() : `คอลัมน์ ${c + 1}`);
     }
 
     // Column indices for unique-value extraction (computed in worker to avoid
@@ -92,9 +73,8 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     self.postMessage({ type: "progress", pct: 25 });
 
-    const totalRowsInSheet = range.e.r;
+    const totalRowsInSheet = grid.length - 1; // excluding the header row
     const rows: Record<string, string>[] = [];
-    const colCount = range.e.c + 1;
 
     const catSet   = new Set<string>();
     const subSet   = new Set<string>();
@@ -110,12 +90,12 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     let totalRows = 0; // actual non-empty rows across the full file
 
-    for (let r = 1; r <= totalRowsInSheet; r++) {
+    for (let r = 1; r < grid.length; r++) {
+      const gridRow = grid[r];
       const row: Record<string, string> = {};
       let hasValue = false;
       for (let c = 0; c < colCount; c++) {
-        const cell = ws[XLSX.utils.encode_cell({ r, c })];
-        const val = cell?.v != null ? String(cell.v) : "";
+        const val = gridRow?.[c] ?? "";
         row[headers[c]] = val;
         if (val) hasValue = true;
       }
