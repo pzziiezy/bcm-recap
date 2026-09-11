@@ -1,4 +1,18 @@
 import * as XLSX from "xlsx";
+import { normalizeHeaderText } from "./xlsxPatch";
+
+/**
+ * Find a worksheet by name — exact match first, then a normalized fallback (trim +
+ * case-insensitive + "_" and " " treated as the same character). A real DATA_SPACEMAN
+ * upload has already been seen with its tab named "QRY_Product by POG" (spaces) instead
+ * of "QRY_Product_by_POG" (underscores) — same class of mismatch as header text.
+ */
+function findWbSheet(wb: XLSX.WorkBook, name: string): XLSX.WorkSheet | null {
+  if (wb.Sheets[name]) return wb.Sheets[name];
+  const target = normalizeHeaderText(name);
+  const actual = wb.SheetNames.find(n => normalizeHeaderText(n) === target);
+  return actual ? wb.Sheets[actual] : null;
+}
 
 type InMsg =
   | { type: "parse"; buffer: ArrayBuffer }
@@ -53,7 +67,7 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
     self.postMessage({ type: "progress", pct: 20 });
 
-    const ws = wb.Sheets["QRY_Product_by_POG"];
+    const ws = findWbSheet(wb, "QRY_Product_by_POG");
     if (!ws) {
       self.postMessage({ type: "error", message: 'ไม่พบ Sheet "QRY_Product_by_POG" ในไฟล์' });
       return;

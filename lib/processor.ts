@@ -13,22 +13,29 @@ import type {
   IndexLookup,
 } from "./types";
 import type { FillCell, FillRow } from "./download";
+import { normalizeHeaderText } from "./xlsxPatch";
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-/** Find a worksheet by name — tries exact match first, then case-insensitive trim. */
+/**
+ * Find a worksheet by name — tries exact match first, then a normalized fallback
+ * (trim + case-insensitive + "_" and " " treated as the same character). A real
+ * DATA_SPACEMAN upload has already been seen with its tab named "QRY_Product by POG"
+ * (spaces) instead of "QRY_Product_by_POG" (underscores) — same class of mismatch as
+ * header text, so it gets the same tolerant matching.
+ */
 function findWbSheet(wb: XLSX.WorkBook, name: string): XLSX.WorkSheet | null {
   if (wb.Sheets[name]) return wb.Sheets[name];
-  const lower = name.trim().toLowerCase();
-  const actual = wb.SheetNames.find(n => n.trim().toLowerCase() === lower);
+  const target = normalizeHeaderText(name);
+  const actual = wb.SheetNames.find(n => normalizeHeaderText(n) === target);
   return actual ? wb.Sheets[actual] : null;
 }
 
 /** Resolve the actual sheet name in wb (for passing to the download worker). */
 export function resolveSheetName(wb: XLSX.WorkBook, name: string): string {
   if (wb.Sheets[name]) return name;
-  const lower = name.trim().toLowerCase();
-  return wb.SheetNames.find(n => n.trim().toLowerCase() === lower) ?? name;
+  const target = normalizeHeaderText(name);
+  return wb.SheetNames.find(n => normalizeHeaderText(n) === target) ?? name;
 }
 
 function cellVal(ws: XLSX.WorkSheet, r: number, c: number): string {
@@ -253,7 +260,7 @@ export async function parsePlanogramLookup(
   }
   onProgress?.(60);
 
-  const ws = wb.Sheets["QRY_Product_by_POG"];
+  const ws = findWbSheet(wb, "QRY_Product_by_POG");
   if (!ws) return empty;
 
   const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
