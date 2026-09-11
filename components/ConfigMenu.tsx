@@ -268,10 +268,24 @@ export default function ConfigMenu({
     draft.descC && draft.descC !== ALL && descCToCategory[draft.descC]?.length
       ? descCToCategory[draft.descC]
       : categories;
+
+  // SUBCATEGORY must stay narrowed by DESC_C even when CATEGORY is left as "ทั้งหมด" —
+  // union categoryToSubcategory[cat] across every category under the selected DESC_C, so
+  // picking only DESC_C (e.g. "041020") already limits SUBCATEGORY to its own values
+  // (e.g. "041020XXXX") instead of falling all the way back to every subcategory in the
+  // system. Reported by the user: leaving CATEGORY as "ทั้งหมด" made SUBCATEGORY show
+  // everything, unrelated to the DESC_C already chosen.
+  const subcategoriesForDescC =
+    draft.descC && draft.descC !== ALL && descCToCategory[draft.descC]?.length
+      ? [...new Set(descCToCategory[draft.descC].flatMap((cat) => categoryToSubcategory[cat] ?? []))].sort((a, b) => a.localeCompare(b, "th"))
+      : null;
+
   const filteredSubcategories =
     draft.category && draft.category !== ALL && categoryToSubcategory[draft.category]?.length
       ? categoryToSubcategory[draft.category]
-      : subcategories;
+      : subcategoriesForDescC && subcategoriesForDescC.length > 0
+        ? subcategoriesForDescC
+        : subcategories;
 
   // Live conflict detection (computed every render when draft is complete)
   const draftComplete = Boolean(draft.category && draft.subcategory && draft.descC && draft.percentage);
