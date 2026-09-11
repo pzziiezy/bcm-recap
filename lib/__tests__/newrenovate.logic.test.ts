@@ -38,6 +38,23 @@ function triggersSheet2(status: string): boolean {
   return up === "NEW EXPAND" || up === "NEW"; // "NEW" for flat-table INDEX files
 }
 
+/** % Ordering config-rule match (mirrors getOrderingPct in the worker). */
+function getOrderingPct(
+  cfg: Array<{ category: string; subcategory: string; descC: string; percentage: string; status: string }>,
+  category: string,
+  subcategory: string,
+  descC: string,
+): number {
+  for (const rule of cfg) {
+    if (rule.status === "inactive" || rule.status === "deleted") continue;
+    const catOk = rule.category    === "ทั้งหมด" || rule.category    === category;
+    const subOk = rule.subcategory === "ทั้งหมด" || rule.subcategory === subcategory;
+    const dscOk = rule.descC       === "ทั้งหมด" || rule.descC       === descC;
+    if (catOk && subOk && dscOk) return Number(rule.percentage) / 100;
+  }
+  return 1.0;
+}
+
 // ─── 1. Per-store classification ─────────────────────────────────────────────
 
 describe("classifyStores — per-store status from AS IS / TO BE", () => {
@@ -205,22 +222,18 @@ describe("sheet routing — each store goes to the correct sheet", () => {
 
 describe("planofolder mapping — Sheet 1 column data sources", () => {
   const sm = {
-    planofolder01: "PF01_val",
-    planofolder03: "PF03_val",
-    planofolder04: "PF04_val",
     descA: "DESC_A_val",
     descB: "DESC_B_val",
   };
 
-  it("DIVISION uses DESC_A (not a PLANOFOLDER column)", () => {
+  it("DIVISION uses DESC_A", () => {
     const divisionVal = sm.descA || "";
     expect(divisionVal).toBe("DESC_A_val");
   });
 
-  it("DEPARTMENT column (PF03_COL) uses DESC_B (not planofolder04)", () => {
+  it("DEPARTMENT column (PF03_COL) uses DESC_B", () => {
     const deptVal = sm.descB ?? "";
     expect(deptVal).toBe("DESC_B_val");
-    expect(deptVal).not.toBe(sm.planofolder04);
   });
 
   it("POG CATE is keyed by planogram name, not by barcode — same barcode on two planograms can get two different POG CATE values", () => {
@@ -239,6 +252,39 @@ describe("planofolder mapping — Sheet 1 column data sources", () => {
     const planogramToCate = new Map<string, string>([["POG A", "CATE_A"]]);
     const pogCateForUnknownPog = planogramToCate.get("POG UNKNOWN") ?? "";
     expect(pogCateForUnknownPog).toBe("");
+  });
+});
+
+// ─── 4b. % Ordering Config Rule matching — must key on CATEGORY/SUBCATEGORY/DESC_C ──
+
+describe("% Ordering — Config Rule matching keys", () => {
+  const rule = { category: "04", subcategory: "20", descC: "60", percentage: "40", status: "active" };
+
+  it("matches when barcode's CATEGORY/SUBCATEGORY/DESC_C equal the rule's (not PLANOFOLDER01/03/04)", () => {
+    const pct = getOrderingPct([rule], "04", "20", "60");
+    expect(pct).toBe(0.4);
+  });
+
+  it("regression: PLANOFOLDER01/03/04 values must NOT be compared against the rule — they live in a different value space and would never match a real rule", () => {
+    // Before the fix, planofolder01/03/04 (e.g. "04 DRY FOOD" hierarchy text) were passed
+    // here instead of category/subcategory/descC, so a rule like the one above practically
+    // never matched and % Ordering silently fell back to the 100% default.
+    const pctWithWrongKeys = getOrderingPct([rule], "04 DRY FOOD", "20 SWEETED GROCE.2", "60 BISCUITS");
+    expect(pctWithWrongKeys).toBe(1.0); // falls through to default — proves these are NOT what a rule matches on
+  });
+
+  it("wildcard ทั้งหมด on any of the 3 fields still matches", () => {
+    const wildcardRule = { ...rule, category: "ทั้งหมด" };
+    expect(getOrderingPct([wildcardRule], "99", "20", "60")).toBe(0.4);
+  });
+
+  it("no matching rule falls back to 100%", () => {
+    expect(getOrderingPct([rule], "99", "99", "99")).toBe(1.0);
+  });
+
+  it("deleted/inactive rules are skipped during matching", () => {
+    const deletedRule = { ...rule, status: "deleted" };
+    expect(getOrderingPct([deletedRule], "04", "20", "60")).toBe(1.0);
   });
 });
 

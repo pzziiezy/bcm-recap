@@ -37,9 +37,6 @@ type InMsg = {
 };
 
 interface SpacemanEntry {
-  planofolder01: string;
-  planofolder03: string;
-  planofolder04: string;
   planogram:     string;
   category:      string;
   subcategory:   string;
@@ -132,20 +129,25 @@ function barcodeMatchKey(bc: string): string {
 
 /**
  * Returns ordering percentage as a decimal (1.0 = 100%, 0.8 = 80%).
- * Config Rule keys: PLANOFOLDER01(Division) + PF03 + PF04.
+ * Config Rule keys: CATEGORY + SUBCATEGORY + DESC_C — the same three DATA_SPACEMAN columns
+ * the Config Rule UI itself builds its dropdown options from (see ConfigMenu.tsx / the
+ * Minor Report wizard's parsePlanogramLookup). Previously this compared against
+ * PLANOFOLDER01/03/04 instead, which are a different value space from what a rule's
+ * category/subcategory/descC fields actually hold — so a rule the user set up would (almost)
+ * never match and % Ordering always fell through to the 100% default. Fixed per the user.
  * Default = 1.0 (100%).
  */
 function getOrderingPct(
   cfg: ExceptionConfig[],
-  pf01: string,
-  pf03: string,
-  pf04: string,
+  category: string,
+  subcategory: string,
+  descC: string,
 ): number {
   for (const rule of cfg) {
     if (rule.status === "inactive" || rule.status === "deleted") continue;
-    const catOk = rule.category    === "ทั้งหมด" || rule.category    === pf01;
-    const subOk = rule.subcategory === "ทั้งหมด" || rule.subcategory === pf03;
-    const dscOk = rule.descC       === "ทั้งหมด" || rule.descC       === pf04;
+    const catOk = rule.category    === "ทั้งหมด" || rule.category    === category;
+    const subOk = rule.subcategory === "ทั้งหมด" || rule.subcategory === subcategory;
+    const dscOk = rule.descC       === "ทั้งหมด" || rule.descC       === descC;
     if (catOk && subOk && dscOk) return Number(rule.percentage) / 100;
   }
   return 1.0; // default 100%
@@ -444,9 +446,6 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
     // Case-insensitive + whitespace-stripped exact match
     const sIdx = (name: string) => sHdrs.indexOf(name.replace(/\s+/g, "").toUpperCase());
     const upcIdx   = sIdx("UPC");
-    const pf01Idx  = sIdx("PLANOFOLDER01");
-    const pf03Idx  = sIdx("PLANOFOLDER03");
-    const pf04Idx  = sIdx("PLANOFOLDER04");
     const pf05Idx  = sIdx("PLANOFOLDER05");
     const plogIdx  = sIdx("PLANOGRAM") >= 0 ? sIdx("PLANOGRAM") : 3;
     const catIdx   = sIdx("CATEGORY");
@@ -481,9 +480,6 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
       if (!key) continue;
       if (!spacemanMap.has(key)) {
         spacemanMap.set(key, {
-          planofolder01: pf01Idx >= 0 ? getS(r, pf01Idx) : "",
-          planofolder03: pf03Idx >= 0 ? getS(r, pf03Idx) : "",
-          planofolder04: pf04Idx >= 0 ? getS(r, pf04Idx) : "",
           planogram:     plogName,
           category:      catIdx   >= 0 ? getS(r, catIdx)   : "",
           subcategory:   subIdx   >= 0 ? getS(r, subIdx)   : "",
@@ -1285,9 +1281,9 @@ addEventListener("message", (e: MessageEvent<InMsg>) => {
 
       const pctVal  = getOrderingPct(
         exceptionConfig,
-        bEntry.sm?.planofolder01 ?? "",
-        bEntry.sm?.planofolder03 ?? "",
-        bEntry.sm?.planofolder04 ?? "",
+        bEntry.sm?.category ?? "",
+        bEntry.sm?.subcategory ?? "",
+        bEntry.sm?.descC ?? "",
       );
       const pctText = Math.round(pctVal * 100) + "%";
       cols1.set(PCT_COL, { t: "s", v: pctText });
