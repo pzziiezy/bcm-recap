@@ -77,7 +77,10 @@ interface ConflictResult {
 }
 
 function detectConflict(draft: DraftFields, config: ExceptionConfig[], excludeId?: string): ConflictResult | null {
-  const others = config.filter((e) => e.id !== excludeId);
+  // Deleted rules are gone as far as conflict-checking is concerned — per the user,
+  // a deleted rule must never block re-adding the same key. They still exist in Google
+  // Sheets underneath (soft-delete, not a hard delete), just excluded here.
+  const others = config.filter((e) => e.id !== excludeId && e.status !== "deleted");
 
   // Check 1: exact key match (any status)
   const exactMatches = others.filter((e) => sameKey(draft, e));
